@@ -1,0 +1,12 @@
+.env
+__pycache__/
+*.pyc
+outputs/
+documents/
+CLAUDE.md
+colab_embed.ipynb
+colab_server.ipynb
+COLAB_SETUP.md
+SETUP.md
+.claude/
+.vscode/

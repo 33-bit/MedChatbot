@@ -1,0 +1,27 @@
+# Server
+fastapi
+uvicorn[standard]
+httpx
+
+# xAI
+xai-sdk
+
+# Vector DB & Embeddings
+qdrant-client
+sentence-transformers
+rank-bm25
+
+# Knowledge Graph
+neo4j
+
+# PDF processing
+pdfplumber
+pypdf
+
+# Scraping
+requests
+beautifulsoup4
+playwright
+
+# Config
+python-dotenv
