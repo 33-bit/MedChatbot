@@ -93,7 +93,7 @@ async def telegram_webhook(
         return {"ok": True}
 
     try:
-        reply = answer(text)
+        reply = answer(text, session_id=f"tg:{chat_id}")
         await send_text(chat_id, reply)
     except Exception:
         logger.exception("Telegram handler error")

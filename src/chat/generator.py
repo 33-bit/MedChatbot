@@ -72,8 +72,36 @@ def _format_sources(unique: list[Hit]) -> str:
     return "\n".join(lines)
 
 
-def generate(question: str, hits: list[Hit], kg_text: str = "") -> str:
-    if not hits and not kg_text:
+def _format_patient(patient: dict | None) -> str:
+    """Format patient session state for prompt."""
+    if not patient:
+        return ""
+    parts = []
+    if patient.get("symptoms"):
+        lines = []
+        for s in patient["symptoms"]:
+            name = s.get("name", "")
+            slots = [f"{k}: {s[k]}" for k in ("onset", "severity", "pattern", "associated") if s.get(k)]
+            line = f"- {name}"
+            if slots:
+                line += f" ({'; '.join(slots)})"
+            lines.append(line)
+        parts.append("Triệu chứng người bệnh:\n" + "\n".join(lines))
+    if patient.get("medications"):
+        parts.append("Thuốc đang dùng: " + ", ".join(patient["medications"]))
+    if patient.get("candidate_diseases"):
+        names = [d.get("name", "") for d in patient["candidate_diseases"][:5]]
+        parts.append("Bệnh nghi ngờ (shortlist): " + ", ".join(filter(None, names)))
+    return "\n\n".join(parts)
+
+
+def generate(
+    question: str,
+    hits: list[Hit],
+    kg_text: str = "",
+    patient: dict | None = None,
+) -> str:
+    if not hits and not kg_text and not patient:
         return ("Tôi không tìm thấy thông tin phù hợp trong tài liệu. "
                 "Bạn vui lòng hỏi cụ thể hơn hoặc tham khảo ý kiến bác sĩ.")
 
@@ -81,13 +109,16 @@ def generate(question: str, hits: list[Hit], kg_text: str = "") -> str:
 
     client = make_xai_client()
     context = _format_context(hits, cite_idx)
+    patient_text = _format_patient(patient)
 
     prompt_parts = [f"Câu hỏi: {question}\n"]
+    if patient_text:
+        prompt_parts.append(f"Thông tin người bệnh đã cung cấp:\n{patient_text}\n")
     if kg_text:
         prompt_parts.append(f"Thông tin từ Knowledge Graph:\n{kg_text}\n")
     if context:
         prompt_parts.append(f"Tài liệu tham khảo:\n{context}\n")
-    prompt_parts.append("Hãy trả lời câu hỏi trên dựa vào tài liệu.")
+    prompt_parts.append("Hãy trả lời câu hỏi trên dựa vào tài liệu và thông tin người bệnh.")
     prompt_user = "\n".join(prompt_parts)
 
     chat = client.chat.create(model=MODEL)
@@ -96,5 +127,6 @@ def generate(question: str, hits: list[Hit], kg_text: str = "") -> str:
     response = chat.sample()
 
     answer = (response.content or "").strip()
-    sources = _format_sources(unique)
-    return f"{answer}\n\nNguồn:\n{sources}"
+    if unique:
+        return f"{answer}\n\nNguồn:\n{_format_sources(unique)}"
+    return answer

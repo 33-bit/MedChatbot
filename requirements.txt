@@ -14,6 +14,10 @@ rank-bm25
 # Knowledge Graph
 neo4j
 
+# Session memory & caching
+redis
+gptcache
+
 # PDF processing
 pdfplumber
 pypdf

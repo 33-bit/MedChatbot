@@ -32,8 +32,21 @@ def make_xai_client(api_key: str | None = None):
 
 client = make_xai_client() if Client is not None else None
 
-MODEL = os.getenv("XAI_MODEL", "grok-4-1-fast-reasoning")
+MODEL = os.getenv("XAI_MODEL", "grok-4.20-0309-reasoning")
+FAST_MODEL = os.getenv("XAI_FAST_MODEL", "grok-4-1-fast-reasoning")
+GUARDRAIL_MODEL = os.getenv("XAI_GUARDRAIL_MODEL", "grok-3-mini")
 VISION_MODEL = os.getenv("XAI_VISION_MODEL", MODEL)
+
+# --- Abuse protection ---
+GLOBAL_LLM_QUOTA_PER_MINUTE  = int(os.getenv("GLOBAL_LLM_QUOTA_PER_MINUTE", "500"))
+SESSION_LLM_QUOTA_PER_DAY    = int(os.getenv("SESSION_LLM_QUOTA_PER_DAY", "100"))
+CHAT_API_KEY                 = os.getenv("CHAT_API_KEY", "")
+
+# --- Session & cache ---
+REDIS_URL                = os.getenv("REDIS_URL", "")
+SESSION_TTL_SECONDS      = int(os.getenv("SESSION_TTL_SECONDS", "86400"))  # 24h
+RATE_LIMIT_PER_MINUTE    = int(os.getenv("RATE_LIMIT_PER_MINUTE", "10"))
+SQLITE_PATH              = os.getenv("SQLITE_PATH", str(PROJECT_ROOT / "outputs" / "chatbot.db"))
 
 QDRANT_URL     = os.getenv("QDRANT_URL", "")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")

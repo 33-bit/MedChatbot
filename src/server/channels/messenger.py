@@ -62,7 +62,7 @@ async def messenger_webhook(request: Request) -> dict:
             if not sender_id or not text:
                 continue
             try:
-                reply = answer(text)
+                reply = answer(text, session_id=f"fb:{sender_id}")
                 await send_text(sender_id, reply)
             except Exception:
                 logger.exception("Messenger handler error")

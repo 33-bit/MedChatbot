@@ -49,7 +49,7 @@ async def _handle_event(body: dict) -> None:
     text = (body.get("message") or {}).get("text", "")
     if not user_id or not text:
         return
-    reply = answer(text)
+    reply = answer(text, session_id=f"zalo:{user_id}")
     await send_text(user_id, reply)
 
 
