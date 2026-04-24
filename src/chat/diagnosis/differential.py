@@ -14,21 +14,29 @@ Flow:
 from __future__ import annotations
 
 import json
-from pathlib import Path
+import logging
+from functools import lru_cache
 
-from src.chat.kg_retriever import _driver
-from src.chat.llm_mini import call_mini
-from src.config import OUTPUT_DIR
+from neo4j.exceptions import Neo4jError, ServiceUnavailable
+
+from src.chat.clients import get_neo4j
+from src.chat.llm.mini import call_mini
+from src.chat.prompts import CLARIFICATION_PARSE_SYSTEM
+from src.config import (
+    CLARIFICATION_BATCH_SIZE,
+    MIN_CANDIDATES_TO_STOP,
+    OUTPUT_DIR,
+)
+
+log = logging.getLogger(__name__)
 
 SYMPTOM_DIR = OUTPUT_DIR / "entities" / "symptoms"
 
-BATCH_SIZE = 4
-MIN_CANDIDATES_TO_STOP = 2
 
-
-def _load_symptom_catalog() -> dict[str, dict]:
-    """Load symptom JSONs for clarification_questions lookup."""
-    catalog = {}
+@lru_cache(maxsize=1)
+def symptom_catalog() -> dict[str, dict]:
+    """Load symptom JSONs for clarification_questions lookup (cached)."""
+    catalog: dict[str, dict] = {}
     if not SYMPTOM_DIR.exists():
         return catalog
     for f in SYMPTOM_DIR.glob("*.json"):
@@ -36,22 +44,13 @@ def _load_symptom_catalog() -> dict[str, dict]:
             continue
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
-            sid = data.get("symptom_id")
-            if sid:
-                catalog[sid] = data
-        except Exception:
+        except (json.JSONDecodeError, OSError) as e:
+            log.debug("Skipping %s: %s", f.name, e)
             continue
+        sid = data.get("symptom_id")
+        if sid:
+            catalog[sid] = data
     return catalog
-
-
-_SYMPTOM_CATALOG: dict[str, dict] | None = None
-
-
-def symptom_catalog() -> dict[str, dict]:
-    global _SYMPTOM_CATALOG
-    if _SYMPTOM_CATALOG is None:
-        _SYMPTOM_CATALOG = _load_symptom_catalog()
-    return _SYMPTOM_CATALOG
 
 
 def rank_candidates(symptom_ids: list[str], limit: int = 10) -> list[dict]:
@@ -62,7 +61,7 @@ def rank_candidates(symptom_ids: list[str], limit: int = 10) -> list[dict]:
     if not clean_ids:
         return []
     try:
-        with _driver().session() as session:
+        with get_neo4j().session() as session:
             rows = session.run(
                 "MATCH (d:Disease)-[:HAS_SYMPTOM]->(s:Symptom) "
                 "WHERE s.id IN $sids "
@@ -70,25 +69,23 @@ def rank_candidates(symptom_ids: list[str], limit: int = 10) -> list[dict]:
                 "ORDER BY overlap DESC LIMIT $limit",
                 sids=clean_ids, limit=limit,
             ).data()
-        return [{"disease_id": r["id"], "name": r["name"], "overlap": r["overlap"]}
-                for r in rows]
-    except Exception:
+    except (Neo4jError, ServiceUnavailable) as e:
+        log.warning("rank_candidates failed: %s", e)
         return []
+    return [{"disease_id": r["id"], "name": r["name"], "overlap": r["overlap"]}
+            for r in rows]
 
 
 def discriminative_symptoms(
     candidate_disease_ids: list[str],
     known_symptom_ids: list[str],
-    limit: int = BATCH_SIZE,
+    limit: int = CLARIFICATION_BATCH_SIZE,
 ) -> list[str]:
-    """
-    Find symptoms that appear in some candidates but not all.
-    These best split the differential.
-    """
+    """Find symptoms that appear in some candidates but not all."""
     if len(candidate_disease_ids) < 2:
         return []
     try:
-        with _driver().session() as session:
+        with get_neo4j().session() as session:
             rows = session.run(
                 "MATCH (d:Disease)-[:HAS_SYMPTOM]->(s:Symptom) "
                 "WHERE d.id IN $dids AND NOT s.id IN $known "
@@ -101,9 +98,10 @@ def discriminative_symptoms(
                 total=len(candidate_disease_ids),
                 limit=limit,
             ).data()
-        return [r["sid"] for r in rows]
-    except Exception:
+    except (Neo4jError, ServiceUnavailable) as e:
+        log.warning("discriminative_symptoms failed: %s", e)
         return []
+    return [r["sid"] for r in rows]
 
 
 def build_clarification(symptom_ids: list[str]) -> str:
@@ -124,36 +122,13 @@ def build_clarification(symptom_ids: list[str]) -> str:
     return "\n\n".join(lines)
 
 
-PARSE_ANSWER_SYSTEM = """Bạn là trợ lý y tế. Phân tích câu trả lời của người bệnh cho một bộ câu hỏi
-làm rõ triệu chứng. Với mỗi triệu chứng được hỏi, trả về trạng thái (có/không/không rõ)
-và các slot thông tin nếu có.
-
-Input: JSON {asked_symptoms: [{symptom_id, name}], user_answer: "..."}
-
-Trả về JSON:
-{
-  "results": [
-    {
-      "symptom_id": "...",
-      "present": "yes" | "no" | "unknown",
-      "onset": "...",        // optional
-      "severity": "...",     // optional
-      "pattern": "...",      // optional
-      "associated": "..."    // optional
-    }
-  ]
-}
-
-CHỈ trả JSON."""
-
-
 def parse_clarification_answer(
     asked_symptoms: list[dict],
     user_answer: str,
 ) -> list[dict]:
     """Parse free-text answer into per-symptom slot values."""
     payload = {"asked_symptoms": asked_symptoms, "user_answer": user_answer}
-    result = call_mini(PARSE_ANSWER_SYSTEM, json.dumps(payload, ensure_ascii=False))
+    result = call_mini(CLARIFICATION_PARSE_SYSTEM, json.dumps(payload, ensure_ascii=False))
     if not isinstance(result, dict):
         return []
     return result.get("results", []) or []

@@ -1,25 +1,17 @@
 """
 generator.py
 ------------
-Build prompt từ context + gọi Grok (xai_sdk) để sinh câu trả lời.
+Build prompt from context + call Grok (xai_sdk) for the final answer.
 """
 
 from __future__ import annotations
 
 from xai_sdk.chat import system, user
 
-from src.chat.retriever import Hit
-from src.config import MODEL, make_xai_client
-
-SYSTEM_PROMPT = """Bạn là trợ lý y tế ảo, trả lời bằng tiếng Việt dựa trên tài liệu được cung cấp.
-
-Nguyên tắc:
-- CHỈ dựa vào phần "Tài liệu tham khảo" bên dưới. Nếu không đủ thông tin, nói thẳng "Tôi không có đủ thông tin trong tài liệu".
-- Không tự chẩn đoán thay bác sĩ. Với triệu chứng nghiêm trọng, luôn khuyên người dùng đi khám/gọi cấp cứu.
-- Với câu hỏi về thuốc OTC: nêu chỉ định, liều dùng, chống chỉ định, lưu ý — KHÔNG kê đơn thuốc kê toa.
-- Trình bày gọn, có thể dùng gạch đầu dòng. Trích dẫn nguồn cuối câu trả lời dạng [1], [2]... khớp với danh sách nguồn.
-- Nhiều đoạn tài liệu có thể chia sẻ cùng một chỉ số nguồn (ví dụ [1]); điều đó là cố ý và chính xác.
-"""
+from src.chat.clients import get_xai
+from src.chat.prompts import GENERATOR_SYSTEM
+from src.chat.retrieval.types import Hit
+from src.config import MODEL
 
 DRUG_URL_TEMPLATE = "https://trungtamthuoc.com/hoat-chat/{slug}"
 
@@ -106,8 +98,6 @@ def generate(
                 "Bạn vui lòng hỏi cụ thể hơn hoặc tham khảo ý kiến bác sĩ.")
 
     unique, cite_idx = _dedupe(hits)
-
-    client = make_xai_client()
     context = _format_context(hits, cite_idx)
     patient_text = _format_patient(patient)
 
@@ -121,8 +111,8 @@ def generate(
     prompt_parts.append("Hãy trả lời câu hỏi trên dựa vào tài liệu và thông tin người bệnh.")
     prompt_user = "\n".join(prompt_parts)
 
-    chat = client.chat.create(model=MODEL)
-    chat.append(system(SYSTEM_PROMPT))
+    chat = get_xai().chat.create(model=MODEL)
+    chat.append(system(GENERATOR_SYSTEM))
     chat.append(user(prompt_user))
     response = chat.sample()
 

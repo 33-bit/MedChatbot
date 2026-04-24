@@ -8,9 +8,9 @@ Edges: HAS_SYMPTOM, TREATS, CONTRAINDICATED_FOR, INTERACTS_WITH,
        BELONGS_TO_CHAPTER, HAS_ICD10, RED_FLAG_FOR, RELIEVES, etc.
 
 Usage:
-    python -m src.processing.kg_builder          # load all into Neo4j
-    python -m src.processing.kg_builder --clear   # wipe DB first
-    python -m src.processing.kg_builder --dry-run  # just print stats
+    python -m src.rag.kg_builder          # load all into Neo4j
+    python -m src.rag.kg_builder --clear   # wipe DB first
+    python -m src.rag.kg_builder --dry-run  # just print stats
 """
 
 from __future__ import annotations

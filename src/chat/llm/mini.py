@@ -1,13 +1,15 @@
 """
-llm_mini.py
------------
+mini.py
+-------
 Light-weight wrapper around the fast xAI model for:
   - query rewriting
   - entity extraction
   - turn classification
   - clarification answer parsing
+  - guardrail classification
 
-Always expects JSON output.
+Always expects JSON output. `parse_json` is exported for other modules
+(e.g. guardrail) that call the LLM directly.
 """
 
 from __future__ import annotations
@@ -17,12 +19,14 @@ import re
 
 from xai_sdk.chat import system, user
 
-from src.config import FAST_MODEL, make_xai_client
+from src.chat.clients import get_xai
+from src.config import FAST_MODEL
 
 _JSON_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
 
-def _parse_json(text: str):
+def parse_json(text: str):
+    """Best-effort JSON extraction from an LLM response (handles code fences)."""
     text = _JSON_FENCE.sub("", text or "").strip()
     try:
         return json.loads(text)
@@ -39,9 +43,8 @@ def _parse_json(text: str):
 
 
 def call_mini(system_prompt: str, user_prompt: str) -> dict | list | None:
-    client = make_xai_client()
-    chat = client.chat.create(model=FAST_MODEL)
+    chat = get_xai().chat.create(model=FAST_MODEL)
     chat.append(system(system_prompt))
     chat.append(user(user_prompt))
     response = chat.sample()
-    return _parse_json(response.content or "")
+    return parse_json(response.content or "")

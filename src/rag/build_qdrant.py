@@ -134,7 +134,7 @@ def main() -> None:
 
     if do_diseases:
         if not DISEASE_CHUNKS.exists():
-            raise SystemExit(f"Không tìm thấy {DISEASE_CHUNKS}. Chạy `python -m src.processing.chunker` trước.")
+            raise SystemExit(f"Không tìm thấy {DISEASE_CHUNKS}. Chạy `python -m src.rag.chunker` trước.")
         disease_chunks = load_chunks(DISEASE_CHUNKS)
         print(f"[Diseases] {len(disease_chunks)} chunks")
         print("Đang embed ...")
@@ -147,7 +147,7 @@ def main() -> None:
 
     if do_drugs:
         if not DRUG_CHUNKS.exists():
-            raise SystemExit(f"Không tìm thấy {DRUG_CHUNKS}. Chạy `python -m src.processing.chunker` trước.")
+            raise SystemExit(f"Không tìm thấy {DRUG_CHUNKS}. Chạy `python -m src.rag.chunker` trước.")
         drug_chunks = load_chunks(DRUG_CHUNKS)
         print(f"[OTC Drugs] {len(drug_chunks)} chunks")
         print("Đang embed ...")

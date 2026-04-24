@@ -64,6 +64,20 @@ RAG_TOP_K                = int(os.getenv("RAG_TOP_K", "6"))
 RERANKER_MODEL           = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
 RERANK_TOP_K             = int(os.getenv("RERANK_TOP_K", "6"))
 HYBRID_CANDIDATE_K       = int(os.getenv("HYBRID_CANDIDATE_K", "20"))
+RRF_K                    = int(os.getenv("RRF_K", "60"))
+E5_QUERY_PREFIX          = "query: "
+E5_PASSAGE_PREFIX        = "passage: "
+
+# --- Diagnostic narrowing ---
+CLARIFICATION_BATCH_SIZE = int(os.getenv("CLARIFICATION_BATCH_SIZE", "4"))
+MIN_CANDIDATES_TO_STOP   = int(os.getenv("MIN_CANDIDATES_TO_STOP", "2"))
+
+# --- Guardrail ---
+GUARDRAIL_MIN_LEN        = int(os.getenv("GUARDRAIL_MIN_LEN", "3"))
+GUARDRAIL_MAX_LEN        = int(os.getenv("GUARDRAIL_MAX_LEN", "2000"))
+
+# --- Semantic cache ---
+SEMANTIC_CACHE_THRESHOLD = float(os.getenv("SEMANTIC_CACHE_THRESHOLD", "0.85"))
 
 # --- Messaging channels ---
 ZALO_OA_ACCESS_TOKEN     = os.getenv("ZALO_OA_ACCESS_TOKEN", "")

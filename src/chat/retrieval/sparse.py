@@ -1,8 +1,8 @@
 """
-bm25_index.py
--------------
+sparse.py
+---------
 In-memory BM25Okapi index over disease + drug chunks for sparse retrieval.
-Loads from JSONL at first call, then cached.
+Loads from JSONL on first call, then cached.
 """
 
 from __future__ import annotations
@@ -11,11 +11,10 @@ import json
 import re
 import uuid
 from functools import lru_cache
-from pathlib import Path
 
 from rank_bm25 import BM25Okapi
 
-from src.chat.retriever import Hit
+from src.chat.retrieval.types import Hit
 from src.config import OUTPUT_DIR
 
 CHUNKS_DIR = OUTPUT_DIR / "chunks"

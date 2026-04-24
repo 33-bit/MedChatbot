@@ -1,51 +1,45 @@
 """
-entity_extractor.py
--------------------
+entities.py
+-----------
 Extract symptoms + drugs (with slot values) from user message using
 LLM mini, then canonicalize names to IDs via Neo4j fulltext search.
 """
 
 from __future__ import annotations
 
-from src.chat.kg_retriever import _driver, _fulltext_search
-from src.chat.llm_mini import call_mini
+import logging
 
-EXTRACTION_SYSTEM = """Bạn là trợ lý y tế. Trích xuất thông tin từ lời nói của người bệnh.
+from neo4j.exceptions import Neo4jError, ServiceUnavailable
 
-Trả về JSON với cấu trúc:
-{
-  "symptoms": [
-    {"name": "tên triệu chứng", "onset": "khi nào/bao lâu", "severity": "mức độ",
-     "pattern": "đặc điểm", "associated": "triệu chứng kèm"}
-  ],
-  "medications": ["tên thuốc 1", "tên thuốc 2"]
-}
+from src.chat.clients import get_neo4j
+from src.chat.llm.mini import call_mini
+from src.chat.prompts import ENTITY_EXTRACTION_SYSTEM
+from src.chat.retrieval.kg import fulltext_search
 
-Quy tắc:
-- Nếu thông tin nào không có, bỏ qua key đó (đừng điền null).
-- Tên triệu chứng/thuốc để nguyên tiếng Việt như người bệnh nói.
-- CHỈ trả JSON, không giải thích."""
+log = logging.getLogger(__name__)
+
+_INDEX_FOR_TYPE = {"symptom": "symptom_name", "drug": "drug_name"}
 
 
 def _canonicalize(name: str, entity_type: str) -> str | None:
     """Match free-text name to canonical ID via Neo4j fulltext."""
-    idx_map = {"symptom": "symptom_name", "drug": "drug_name"}
-    idx = idx_map.get(entity_type)
+    idx = _INDEX_FOR_TYPE.get(entity_type)
     if not idx or not name.strip():
         return None
     try:
-        with _driver().session() as session:
-            results = session.execute_read(_fulltext_search, idx, name, 1)
-            if results and results[0]["score"] > 1.0:
-                return results[0]["props"].get("id")
-    except Exception:
-        pass
+        with get_neo4j().session() as session:
+            results = session.execute_read(fulltext_search, idx, name, 1)
+    except (Neo4jError, ServiceUnavailable) as e:
+        log.debug("canonicalize(%s, %s) failed: %s", name, entity_type, e)
+        return None
+    if results and results[0]["score"] > 1.0:
+        return results[0]["props"].get("id")
     return None
 
 
 def extract_entities(text: str) -> dict:
     """Returns {symptoms: [{symptom_id, name, onset, ...}], medications: [drug_id]}."""
-    parsed = call_mini(EXTRACTION_SYSTEM, text) or {}
+    parsed = call_mini(ENTITY_EXTRACTION_SYSTEM, text) or {}
     if not isinstance(parsed, dict):
         return {"symptoms": [], "medications": []}
 

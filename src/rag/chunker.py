@@ -5,9 +5,9 @@ Per-subsection chunker for disease and drug documents.
 Produces chunks.jsonl ready for embedding + Qdrant upload.
 
 Usage:
-    python -m src.processing.chunker
-    python -m src.processing.chunker --source diseases
-    python -m src.processing.chunker --source drugs
+    python -m src.rag.chunker
+    python -m src.rag.chunker --source diseases
+    python -m src.rag.chunker --source drugs
 """
 
 from __future__ import annotations

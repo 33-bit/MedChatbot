@@ -8,7 +8,7 @@ Daily maintenance:
   - VACUUM to reclaim space
 
 Run via cron:
-    0 3 * * *  cd /path/to/Chatbot && python -m src.chat.cleanup
+    0 3 * * *  cd /path/to/Chatbot && python -m src.chat.storage.cleanup
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import argparse
 import os
 import time
 
-from src.chat.session import _db
+from src.chat.clients import get_sqlite
 
 CONSULT_RETENTION_DAYS = int(os.getenv("CONSULT_RETENTION_DAYS", "30"))
 PROFILE_RETENTION_DAYS = int(os.getenv("PROFILE_RETENTION_DAYS", "30"))
@@ -25,7 +25,7 @@ PROFILE_RETENTION_DAYS = int(os.getenv("PROFILE_RETENTION_DAYS", "30"))
 
 def run(verbose: bool = True) -> dict:
     now = time.time()
-    conn = _db()
+    conn = get_sqlite()
     stats = {}
 
     cutoff = now - CONSULT_RETENTION_DAYS * 86400
