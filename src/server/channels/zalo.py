@@ -19,6 +19,7 @@ import httpx
 from fastapi import APIRouter, Request
 
 from src.chat import answer
+from src.chat.replies import TECHNICAL_ERROR_REPLY
 from src.config import ZALO_OA_ACCESS_TOKEN
 
 logger = logging.getLogger(__name__)
@@ -49,7 +50,11 @@ async def _handle_event(body: dict) -> None:
     text = (body.get("message") or {}).get("text", "")
     if not user_id or not text:
         return
-    reply = answer(text, session_id=f"zalo:{user_id}")
+    try:
+        reply = answer(text, session_id=f"zalo:{user_id}")
+    except Exception:
+        logger.exception("Zalo answer failed")
+        reply = TECHNICAL_ERROR_REPLY
     await send_text(user_id, reply)
 
 

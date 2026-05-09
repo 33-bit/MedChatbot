@@ -1,13 +1,12 @@
 """Public facade of the retrieval subpackage."""
 
-from src.chat.retrieval.dense import dense_search, hybrid_search, rrf_merge
+from src.chat.retrieval.dense import dense_search, hybrid_search, rerank, rrf_merge
 from src.chat.retrieval.kg import (
     KGContext,
     ensure_fulltext_indexes,
     format_kg_context,
     kg_search,
 )
-from src.chat.retrieval.rerank import rerank
 from src.chat.retrieval.sparse import bm25_search
 from src.chat.retrieval.types import Hit
 

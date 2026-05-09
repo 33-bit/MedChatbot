@@ -20,6 +20,7 @@ from functools import lru_cache
 from neo4j.exceptions import Neo4jError, ServiceUnavailable
 
 from src.chat.clients import get_neo4j
+from src.chat.errors import Neo4jUnavailable
 from src.chat.llm.mini import call_mini
 from src.chat.prompts import CLARIFICATION_PARSE_SYSTEM
 from src.config import (
@@ -70,8 +71,7 @@ def rank_candidates(symptom_ids: list[str], limit: int = 10) -> list[dict]:
                 sids=clean_ids, limit=limit,
             ).data()
     except (Neo4jError, ServiceUnavailable) as e:
-        log.warning("rank_candidates failed: %s", e)
-        return []
+        raise Neo4jUnavailable("Neo4j candidate ranking failed") from e
     return [{"disease_id": r["id"], "name": r["name"], "overlap": r["overlap"]}
             for r in rows]
 
@@ -99,8 +99,7 @@ def discriminative_symptoms(
                 limit=limit,
             ).data()
     except (Neo4jError, ServiceUnavailable) as e:
-        log.warning("discriminative_symptoms failed: %s", e)
-        return []
+        raise Neo4jUnavailable("Neo4j discriminative symptom lookup failed") from e
     return [r["sid"] for r in rows]
 
 

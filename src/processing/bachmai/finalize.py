@@ -1,7 +1,7 @@
 """
 bachmai_finalize.py
 -------------------
-Phase 5: Dùng xAI Batch API + LLM text để clean OCR + build JSON cuối
+Phase 5: Dùng OpenAI Batch API + LLM text để clean OCR + build JSON cuối
 (đầy đủ nội dung, giữ thứ tự trước sau) cho mỗi bệnh.
 
 Input per disease:
@@ -38,8 +38,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.config import MODEL, OUTPUT_DIR
+from src.config import BATCH_MAX_TOKENS, MODEL, OUTPUT_DIR
 from src.processing.batch_api import (
+    chat_completion_request,
     fetch_results,
     get_batch,
     submit_batch,
@@ -120,19 +121,14 @@ def build_request(disease_dir: Path) -> dict | None:
     visuals_path = disease_dir / "visuals.json"
     visuals = json.loads(visuals_path.read_text(encoding="utf-8")) if visuals_path.exists() else {"tables": [], "figures": []}
 
-    return {
-        "custom_id": slug,
-        "method": "POST",
-        "url": "/v1/chat/completions",
-        "body": {
-            "model": MODEL,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": build_user_prompt(meta, text_raw, visuals)},
-            ],
-            "response_format": {"type": "json_object"},
-        },
-    }
+    return chat_completion_request(
+        slug,
+        MODEL,
+        [{"role": "user", "content": build_user_prompt(meta, text_raw, visuals)}],
+        system=SYSTEM_PROMPT,
+        max_tokens=BATCH_MAX_TOKENS,
+        response_format={"type": "json_object"},
+    )
 
 
 def find_disease_dirs(base: Path) -> list[Path]:

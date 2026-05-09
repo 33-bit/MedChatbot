@@ -12,15 +12,12 @@ Exports:
 
 from __future__ import annotations
 
-from dataclasses import replace
+import logging
+import time
 from functools import lru_cache
+from threading import Lock
 
 from qdrant_client import QdrantClient
-from sentence_transformers import SentenceTransformer
-
-from src.chat.retrieval.rerank import rerank
-from src.chat.retrieval.sparse import bm25_search
-from src.chat.retrieval.types import Hit
 from src.config import (
     DISEASES_COLLECTION,
     DRUGS_COLLECTION,
@@ -29,9 +26,21 @@ from src.config import (
     HYBRID_CANDIDATE_K,
     QDRANT_API_KEY,
     QDRANT_URL,
-    RERANK_TOP_K,
-    RRF_K,
 )
+from sentence_transformers import SentenceTransformer
+
+from src.chat.errors import QdrantUnavailable
+from src.chat.retrieval.fusion import rrf_merge
+from src.chat.retrieval.rerank import preload_reranker, rerank
+from src.chat.retrieval.service import hybrid_search
+from src.chat.retrieval.types import Hit
+from src.chat.timing import log_stage_timing
+
+log = logging.getLogger(__name__)
+_COLLECTIONS = (DISEASES_COLLECTION, DRUGS_COLLECTION)
+_COLLECTION_CACHE_TTL_SECONDS = 300
+_collection_cache: tuple[float, tuple[str, ...]] | None = None
+_collection_cache_lock = Lock()
 
 
 @lru_cache(maxsize=1)
@@ -41,7 +50,56 @@ def _embedder() -> SentenceTransformer:
 
 @lru_cache(maxsize=1)
 def _qdrant() -> QdrantClient:
+    if not QDRANT_URL:
+        raise QdrantUnavailable("QDRANT_URL not configured")
     return QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY or None)
+
+
+def preload_models() -> None:
+    """Load embedding and reranker models into process memory."""
+    _embedder()
+    preload_reranker()
+
+
+def _available_collections() -> tuple[str, ...]:
+    """Cache Qdrant collection existence checks briefly to avoid per-turn HEAD calls."""
+    global _collection_cache
+
+    now = time.monotonic()
+    with _collection_cache_lock:
+        if _collection_cache and now - _collection_cache[0] < _COLLECTION_CACHE_TTL_SECONDS:
+            return _collection_cache[1]
+
+    client = _qdrant()
+    available: list[str] = []
+    for collection in _COLLECTIONS:
+        stage_start = time.perf_counter()
+        try:
+            exists = client.collection_exists(collection)
+        except Exception as e:
+            raise QdrantUnavailable(
+                f"Qdrant collection check failed for {collection}"
+            ) from e
+        log_stage_timing(
+            log,
+            "retrieval",
+            "qdrant_exists",
+            stage_start,
+            collection=collection,
+            exists=exists,
+        )
+        if exists:
+            available.append(collection)
+
+    missing = [collection for collection in _COLLECTIONS if collection not in available]
+    if missing:
+        raise QdrantUnavailable(
+            "Missing configured Qdrant collections: " + ", ".join(missing)
+        )
+    collections = tuple(available)
+    with _collection_cache_lock:
+        _collection_cache = (now, collections)
+    return collections
 
 
 def _embed(query: str) -> list[float]:
@@ -66,49 +124,35 @@ def _to_hit(point) -> Hit:
 
 def dense_search(query: str, top_k: int = HYBRID_CANDIDATE_K) -> list[Hit]:
     """Vector search both collections, merge and sort by score desc."""
+    stage_start = time.perf_counter()
     qvec = _embed(query)
+    log_stage_timing(log, "retrieval", "embed", stage_start)
+
     client = _qdrant()
     results: list[Hit] = []
-    for collection in (DISEASES_COLLECTION, DRUGS_COLLECTION):
-        if not client.collection_exists(collection):
-            continue
-        response = client.query_points(
-            collection_name=collection,
-            query=qvec,
-            limit=top_k,
-            with_payload=True,
+    for collection in _available_collections():
+        stage_start = time.perf_counter()
+        try:
+            response = client.query_points(
+                collection_name=collection,
+                query=qvec,
+                limit=top_k,
+                with_payload=True,
+            )
+        except Exception as e:
+            raise QdrantUnavailable(
+                f"Qdrant query failed for {collection}"
+            ) from e
+        log_stage_timing(
+            log,
+            "retrieval",
+            "qdrant_query",
+            stage_start,
+            collection=collection,
+            hits=len(response.points),
         )
         results.extend(_to_hit(p) for p in response.points)
     results.sort(key=lambda h: h.score, reverse=True)
     return results[:top_k]
 
 
-def _hit_key(h: Hit) -> str:
-    return h.chunk_id or h.text[:100]
-
-
-def rrf_merge(
-    dense_hits: list[Hit],
-    sparse_hits: list[Hit],
-    top_k: int = HYBRID_CANDIDATE_K,
-) -> list[Hit]:
-    """Reciprocal Rank Fusion of two ranked lists."""
-    scores: dict[str, float] = {}
-    hit_map: dict[str, Hit] = {}
-
-    for ranked_list in (dense_hits, sparse_hits):
-        for rank, h in enumerate(ranked_list):
-            key = _hit_key(h)
-            scores[key] = scores.get(key, 0.0) + 1.0 / (RRF_K + rank + 1)
-            hit_map.setdefault(key, h)
-
-    top = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
-    return [replace(hit_map[key], score=score) for key, score in top]
-
-
-def hybrid_search(query: str, top_k: int = RERANK_TOP_K) -> list[Hit]:
-    """Dense + BM25 → RRF fusion → Cross-Encoder re-rank."""
-    dense_hits = dense_search(query, top_k=HYBRID_CANDIDATE_K)
-    sparse_hits = bm25_search(query, top_k=HYBRID_CANDIDATE_K)
-    fused = rrf_merge(dense_hits, sparse_hits, top_k=HYBRID_CANDIDATE_K)
-    return rerank(query, fused, top_k=top_k)

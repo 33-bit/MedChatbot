@@ -33,8 +33,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.config import MODEL, OUTPUT_DIR
+from src.config import BATCH_MAX_TOKENS, MODEL, OUTPUT_DIR
 from src.processing.batch_api import (
+    chat_completion_request,
     fetch_results,
     get_batch,
     submit_batch,
@@ -186,19 +187,16 @@ def cmd_prepare(args) -> None:
     for i in range(0, len(items), BATCH_SIZE):
         batch_items = items[i : i + BATCH_SIZE]
         batch_id = f"symptoms_{i:04d}"
-        requests.append({
-            "custom_id": batch_id,
-            "method": "POST",
-            "url": "/v1/chat/completions",
-            "body": {
-                "model": MODEL,
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": json.dumps(batch_items, ensure_ascii=False)},
-                ],
-                "response_format": {"type": "json_object"},
-            },
-        })
+        requests.append(chat_completion_request(
+            batch_id,
+            MODEL,
+            [{
+                "role": "user",
+                "content": json.dumps(batch_items, ensure_ascii=False),
+            }],
+            system=SYSTEM_PROMPT,
+            max_tokens=BATCH_MAX_TOKENS,
+        ))
 
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     jsonl_path = WORK_DIR / "requests.jsonl"

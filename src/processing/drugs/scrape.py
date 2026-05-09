@@ -225,10 +225,10 @@ def _llm_match_batch(
     if str(PROJECT_ROOT) not in _sys.path:
         _sys.path.insert(0, str(PROJECT_ROOT))
 
-    from xai_sdk.chat import system, user, text
-    from src.config import make_xai_client, MODEL
+    from src.chat.llm.mini import message_text
+    from src.config import MODEL, make_openai_client
 
-    client = make_xai_client()
+    client = make_openai_client()
 
     entries_text = "\n".join(
         f'  {e["stt"]}. "{e["ten_hoat_chat"]}" (tên ngắn: "{e["ten_ngan"]}")'
@@ -253,16 +253,21 @@ def _llm_match_batch(
 ## Format output:
 {{"results": {{"<stt>": ["slug1", "slug2", ...], ...}}}}"""
 
-    chat = client.chat.create(
+    response = client.chat.completions.create(
         model=MODEL,
-        messages=[
-            system("Bạn là chuyên gia dược lý Việt Nam. Chỉ trả về JSON hợp lệ, không markdown fence, không giải thích."),
-            user(text(prompt)),
-        ],
         max_tokens=4096,
+        messages=[
+            {
+                "role": "system",
+                "content": "Bạn là chuyên gia dược lý Việt Nam. Chỉ trả về JSON hợp lệ, không markdown fence, không giải thích.",
+            },
+            {"role": "user", "content": prompt},
+        ],
         temperature=0.0,
+        response_format={"type": "json_object"},
+        extra_body={"thinking": {"type": "disabled"}},
     )
-    raw = chat.sample().content.strip()
+    raw = message_text(response).strip()
 
     # Parse JSON — handle possible markdown fences
     raw = re.sub(r"^```json\s*", "", raw)

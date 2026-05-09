@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from neo4j.exceptions import Neo4jError, ServiceUnavailable
 
 from src.chat.clients import get_neo4j
+from src.chat.errors import Neo4jUnavailable
 
 log = logging.getLogger(__name__)
 
@@ -73,8 +74,8 @@ def fulltext_search(tx, index_name: str, query: str, limit: int = 5) -> list[dic
 
 def _traverse_disease(tx, disease_id: str) -> dict:
     symptoms = tx.run(
-        "MATCH (d {id: $did})-[r:HAS_SYMPTOM]->(s:Symptom) "
-        "RETURN s.id AS id, s.name_vi AS name, r.is_red_flag AS red_flag LIMIT 20",
+        "MATCH (d {id: $did})-[r:HAS_SYMPTOM|RED_FLAG_FOR]->(s:Symptom) "
+        "RETURN s.id AS id, s.name_vi AS name, type(r) = 'RED_FLAG_FOR' AS red_flag LIMIT 20",
         did=disease_id,
     ).data()
     drugs = tx.run(
@@ -126,7 +127,7 @@ def _traverse_symptom(tx, symptom_id: str) -> dict:
         sid=symptom_id,
     ).data()
     red_flag_for = tx.run(
-        "MATCH (s {id: $sid})-[:RED_FLAG_FOR]->(d:Disease) "
+        "MATCH (d:Disease)-[:RED_FLAG_FOR]->(s {id: $sid}) "
         "RETURN d.id AS id, d.name_vi AS name LIMIT 5",
         sid=symptom_id,
     ).data()
@@ -198,8 +199,9 @@ def kg_search(query: str) -> KGContext:
                 try:
                     matches = session.execute_read(fulltext_search, idx_name, query, 3)
                 except Neo4jError as e:
-                    log.debug("fulltext %s failed: %s", idx_name, e)
-                    continue
+                    raise Neo4jUnavailable(
+                        f"Neo4j fulltext search failed for {idx_name}"
+                    ) from e
 
                 traverse, ingest = _ENTITY_HANDLERS[entity_type]
                 for m in matches:
@@ -212,10 +214,9 @@ def kg_search(query: str) -> KGContext:
                     })
                     info = session.execute_read(traverse, entity_id)
                     ingest(ctx, name, info)
-    except ServiceUnavailable as e:
-        log.warning("Neo4j unavailable: %s", e)
-    except Neo4jError as e:
+    except (ServiceUnavailable, Neo4jError) as e:
         log.warning("Neo4j error during KG search: %s", e)
+        raise Neo4jUnavailable("Neo4j unavailable during KG search") from e
     return ctx
 
 

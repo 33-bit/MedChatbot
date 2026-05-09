@@ -21,10 +21,6 @@ import sys
 import uuid
 from pathlib import Path
 
-from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, PointStruct, VectorParams
-from sentence_transformers import SentenceTransformer
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -37,6 +33,9 @@ from src.config import (
     QDRANT_API_KEY,
     QDRANT_URL,
 )
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, PointStruct, VectorParams
+from sentence_transformers import SentenceTransformer
 
 CHUNKS_DIR = OUTPUT_DIR / "chunks"
 DISEASE_CHUNKS = CHUNKS_DIR / "disease_chunks.jsonl"

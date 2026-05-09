@@ -2,7 +2,7 @@
 bachmai_entities.py
 -------------------
 Extract structured entities (disease, symptom, drug refs) from final disease
-JSONs using xAI Batch API.
+JSONs using OpenAI Batch API.
 
 Input:  outputs/bachmai/final/{slug}.json  (Layer 1 — document)
 Output: outputs/entities/diseases/{slug}.json (Layer 2 — KG entity)
@@ -32,8 +32,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.config import MODEL, OUTPUT_DIR
+from src.config import BATCH_MAX_TOKENS, MODEL, OUTPUT_DIR
 from src.processing.batch_api import (
+    chat_completion_request,
     fetch_results,
     get_batch,
     submit_batch,
@@ -141,19 +142,14 @@ def build_user_prompt(doc: dict) -> str:
 
 
 def build_request(slug: str, doc: dict) -> dict:
-    return {
-        "custom_id": slug,
-        "method": "POST",
-        "url": "/v1/chat/completions",
-        "body": {
-            "model": MODEL,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": build_user_prompt(doc)},
-            ],
-            "response_format": {"type": "json_object"},
-        },
-    }
+    return chat_completion_request(
+        slug,
+        MODEL,
+        [{"role": "user", "content": build_user_prompt(doc)}],
+        system=SYSTEM_PROMPT,
+        max_tokens=BATCH_MAX_TOKENS,
+        response_format={"type": "json_object"},
+    )
 
 
 def cmd_prepare(args) -> None:

@@ -1,19 +1,29 @@
 """
 generator.py
 ------------
-Build prompt from context + call Grok (xai_sdk) for the final answer.
+Build prompt from context + call OpenAI for the final answer.
 """
 
 from __future__ import annotations
 
-from xai_sdk.chat import system, user
+import logging
+import re
+import time
 
-from src.chat.clients import get_xai
+from src.chat.clients import get_openai
+from src.chat.llm.mini import message_text
 from src.chat.prompts import GENERATOR_SYSTEM
+from src.chat.replies import TECHNICAL_ERROR_REPLY
 from src.chat.retrieval.types import Hit
-from src.config import MODEL
+from src.chat.timing import elapsed_ms
+from src.config import MODEL, MODEL_MAX_TOKENS
+
+log = logging.getLogger(__name__)
 
 DRUG_URL_TEMPLATE = "https://trungtamthuoc.com/hoat-chat/{slug}"
+NO_DATA_REPLY = ("Tôi không tìm thấy thông tin phù hợp trong tài liệu. "
+                 "Bạn vui lòng hỏi cụ thể hơn hoặc tham khảo ý kiến bác sĩ.")
+_CITATION_RE = re.compile(r"\[([0-9][0-9,\-\s]*)\]")
 
 
 def _source_key(h: Hit) -> tuple:
@@ -56,9 +66,32 @@ def _format_context(hits: list[Hit], cite_idx: list[int]) -> str:
     return "\n\n---\n\n".join(blocks)
 
 
-def _format_sources(unique: list[Hit]) -> str:
+def _cited_source_numbers(text: str, max_index: int) -> list[int]:
+    cited: list[int] = []
+    seen: set[int] = set()
+
+    def add(num: int) -> None:
+        if 1 <= num <= max_index and num not in seen:
+            seen.add(num)
+            cited.append(num)
+
+    for match in _CITATION_RE.finditer(text):
+        for part in match.group(1).replace(" ", "").split(","):
+            if "-" in part:
+                start, end = part.split("-", 1)
+                if start.isdigit() and end.isdigit():
+                    for num in range(int(start), int(end) + 1):
+                        add(num)
+            elif part.isdigit():
+                add(int(part))
+    return cited
+
+
+def _format_sources(unique: list[Hit], source_numbers: list[int] | None = None) -> str:
     lines = []
-    for i, h in enumerate(unique, 1):
+    numbers = source_numbers or list(range(1, len(unique) + 1))
+    for i in numbers:
+        h = unique[i - 1]
         label = _drug_label(h) if h.source_type == "drug" else _disease_label(h)
         lines.append(f"[{i}] {label}")
     return "\n".join(lines)
@@ -93,9 +126,8 @@ def generate(
     kg_text: str = "",
     patient: dict | None = None,
 ) -> str:
-    if not hits and not kg_text and not patient:
-        return ("Tôi không tìm thấy thông tin phù hợp trong tài liệu. "
-                "Bạn vui lòng hỏi cụ thể hơn hoặc tham khảo ý kiến bác sĩ.")
+    if not hits and not kg_text:
+        return NO_DATA_REPLY
 
     unique, cite_idx = _dedupe(hits)
     context = _format_context(hits, cite_idx)
@@ -111,12 +143,30 @@ def generate(
     prompt_parts.append("Hãy trả lời câu hỏi trên dựa vào tài liệu và thông tin người bệnh.")
     prompt_user = "\n".join(prompt_parts)
 
-    chat = get_xai().chat.create(model=MODEL)
-    chat.append(system(GENERATOR_SYSTEM))
-    chat.append(user(prompt_user))
-    response = chat.sample()
+    start = time.perf_counter()
+    try:
+        response = get_openai().chat.completions.create(
+            model=MODEL,
+            max_tokens=MODEL_MAX_TOKENS,
+            messages=[
+                {"role": "system", "content": GENERATOR_SYSTEM},
+                {"role": "user", "content": prompt_user},
+            ],
+            # reasoning_effort="high",
+            extra_body={"thinking": {"type": "disabled"}},
+        )
+    except Exception as e:
+        log.warning("Generator LLM call failed: %s", e)
+        return TECHNICAL_ERROR_REPLY
+    finally:
+        log.info("llm timing stage=generator model=%s ms=%.1f",
+                 MODEL, elapsed_ms(start))
 
-    answer = (response.content or "").strip()
+    answer = message_text(response).strip()
+    if not answer:
+        log.warning("Generator LLM returned an empty response")
+        return TECHNICAL_ERROR_REPLY
     if unique:
-        return f"{answer}\n\nNguồn:\n{_format_sources(unique)}"
+        source_numbers = _cited_source_numbers(answer, len(unique))
+        return f"{answer}\n\nNguồn:\n{_format_sources(unique, source_numbers or None)}"
     return answer

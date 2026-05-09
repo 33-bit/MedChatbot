@@ -9,10 +9,42 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Keep Hugging Face / Transformers on the local model cache during normal
+# server runs. This avoids per-process metadata checks to huggingface.co.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+_HF_OFFLINE_VARS = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE")
+
+
+def _env_bool(name: str, default: str = "0") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def set_hf_offline(enabled: bool) -> None:
+    """Toggle HF offline flags for this process, including already-imported modules."""
+    value = "1" if enabled else "0"
+    for var in _HF_OFFLINE_VARS:
+        os.environ[var] = value
+
+    try:
+        import huggingface_hub.constants as hf_constants
+
+        hf_constants.HF_HUB_OFFLINE = enabled
+    except Exception:
+        pass
+
+    try:
+        import transformers.utils.hub as transformers_hub
+
+        transformers_hub._is_offline_mode = enabled
+    except Exception:
+        pass
+
 try:
-    from xai_sdk import Client
+    from openai import OpenAI
 except ModuleNotFoundError:  # pragma: no cover - optional dependency
-    Client = None  # type: ignore[assignment]
+    OpenAI = None  # type: ignore[assignment]
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -21,28 +53,35 @@ ENTITY_DIR = OUTPUT_DIR / "entities"
 DOCUMENTS_DIR = PROJECT_ROOT / "documents"
 ENTITY_DIR.mkdir(parents=True, exist_ok=True)
 
-XAI_API_KEY = os.getenv("XAI_API_KEY", "")
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+BASE_URL = os.getenv("BASE_URL", "")
+
+def make_openai_client(api_key: str | None = None):
+    if OpenAI is None:
+        raise ModuleNotFoundError("Thiếu thư viện `openai`. Cài bằng `pip install openai`.")
+    resolved_key = api_key or LLM_API_KEY
+    if not resolved_key:
+        raise RuntimeError("LLM_API_KEY not configured")
+    return OpenAI(api_key=resolved_key, base_url=BASE_URL)
 
 
-def make_xai_client(api_key: str | None = None):
-    if Client is None:
-        raise ModuleNotFoundError("Thiếu thư viện `xai_sdk`. Cài bằng `pip install xai-sdk`.")
-    return Client(api_key=api_key or XAI_API_KEY)
+client = make_openai_client() if OpenAI is not None and LLM_API_KEY else None
 
-
-client = make_xai_client() if Client is not None else None
-
-MODEL = os.getenv("XAI_MODEL", "grok-4.20-0309-reasoning")
-FAST_MODEL = os.getenv("XAI_FAST_MODEL", "grok-4-1-fast-reasoning")
-GUARDRAIL_MODEL = os.getenv("XAI_GUARDRAIL_MODEL", "grok-3-mini")
-VISION_MODEL = os.getenv("XAI_VISION_MODEL", MODEL)
+MODEL = os.getenv("MODEL", "gpt-4.1")
+FAST_MODEL = os.getenv("FAST_MODEL", "gpt-4.1-mini")
+GUARDRAIL_MODEL = os.getenv("GUARDRAIL_MODEL", FAST_MODEL)
+VISION_MODEL = os.getenv("VISION_MODEL", MODEL)
+MODEL_MAX_TOKENS = int(os.getenv("MODEL_MAX_TOKENS", "4096"))
+FAST_MODEL_MAX_TOKENS = int(os.getenv("FAST_MODEL_MAX_TOKENS", "1024"))
+GUARDRAIL_MAX_TOKENS = int(os.getenv("GUARDRAIL_MAX_TOKENS", "256"))
+BATCH_MAX_TOKENS = int(os.getenv("BATCH_MAX_TOKENS", "16000"))
 
 # --- Abuse protection ---
 GLOBAL_LLM_QUOTA_PER_MINUTE  = int(os.getenv("GLOBAL_LLM_QUOTA_PER_MINUTE", "500"))
 SESSION_LLM_QUOTA_PER_DAY    = int(os.getenv("SESSION_LLM_QUOTA_PER_DAY", "100"))
 CHAT_API_KEY                 = os.getenv("CHAT_API_KEY", "")
 
-# --- Session & cache ---
+# --- Session & persistence ---
 REDIS_URL                = os.getenv("REDIS_URL", "")
 SESSION_TTL_SECONDS      = int(os.getenv("SESSION_TTL_SECONDS", "86400"))  # 24h
 RATE_LIMIT_PER_MINUTE    = int(os.getenv("RATE_LIMIT_PER_MINUTE", "10"))
@@ -67,6 +106,9 @@ HYBRID_CANDIDATE_K       = int(os.getenv("HYBRID_CANDIDATE_K", "20"))
 RRF_K                    = int(os.getenv("RRF_K", "60"))
 E5_QUERY_PREFIX          = "query: "
 E5_PASSAGE_PREFIX        = "passage: "
+HF_PRELOAD_RETRIEVAL_MODELS = _env_bool("HF_PRELOAD_RETRIEVAL_MODELS", "1")
+HF_OFFLINE_AFTER_PRELOAD    = _env_bool("HF_OFFLINE_AFTER_PRELOAD", "1")
+HF_PRELOAD_REQUIRED         = _env_bool("HF_PRELOAD_REQUIRED", "0")
 
 # --- Diagnostic narrowing ---
 CLARIFICATION_BATCH_SIZE = int(os.getenv("CLARIFICATION_BATCH_SIZE", "4"))
@@ -75,9 +117,6 @@ MIN_CANDIDATES_TO_STOP   = int(os.getenv("MIN_CANDIDATES_TO_STOP", "2"))
 # --- Guardrail ---
 GUARDRAIL_MIN_LEN        = int(os.getenv("GUARDRAIL_MIN_LEN", "3"))
 GUARDRAIL_MAX_LEN        = int(os.getenv("GUARDRAIL_MAX_LEN", "2000"))
-
-# --- Semantic cache ---
-SEMANTIC_CACHE_THRESHOLD = float(os.getenv("SEMANTIC_CACHE_THRESHOLD", "0.85"))
 
 # --- Messaging channels ---
 ZALO_OA_ACCESS_TOKEN     = os.getenv("ZALO_OA_ACCESS_TOKEN", "")

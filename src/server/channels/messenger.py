@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
 from src.chat import answer
+from src.chat.replies import TECHNICAL_ERROR_REPLY
 from src.config import MESSENGER_PAGE_TOKEN, MESSENGER_VERIFY_TOKEN
 
 logger = logging.getLogger(__name__)
@@ -66,4 +67,8 @@ async def messenger_webhook(request: Request) -> dict:
                 await send_text(sender_id, reply)
             except Exception:
                 logger.exception("Messenger handler error")
+                try:
+                    await send_text(sender_id, TECHNICAL_ERROR_REPLY)
+                except Exception:
+                    logger.exception("Messenger fallback send failed")
     return {"ok": True}

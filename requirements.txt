@@ -3,8 +3,8 @@ fastapi
 uvicorn[standard]
 httpx
 
-# xAI
-xai-sdk
+# OpenAI
+openai
 
 # Vector DB & Embeddings
 qdrant-client
@@ -16,7 +16,6 @@ neo4j
 
 # Session memory & caching
 redis
-gptcache
 
 # PDF processing
 pdfplumber
@@ -25,7 +24,11 @@ pypdf
 # Scraping
 requests
 beautifulsoup4
+lxml
 playwright
 
 # Config
 python-dotenv
+
+# Testing
+pytest

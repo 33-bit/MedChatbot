@@ -1,7 +1,7 @@
 """
 bachmai_describe.py
 -------------------
-Phase 4: Dùng xAI Batch API + VLM để scan TẤT CẢ trang của 1 bệnh trong 1
+Phase 4: Dùng OpenAI Batch API + VLM để scan TẤT CẢ trang của 1 bệnh trong 1
 request (multi-image), mô tả các bảng / hình xuất hiện trong bài.
 
 Vì bảng/hình có thể kéo dài nhiều trang, gửi từng trang riêng lẻ sẽ không
@@ -33,8 +33,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.config import OUTPUT_DIR, VISION_MODEL
+from src.config import BATCH_MAX_TOKENS, OUTPUT_DIR, VISION_MODEL
 from src.processing.batch_api import (
+    chat_completion_request,
     fetch_results,
     get_batch,
     submit_batch,
@@ -85,25 +86,24 @@ Nguyên tắc:
 
 
 def encode_image(path: Path) -> str:
-    b64 = base64.standard_b64encode(path.read_bytes()).decode("ascii")
-    return f"data:image/png;base64,{b64}"
+    return base64.standard_b64encode(path.read_bytes()).decode("ascii")
 
 
 def build_request(custom_id: str, image_paths: list[Path]) -> dict:
     content: list[dict] = [{"type": "text", "text": DISEASE_PROMPT}]
     for i, p in enumerate(image_paths, 1):
         content.append({"type": "text", "text": f"--- TRANG {i} ---"})
-        content.append({"type": "image_url", "image_url": {"url": encode_image(p)}})
-    return {
-        "custom_id": custom_id,
-        "method": "POST",
-        "url": "/v1/chat/completions",
-        "body": {
-            "model": VISION_MODEL,
-            "messages": [{"role": "user", "content": content}],
-            "response_format": {"type": "json_object"},
-        },
-    }
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{encode_image(p)}"},
+        })
+    return chat_completion_request(
+        custom_id,
+        VISION_MODEL,
+        [{"role": "user", "content": content}],
+        max_tokens=BATCH_MAX_TOKENS,
+        response_format={"type": "json_object"},
+    )
 
 
 def find_disease_dirs(base: Path) -> list[Path]:

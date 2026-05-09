@@ -2,7 +2,7 @@
 clients.py
 ----------
 Single public factory module for external service clients.
-Every module that needs Redis / Neo4j / SQLite / xAI imports from here.
+Every module that needs Redis / Neo4j / SQLite / OpenAI imports from here.
 
 All factories are lazy singletons (@lru_cache).
 """
@@ -22,7 +22,7 @@ from src.config import (
     NEO4J_USER,
     REDIS_URL,
     SQLITE_PATH,
-    make_xai_client,
+    make_openai_client,
 )
 
 _SQLITE_SCHEMA = """
@@ -46,6 +46,13 @@ CREATE TABLE IF NOT EXISTS rate_limit (
     ts REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_rl_session_ts ON rate_limit(session_id, ts);
+
+CREATE TABLE IF NOT EXISTS webhook_update (
+    channel TEXT NOT NULL,
+    update_id TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (channel, update_id)
+);
 """
 
 
@@ -71,5 +78,5 @@ def get_sqlite() -> sqlite3.Connection:
 
 
 @lru_cache(maxsize=1)
-def get_xai():
-    return make_xai_client()
+def get_openai():
+    return make_openai_client()
