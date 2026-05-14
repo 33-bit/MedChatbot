@@ -1,0 +1,70 @@
+services:
+  api:
+    build: .
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./outputs:/app/outputs
+      - hf-cache:/root/.cache/huggingface
+    environment:
+      SQLITE_PATH: /app/outputs/chatbot.db
+      HF_HOME: /root/.cache/huggingface
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    restart: unless-stopped
+
+  ngrok:
+    image: ngrok/ngrok:latest
+    depends_on:
+      api:
+        condition: service_healthy
+    command:
+      - http
+      - "--url=${NGROK_URL:?Set NGROK_URL in .env}"
+      - http://api:8000
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:?Set NGROK_AUTHTOKEN in .env}
+    ports:
+      - "4040:4040"
+    restart: unless-stopped
+
+  telegram-webhook:
+    image: curlimages/curl:8.10.1
+    depends_on:
+      api:
+        condition: service_healthy
+      ngrok:
+        condition: service_started
+    env_file:
+      - .env
+    entrypoint:
+      - /bin/sh
+      - -c
+    command: |
+      set -eu
+      : "$${TELEGRAM_BOT_TOKEN:?Set TELEGRAM_BOT_TOKEN in .env}"
+      : "$${TELEGRAM_WEBHOOK_SECRET:?Set TELEGRAM_WEBHOOK_SECRET in .env}"
+      : "$${NGROK_URL:?Set NGROK_URL in .env}"
+      sleep "$${WEBHOOK_REGISTRATION_DELAY_SECONDS:-15}"
+      WEBHOOK_URL="$${NGROK_URL%/}/webhook/telegram"
+      curl --fail --show-error --silent --request POST \
+        "https://api.telegram.org/bot$${TELEGRAM_BOT_TOKEN}/setWebhook" \
+        --form "url=$${WEBHOOK_URL}" \
+        --form "secret_token=$${TELEGRAM_WEBHOOK_SECRET}" \
+        --form "drop_pending_updates=$${TELEGRAM_DROP_PENDING_UPDATES:-true}"
+      echo
+      echo "Telegram webhook registered: $${WEBHOOK_URL}"
+    restart: "no"
+
+volumes:
+  hf-cache:

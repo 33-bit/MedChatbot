@@ -135,6 +135,41 @@ curl -X POST http://localhost:8000/chat \
   -d '{"question":"Tôi bị ho và sốt nên làm gì?","session_id":"demo"}'
 ```
 
+## Run with Docker
+
+The Docker Compose setup starts the FastAPI API, exposes it through ngrok, and
+runs a one-shot Telegram `setWebhook` registration container.
+
+Fill `.env` with your real values. `.env.docker.example` shows the Docker-specific
+variables:
+
+```bash
+NGROK_AUTHTOKEN=...
+NGROK_URL=https://your-static-domain.ngrok-free.dev
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_WEBHOOK_SECRET=...
+TELEGRAM_DROP_PENDING_UPDATES=true
+```
+
+Then start everything:
+
+```bash
+docker compose up --build
+```
+
+The public endpoints are:
+
+```text
+${NGROK_URL}/health
+${NGROK_URL}/chat
+${NGROK_URL}/webhook/telegram
+${NGROK_URL}/webhook/zalo
+${NGROK_URL}/webhook/messenger
+```
+
+The `telegram-webhook` container exits after registering the webhook; this is
+expected. Keep the `api` and `ngrok` containers running.
+
 
 ## Data and RAG pipeline
 

@@ -1,0 +1,16 @@
+.env
+.git/
+.gitnexus/
+.pytest_cache/
+.ruff_cache/
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.claude/
+.vscode/
+documents/
+outputs/
+codebase-analysis-docs/
+colab_embed.ipynb
+colab_server.ipynb
