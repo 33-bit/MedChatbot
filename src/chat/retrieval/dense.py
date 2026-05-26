@@ -1,13 +1,11 @@
 """
 dense.py
 --------
-Dense vector retrieval over Qdrant + hybrid search orchestrator.
+Dense vector retrieval over Qdrant.
 
 Exports:
   - Hit: the retrieval result dataclass used by all retrieval modules.
   - dense_search: Qdrant vector search over disease + drug collections.
-  - rrf_merge: Reciprocal Rank Fusion of two ranked lists.
-  - hybrid_search: dense + BM25 → RRF → Cross-Encoder rerank.
 """
 
 from __future__ import annotations
@@ -30,9 +28,7 @@ from src.config import (
 from sentence_transformers import SentenceTransformer
 
 from src.chat.errors import QdrantUnavailable
-from src.chat.retrieval.fusion import rrf_merge
-from src.chat.retrieval.rerank import preload_reranker, rerank
-from src.chat.retrieval.service import hybrid_search
+from src.chat.retrieval.rerank import preload_reranker
 from src.chat.retrieval.types import Hit
 from src.chat.timing import log_stage_timing
 
@@ -154,5 +150,3 @@ def dense_search(query: str, top_k: int = HYBRID_CANDIDATE_K) -> list[Hit]:
         results.extend(_to_hit(p) for p in response.points)
     results.sort(key=lambda h: h.score, reverse=True)
     return results[:top_k]
-
-

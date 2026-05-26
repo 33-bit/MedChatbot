@@ -19,7 +19,14 @@ _GREETING_RE = re.compile(
 )
 _NON_WORD_RE = re.compile(r"[^\w\sÀ-ỹ]", re.UNICODE)
 
-VALID_VERDICTS = ("allow", "greeting", "off_topic", "injection", "abuse")
+VALID_VERDICTS = (
+    "allow",
+    "greeting",
+    "trivial",
+    "off_topic",
+    "injection",
+    "abuse",
+)
 
 VERDICT_REPLIES = {
     "greeting": "Xin chào! Tôi là trợ lý y tế. Bạn có thể mô tả triệu chứng hoặc hỏi về bệnh/thuốc.",

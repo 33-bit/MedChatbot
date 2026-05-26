@@ -6,4 +6,11 @@ def answer(*args, **kwargs):
 
     return _answer(*args, **kwargs)
 
-__all__ = ["answer"]
+
+def answer_with_meta(*args, **kwargs):
+    from src.chat.pipeline import answer_with_meta as _answer_with_meta
+
+    return _answer_with_meta(*args, **kwargs)
+
+
+__all__ = ["answer", "answer_with_meta"]

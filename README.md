@@ -135,6 +135,8 @@ curl -X POST http://localhost:8000/chat \
   -d '{"question":"Tôi bị ho và sốt nên làm gì?","session_id":"demo"}'
 ```
 
+`session_id` is required for `/chat`; the server hashes it together with the API key before calling the chat pipeline so users sharing one API key do not share patient context.
+
 ## Run with Docker
 
 The Docker Compose setup starts the FastAPI API, exposes it through ngrok, and
@@ -190,7 +192,7 @@ Prefer dry-run, prepare, or status modes for processing workflows. Do not run li
 The server exposes:
 
 - `GET /health`
-- `POST /chat` protected by `CHAT_API_KEY`
+- `POST /chat` protected by `CHAT_API_KEY`, with required per-user `session_id`
 - Telegram webhook routes
 - Zalo webhook routes
 - Messenger webhook routes

@@ -10,7 +10,6 @@ Setup:
 
 from __future__ import annotations
 
-import asyncio
 import html as _html
 import logging
 import re
@@ -19,15 +18,15 @@ import time
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
-from src.chat import answer
-from src.chat.replies import TECHNICAL_ERROR_REPLY
 from src.chat.storage.session import clear_session, reserve_webhook_update
 from src.config import TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET
+from src.server.channels.common import answer_and_send
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-TG_MAX_LEN = 4000  # safe under Telegram's 4096 limit
+TG_MAX_LEN = 4000  # safe under Telegram's 4096-byte limit
+TG_HARD_MAX_BYTES = 4096
 BOT_COMMANDS = [
     {"command": "start", "description": "Bắt đầu bot"},
     {"command": "help", "description": "Cách đặt câu hỏi"},
@@ -86,10 +85,12 @@ async def setup_bot_menu() -> None:
         logger.info("Telegram command menu configured.")
 
 
-def _md_to_tg_html(text: str) -> str:
-    """Convert a subset of Markdown to Telegram-compatible HTML."""
+_CODE_FENCE_RE = re.compile(r"```([\s\S]*?)```")
+
+
+def _format_non_code_markdown(text: str) -> str:
     s = _html.escape(text)
-    s = re.sub(r"```([\s\S]*?)```", r"<pre>\1</pre>", s)
+    # Escape first; these regexes introduce the only Telegram HTML tags.
     s = re.sub(r"`([^`\n]+)`", r"<code>\1</code>", s)
     s = re.sub(r"^\s{0,3}#{1,6}\s*(.+)$", r"<b>\1</b>", s, flags=re.MULTILINE)
     s = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", r'<a href="\2">\1</a>', s)
@@ -98,15 +99,43 @@ def _md_to_tg_html(text: str) -> str:
     return s
 
 
+def _md_to_tg_html(text: str) -> str:
+    """Convert a subset of Markdown to Telegram-compatible HTML."""
+    parts: list[str] = []
+    pos = 0
+    for match in _CODE_FENCE_RE.finditer(text):
+        parts.append(_format_non_code_markdown(text[pos:match.start()]))
+        parts.append(f"<pre>{_html.escape(match.group(1))}</pre>")
+        pos = match.end()
+    parts.append(_format_non_code_markdown(text[pos:]))
+    return "".join(parts)
+
+
+def _utf8_len(text: str) -> int:
+    return len(text.encode("utf-8"))
+
+
+def _byte_limited_prefix_len(text: str, limit: int) -> int:
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if _utf8_len(text[:mid]) <= limit:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
+
+
 def _split_for_telegram(text: str, limit: int = TG_MAX_LEN) -> list[str]:
-    if len(text) <= limit:
+    if _utf8_len(text) <= limit:
         return [text]
     chunks: list[str] = []
     remaining = text
-    while len(remaining) > limit:
-        cut = remaining.rfind("\n", 0, limit)
+    while _utf8_len(remaining) > limit:
+        prefix_len = _byte_limited_prefix_len(remaining, limit)
+        cut = remaining.rfind("\n", 0, prefix_len + 1)
         if cut <= 0:
-            cut = limit
+            cut = prefix_len
         chunks.append(remaining[:cut])
         remaining = remaining[cut:].lstrip("\n")
     if remaining:
@@ -136,31 +165,24 @@ async def send_text(chat_id: int | str, text: str) -> None:
                         idx, len(chunks), _elapsed_ms(chunk_start), r.status_code, len(chunk))
             if r.status_code >= 400:
                 # fallback: send as plain text so user still sees something
-                await client.post(_send_url(), json={"chat_id": chat_id, "text": chunk})
+                for fallback_chunk in _split_for_telegram(chunk, TG_HARD_MAX_BYTES):
+                    await client.post(_send_url(), json={"chat_id": chat_id, "text": fallback_chunk})
     logger.info("Telegram timing stage=send_total ms=%.1f chunks=%d chars=%d",
                 _elapsed_ms(total_start), len(chunks), len(text))
 
 
 async def _answer_and_send(chat_id: int | str, text: str) -> None:
     total_start = time.perf_counter()
-    try:
-        stage_start = time.perf_counter()
-        reply = await asyncio.to_thread(answer, text, session_id=f"tg:{chat_id}")
-        logger.info("Telegram timing stage=answer ms=%.1f chars=%d",
-                    _elapsed_ms(stage_start), len(reply))
-        stage_start = time.perf_counter()
-        await send_text(chat_id, reply)
-        logger.info("Telegram timing stage=send ms=%.1f",
-                    _elapsed_ms(stage_start))
-    except Exception:
-        logger.exception("Telegram handler error")
-        try:
-            await send_text(chat_id, TECHNICAL_ERROR_REPLY)
-        except Exception:
-            logger.exception("Telegram fallback send failed")
-    finally:
-        logger.info("Telegram timing stage=background_total ms=%.1f",
-                    _elapsed_ms(total_start))
+    await answer_and_send(
+        text,
+        chat_id,
+        f"tg:{chat_id}",
+        send_text,
+        logger=logger,
+        channel="Telegram",
+    )
+    logger.info("Telegram timing stage=background_total ms=%.1f",
+                _elapsed_ms(total_start))
 
 
 def _command(text: str) -> str:

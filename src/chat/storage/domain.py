@@ -12,6 +12,7 @@ class PatientSession:
     conversation: list[dict] = field(default_factory=list)
     candidate_diseases: list[dict] = field(default_factory=list)
     answered_questions: list[str] = field(default_factory=list)
+    clarification_parse_failures: int = 0
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)

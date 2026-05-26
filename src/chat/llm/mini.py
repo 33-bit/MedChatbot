@@ -73,12 +73,21 @@ def message_text(message) -> str:
     return "".join(parts)
 
 
-def call_mini(system_prompt: str, user_prompt: str) -> dict | list | None:
+def call_mini(
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    model: str | None = None,
+    max_tokens: int | None = None,
+    stage: str = "mini",
+) -> dict | list | None:
+    resolved_model = model or FAST_MODEL
+    resolved_max_tokens = max_tokens or FAST_MODEL_MAX_TOKENS
     start = time.perf_counter()
     try:
         response = get_openai().chat.completions.create(
-            model=FAST_MODEL,
-            max_tokens=FAST_MODEL_MAX_TOKENS,
+            model=resolved_model,
+            max_tokens=resolved_max_tokens,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -91,6 +100,6 @@ def call_mini(system_prompt: str, user_prompt: str) -> dict | list | None:
         log.warning("Mini LLM call failed: %s", e)
         return None
     finally:
-        log.info("llm timing stage=mini model=%s ms=%.1f",
-                 FAST_MODEL, elapsed_ms(start))
+        log.info("llm timing stage=%s model=%s ms=%.1f",
+                 stage, resolved_model, elapsed_ms(start))
     return parse_json(message_text(response))

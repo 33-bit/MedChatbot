@@ -11,6 +11,7 @@ import json
 from src.chat.guards.guardrail import VALID_VERDICTS
 from src.chat.llm.mini import call_mini
 from src.chat.prompts import TURN_ANALYSIS_SYSTEM
+from src.config import GUARDRAIL_MAX_TOKENS, GUARDRAIL_MODEL
 
 VALID_LABELS = ("diagnostic", "informational", "clarification_answer", "greeting_other")
 ANALYZABLE_LABELS = {"diagnostic", "informational"}
@@ -46,7 +47,13 @@ def analyze_turn(
         "last_bot_message": last_bot_message,
         "user_message": user_message,
     }
-    result = call_mini(TURN_ANALYSIS_SYSTEM, json.dumps(payload, ensure_ascii=False))
+    result = call_mini(
+        TURN_ANALYSIS_SYSTEM,
+        json.dumps(payload, ensure_ascii=False),
+        model=GUARDRAIL_MODEL,
+        max_tokens=GUARDRAIL_MAX_TOKENS,
+        stage="turn_analysis",
+    )
     if not isinstance(result, dict):
         return _fallback(user_message)
 

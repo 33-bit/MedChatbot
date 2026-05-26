@@ -12,6 +12,13 @@ from dataclasses import dataclass
 
 @dataclass
 class Hit:
+    """Retrieved chunk.
+
+    score is stage-local: dense, sparse, fusion, and rerank each use different
+    scales, so consumers should treat it only as ordering metadata from the
+    current retrieval stage.
+    """
+
     text: str
     score: float
     source_type: str        # "disease" | "drug"

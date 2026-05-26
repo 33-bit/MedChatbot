@@ -13,10 +13,12 @@ Phases (short-circuit on the first failure):
 from __future__ import annotations
 
 import logging
+import threading
 import time
 import uuid
 from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from dataclasses import asdict
+from typing import Any
 
 from src.chat.diagnosis.differential import (
     build_clarification,
@@ -48,13 +50,53 @@ from src.chat.storage.session import (
     save_profile,
     save_session,
 )
-from src.chat.timing import log_trace_timing
+from src.chat.timing import elapsed_ms, log_trace_timing
 from src.config import CLARIFICATION_BATCH_SIZE, RERANK_TOP_K
 
 GREETING_REPLY = ("Xin chào! Tôi là trợ lý y tế. Bạn có thể mô tả triệu chứng "
                   "hoặc hỏi về bệnh/thuốc cụ thể.")
 log = logging.getLogger(__name__)
-_RETRIEVAL_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="retrieval")
+
+_META_LOCAL = threading.local()
+
+
+def _meta() -> dict | None:
+    """Return the active per-turn meta dict, or None when not collecting."""
+    return getattr(_META_LOCAL, "current", None)
+
+
+def _record_hits(hits: list[Hit]) -> None:
+    meta = _meta()
+    if meta is None:
+        return
+    meta.setdefault("retrieved", []).extend(
+        {
+            "source_type": h.source_type,
+            "source_slug": h.source_slug,
+            "source_name": h.source_name,
+            "heading_path": h.heading_path,
+            "chunk_id": h.chunk_id,
+            "score": h.score,
+        }
+        for h in hits
+    )
+
+
+def _record_usage(stage: str, usage: dict | None, model: str | None = None) -> None:
+    meta = _meta()
+    if meta is None or not usage:
+        return
+    entry = {"stage": stage, **usage}
+    if model:
+        entry["model"] = model
+    meta.setdefault("usage", []).append(entry)
+
+
+def _record_latency(stage: str, ms: float) -> None:
+    meta = _meta()
+    if meta is None:
+        return
+    meta.setdefault("latency_ms", {})[stage] = round(ms, 2)
 
 
 def _log_timing(trace_id: str, stage: str, start: float, **fields) -> None:
@@ -169,6 +211,13 @@ def _handle_clarification_answer(
     parsed_answers = parse_clarification_answer(asked, user_answer)
     _log_timing(trace_id, "clarification_parse", stage_start,
                 asked=len(asked), parsed=len(parsed_answers))
+    if parsed_answers:
+        session.clarification_parse_failures = 0
+    else:
+        session.clarification_parse_failures += 1
+        if session.clarification_parse_failures >= 2:
+            force_answer = True
+
     for r in parsed_answers:
         sid = r.get("symptom_id")
         if not sid or r.get("present") != "yes":
@@ -192,23 +241,33 @@ def _handle_informational(
 ) -> str:
     stage_start = time.perf_counter()
     search_question = retrieval_question or question
-    kg_future = _RETRIEVAL_EXECUTOR.submit(_load_kg_context, search_question, trace_id)
-    hits_future = _RETRIEVAL_EXECUTOR.submit(_load_hybrid_hits, search_question, trace_id)
-    done, pending = wait((kg_future, hits_future), return_when=FIRST_EXCEPTION)
-    for future in done:
-        if future.exception() is not None:
-            for pending_future in pending:
-                pending_future.cancel()
-            raise future.exception()
-    kg_text = kg_future.result()
-    hits = hits_future.result()
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="retrieval") as executor:
+        kg_future = executor.submit(_load_kg_context, search_question, trace_id)
+        hits_future = executor.submit(_load_hybrid_hits, search_question, trace_id)
+        done, pending = wait((kg_future, hits_future), return_when=FIRST_EXCEPTION)
+        for future in done:
+            if future.exception() is not None:
+                for pending_future in pending:
+                    pending_future.cancel()
+                raise future.exception()
+        kg_text = kg_future.result()
+        hits = hits_future.result()
     _log_timing(trace_id, "parallel_retrieval", stage_start,
                 hits=len(hits), kg_chars=len(kg_text))
+    _record_hits(hits)
+    _record_latency("retrieval", elapsed_ms(stage_start))
 
     patient_dict = asdict(session) if use_patient_context else None
     stage_start = time.perf_counter()
-    reply = generate(question, hits, kg_text=kg_text, patient=patient_dict)
+    if _meta() is not None:
+        reply, gen_meta = generate(
+            question, hits, kg_text=kg_text, patient=patient_dict, return_meta=True,
+        )
+        _record_usage("generator", gen_meta.get("usage"), model=gen_meta.get("model"))
+    else:
+        reply = generate(question, hits, kg_text=kg_text, patient=patient_dict)
     _log_timing(trace_id, "generate", stage_start, chars=len(reply))
+    _record_latency("generator", elapsed_ms(stage_start))
     return reply
 
 
@@ -217,7 +276,7 @@ def _route(label: str, session: PatientSession, question: str,
     if label == "clarification_answer":
         return _handle_clarification_answer(session, question, trace_id, force_answer)
     if label == "diagnostic":
-        return _handle_diagnostic(session, rewritten, trace_id)
+        return _handle_diagnostic(session, rewritten, trace_id, force_answer=force_answer)
     # informational: always answer; personalize if we have symptoms
     return _handle_informational(
         session,
@@ -282,20 +341,21 @@ def _answer_inner(
         last_bot_message=_last_bot_message(session),
         history=session.conversation,
     )
-    _log_timing(trace_id, "turn_analysis", stage_start,
-                verdict=analysis["guardrail"]["verdict"],
-                label=analysis["turn"]["label"],
-                direct_answer=analysis["turn"]["direct_answer_requested"])
     guard = analysis["guardrail"]
+    turn = analysis["turn"]
+    direct_answer_for_log = (
+        turn["direct_answer_requested"] if guard["verdict"] == "allow" else False
+    )
+    _log_timing(trace_id, "turn_analysis", stage_start,
+                verdict=guard["verdict"],
+                label=turn["label"],
+                direct_answer=direct_answer_for_log)
     if guard["verdict"] != "allow":
         _log_timing(trace_id, "total", request_start, outcome="guardrail")
         return _guardrail_reply(session_id, question, guard["verdict"])
 
-    turn = analysis["turn"]
     label = turn["label"]
     direct_answer_requested = turn["direct_answer_requested"]
-    if direct_answer_requested:
-        label = "clarification_answer"
     session.add_message("user", question)
 
     if label == "greeting_other":
@@ -353,3 +413,26 @@ def answer(question: str, session_id: str = "default") -> str:
         log.exception("Pipeline failed trace=%s session=%s", trace_id, session_id)
         _log_timing(trace_id, "total", request_start, outcome="technical_error")
         return TECHNICAL_ERROR_REPLY
+
+
+def answer_with_meta(question: str, session_id: str = "default") -> tuple[str, dict[str, Any]]:
+    """Like `answer`, but also returns a meta dict capturing usage, retrieved
+    hits, and per-stage latency for the turn. Eval-only entry point — channels
+    should keep using `answer` since the meta payload changes per turn.
+    """
+    trace_id = uuid.uuid4().hex[:8]
+    request_start = time.perf_counter()
+    meta: dict[str, Any] = {"trace_id": trace_id}
+    _META_LOCAL.current = meta
+    try:
+        try:
+            reply = _answer_inner(question, session_id, trace_id, request_start)
+        except Exception:
+            log.exception("Pipeline failed trace=%s session=%s", trace_id, session_id)
+            _log_timing(trace_id, "total", request_start, outcome="technical_error")
+            reply = TECHNICAL_ERROR_REPLY
+            meta["error"] = "technical_error"
+        meta["latency_ms_total"] = round(elapsed_ms(request_start), 2)
+        return reply, meta
+    finally:
+        _META_LOCAL.current = None

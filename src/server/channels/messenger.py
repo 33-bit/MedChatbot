@@ -11,12 +11,11 @@ from __future__ import annotations
 import logging
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
-from src.chat import answer
-from src.chat.replies import TECHNICAL_ERROR_REPLY
 from src.config import MESSENGER_PAGE_TOKEN, MESSENGER_VERIFY_TOKEN
+from src.server.channels.common import answer_and_send
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -51,7 +50,7 @@ async def messenger_verify(request: Request) -> PlainTextResponse:
 
 
 @router.post("/webhook/messenger")
-async def messenger_webhook(request: Request) -> dict:
+async def messenger_webhook(request: Request, background_tasks: BackgroundTasks) -> dict:
     body = await request.json()
     if body.get("object") != "page":
         return {"ok": True}
@@ -62,13 +61,13 @@ async def messenger_webhook(request: Request) -> dict:
             text = (evt.get("message") or {}).get("text", "")
             if not sender_id or not text:
                 continue
-            try:
-                reply = answer(text, session_id=f"fb:{sender_id}")
-                await send_text(sender_id, reply)
-            except Exception:
-                logger.exception("Messenger handler error")
-                try:
-                    await send_text(sender_id, TECHNICAL_ERROR_REPLY)
-                except Exception:
-                    logger.exception("Messenger fallback send failed")
+            background_tasks.add_task(
+                answer_and_send,
+                text,
+                sender_id,
+                f"fb:{sender_id}",
+                send_text,
+                logger=logger,
+                channel="Messenger",
+            )
     return {"ok": True}

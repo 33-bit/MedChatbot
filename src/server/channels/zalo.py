@@ -16,11 +16,10 @@ from __future__ import annotations
 import logging
 
 import httpx
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, BackgroundTasks, Request
 
-from src.chat import answer
-from src.chat.replies import TECHNICAL_ERROR_REPLY
 from src.config import ZALO_OA_ACCESS_TOKEN
+from src.server.channels.common import answer_and_send
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -42,7 +41,7 @@ async def send_text(user_id: str, text: str) -> None:
         logger.info("Zalo send → %s %s", r.status_code, r.text[:200])
 
 
-async def _handle_event(body: dict) -> None:
+async def _handle_event(body: dict, background_tasks: BackgroundTasks) -> None:
     event = body.get("event_name")
     if event != "user_send_text":
         return
@@ -50,12 +49,15 @@ async def _handle_event(body: dict) -> None:
     text = (body.get("message") or {}).get("text", "")
     if not user_id or not text:
         return
-    try:
-        reply = answer(text, session_id=f"zalo:{user_id}")
-    except Exception:
-        logger.exception("Zalo answer failed")
-        reply = TECHNICAL_ERROR_REPLY
-    await send_text(user_id, reply)
+    background_tasks.add_task(
+        answer_and_send,
+        text,
+        user_id,
+        f"zalo:{user_id}",
+        send_text,
+        logger=logger,
+        channel="Zalo",
+    )
 
 
 @router.get("/webhook/zalo")
@@ -65,11 +67,11 @@ async def zalo_verify() -> dict:
 
 
 @router.post("/webhook/zalo")
-async def zalo_webhook(request: Request) -> dict:
+async def zalo_webhook(request: Request, background_tasks: BackgroundTasks) -> dict:
     body = await request.json()
     logger.info("Zalo event: %s", body.get("event_name"))
     try:
-        await _handle_event(body)
+        await _handle_event(body, background_tasks)
     except Exception:
         logger.exception("Zalo handler error")
     return {"ok": True}

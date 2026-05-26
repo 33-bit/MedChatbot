@@ -34,8 +34,7 @@ def hybrid_search(query: str, top_k: int = RERANK_TOP_K) -> list[Hit]:
     try:
         sparse_hits = bm25_search(query, top_k=HYBRID_CANDIDATE_K)
     except Exception as e:
-        log.warning("Sparse search failed: %s", e)
-        sparse_hits = []
+        raise QdrantUnavailable("Sparse retrieval failed") from e
     log.info("retrieval timing stage=sparse_total ms=%.1f hits=%d",
              elapsed_ms(stage_start), len(sparse_hits))
 
@@ -48,8 +47,7 @@ def hybrid_search(query: str, top_k: int = RERANK_TOP_K) -> list[Hit]:
     try:
         reranked = rerank(query, fused, top_k=top_k)
     except Exception as e:
-        log.warning("Rerank failed: %s", e)
-        reranked = fused[:top_k]
+        raise QdrantUnavailable("Rerank failed") from e
     log.info("retrieval timing stage=rerank_total ms=%.1f hits=%d",
              elapsed_ms(stage_start), len(reranked))
     log.info("retrieval timing stage=hybrid_total ms=%.1f hits=%d",

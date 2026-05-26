@@ -120,13 +120,33 @@ def _format_patient(patient: dict | None) -> str:
     return "\n\n".join(parts)
 
 
+def _extract_usage(response) -> dict | None:
+    usage = getattr(response, "usage", None)
+    if not usage:
+        return None
+    pt = getattr(usage, "prompt_tokens", None)
+    ct = getattr(usage, "completion_tokens", None)
+    tt = getattr(usage, "total_tokens", None)
+    if pt is None and ct is None and tt is None:
+        return None
+    return {
+        "prompt_tokens": pt or 0,
+        "completion_tokens": ct or 0,
+        "total_tokens": tt if tt is not None else (pt or 0) + (ct or 0),
+    }
+
+
 def generate(
     question: str,
     hits: list[Hit],
     kg_text: str = "",
     patient: dict | None = None,
-) -> str:
+    *,
+    return_meta: bool = False,
+):
     if not hits and not kg_text:
+        if return_meta:
+            return NO_DATA_REPLY, {"usage": None, "model": MODEL, "no_data": True}
         return NO_DATA_REPLY
 
     unique, cite_idx = _dedupe(hits)
@@ -144,6 +164,7 @@ def generate(
     prompt_user = "\n".join(prompt_parts)
 
     start = time.perf_counter()
+    response = None
     try:
         response = get_openai().chat.completions.create(
             model=MODEL,
@@ -157,16 +178,25 @@ def generate(
         )
     except Exception as e:
         log.warning("Generator LLM call failed: %s", e)
+        if return_meta:
+            return TECHNICAL_ERROR_REPLY, {"usage": None, "model": MODEL, "error": repr(e)}
         return TECHNICAL_ERROR_REPLY
     finally:
         log.info("llm timing stage=generator model=%s ms=%.1f",
                  MODEL, elapsed_ms(start))
 
+    usage = _extract_usage(response)
     answer = message_text(response).strip()
     if not answer:
         log.warning("Generator LLM returned an empty response")
+        if return_meta:
+            return TECHNICAL_ERROR_REPLY, {"usage": usage, "model": MODEL, "empty": True}
         return TECHNICAL_ERROR_REPLY
     if unique:
         source_numbers = _cited_source_numbers(answer, len(unique))
-        return f"{answer}\n\nNguồn:\n{_format_sources(unique, source_numbers or None)}"
-    return answer
+        rendered = f"{answer}\n\nNguồn:\n{_format_sources(unique, source_numbers or None)}"
+    else:
+        rendered = answer
+    if return_meta:
+        return rendered, {"usage": usage, "model": MODEL}
+    return rendered

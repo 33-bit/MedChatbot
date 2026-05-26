@@ -47,7 +47,7 @@ Input: JSON {history: array, last_bot_message: str, user_message: str}
 Trả về JSON đúng cấu trúc:
 {
   "guardrail": {
-    "verdict": "allow" | "greeting" | "off_topic" | "injection" | "abuse",
+    "verdict": "allow" | "greeting" | "trivial" | "off_topic" | "injection" | "abuse",
     "reason": "ngắn gọn"
   },
   "turn": {
@@ -81,7 +81,7 @@ Quy tắc phân loại:
 - "clarification_answer": đang trả lời câu hỏi làm rõ trước đó của bot
 - "greeting_other": chào hỏi/cảm ơn/lạc đề
 - Nếu last_bot_message đang hỏi "Để thu hẹp chẩn đoán" và user_message trả lời có/không/không biết/không rõ hoặc yêu cầu "trả lời luôn/cứ trả lời", label="clarification_answer".
-- "direct_answer_requested" chỉ true khi last_bot_message đang hỏi "Để thu hẹp chẩn đoán" và user_message yêu cầu dừng hỏi thêm để trả lời ngay, ví dụ "trả lời tôi luôn", "cứ trả lời đi", "khỏi hỏi nữa", "đừng hỏi nữa", "tôi không biết, cứ trả lời". Nếu người dùng chỉ nói "không biết/không rõ" mà không yêu cầu trả lời ngay, đặt false.
+- "direct_answer_requested" true khi người dùng yêu cầu dừng hỏi thêm để trả lời ngay, ví dụ "trả lời tôi luôn", "cứ trả lời đi", "khỏi hỏi nữa", "đừng hỏi nữa", "tôi không biết, cứ trả lời". Giữ label theo vai trò thật của lượt: nếu đang trả lời câu hỏi làm rõ thì label="clarification_answer"; nếu đang nêu triệu chứng mới thì label="diagnostic". Nếu người dùng chỉ nói "không biết/không rõ" mà không yêu cầu trả lời ngay, đặt false.
 
 Quy tắc rewrite:
 - Nếu user_message đã rõ ràng, rewritten = user_message và confident = true.

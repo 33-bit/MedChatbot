@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 import uuid
 from pathlib import Path
@@ -43,6 +44,7 @@ DRUG_CHUNKS = CHUNKS_DIR / "drug_chunks.jsonl"
 
 EMBED_BATCH = 64
 E5_PASSAGE_PREFIX = "passage: "
+log = logging.getLogger(__name__)
 
 
 def load_chunks(path: Path) -> list[dict]:
@@ -52,6 +54,8 @@ def load_chunks(path: Path) -> list[dict]:
             c = json.loads(line)
             if "id" not in c:
                 c["id"] = str(uuid.uuid4())
+            if not c.get("chunk_id"):
+                log.warning("Chunk %s in %s missing chunk_id", c["id"], path)
             chunks.append(c)
     return chunks
 
