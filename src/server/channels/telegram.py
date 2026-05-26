@@ -10,6 +10,7 @@ Setup:
 
 from __future__ import annotations
 
+import asyncio
 import html as _html
 import logging
 import re
@@ -18,9 +19,11 @@ import time
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
+from src.chat import answer
+from src.chat.replies import TECHNICAL_ERROR_REPLY
+from src.chat.storage.feedback import create_feedback_request, record_feedback_rating
 from src.chat.storage.session import clear_session, reserve_webhook_update
 from src.config import TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET
-from src.server.channels.common import answer_and_send
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -59,6 +62,7 @@ MENU_TEXT = """Menu lệnh:
 /menu - Danh sách lệnh
 /new - Xóa ngữ cảnh hội thoại hiện tại
 """
+RATING_PROMPT = "Bạn đánh giá câu trả lời này từ 1 đến 5 nhé."
 
 
 def _send_url() -> str:
@@ -171,16 +175,110 @@ async def send_text(chat_id: int | str, text: str) -> None:
                 _elapsed_ms(total_start), len(chunks), len(text))
 
 
+def _rating_keyboard(token: str) -> dict:
+    return {
+        "inline_keyboard": [
+            [
+                {"text": str(score), "callback_data": f"rate:{token}:{score}"}
+                for score in range(1, 6)
+            ]
+        ]
+    }
+
+
+def _parse_rating_callback(data: str) -> tuple[str, int] | None:
+    parts = data.split(":")
+    if len(parts) != 3 or parts[0] != "rate":
+        return None
+    try:
+        rating = int(parts[2])
+    except ValueError:
+        return None
+    if rating < 1 or rating > 5:
+        return None
+    return parts[1], rating
+
+
+async def _send_rating_prompt(chat_id: int | str, token: str) -> None:
+    if not TELEGRAM_BOT_TOKEN:
+        logger.warning("TELEGRAM_BOT_TOKEN chưa cấu hình; bỏ qua gửi đánh giá.")
+        return
+    payload = {
+        "chat_id": chat_id,
+        "text": RATING_PROMPT,
+        "reply_markup": _rating_keyboard(token),
+    }
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.post(_send_url(), json=payload)
+    logger.info("Telegram rating prompt → %s %s", r.status_code, r.text[:200])
+
+
+async def _answer_callback_query(callback_query_id: str, text: str) -> None:
+    if not TELEGRAM_BOT_TOKEN:
+        logger.warning("TELEGRAM_BOT_TOKEN chưa cấu hình; bỏ qua callback answer.")
+        return
+    payload = {
+        "callback_query_id": callback_query_id,
+        "text": text,
+        "show_alert": False,
+        "cache_time": 0,
+    }
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.post(_api_url("answerCallbackQuery"), json=payload)
+    logger.info("Telegram callback answer → %s %s", r.status_code, r.text[:200])
+
+
+async def _delete_rating_message(chat_id: int | str, message_id: int) -> None:
+    if not TELEGRAM_BOT_TOKEN:
+        logger.warning("TELEGRAM_BOT_TOKEN chưa cấu hình; bỏ qua xóa tin nhắn đánh giá.")
+        return
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+    }
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.post(_api_url("deleteMessage"), json=payload)
+    logger.info("Telegram rating message deletion → %s %s", r.status_code, r.text[:200])
+
+
+async def _handle_rating_callback(callback_query: dict) -> bool:
+    parsed = _parse_rating_callback(str(callback_query.get("data") or ""))
+    if parsed is None:
+        return False
+    token, rating = parsed
+    saved = record_feedback_rating(token, rating)
+    callback_query_id = callback_query.get("id")
+    if callback_query_id:
+        text = "Cảm ơn bạn đã đánh giá." if saved else "Đánh giá này không còn hiệu lực."
+        await _answer_callback_query(str(callback_query_id), text)
+    message = callback_query.get("message") or {}
+    chat_id = (message.get("chat") or {}).get("id")
+    message_id = message.get("message_id")
+    if chat_id is not None and message_id is not None:
+        await _delete_rating_message(chat_id, message_id)
+    return True
+
+
 async def _answer_and_send(chat_id: int | str, text: str) -> None:
     total_start = time.perf_counter()
-    await answer_and_send(
-        text,
-        chat_id,
-        f"tg:{chat_id}",
-        send_text,
-        logger=logger,
-        channel="Telegram",
-    )
+    session_id = f"tg:{chat_id}"
+    try:
+        reply = await asyncio.to_thread(answer, text, session_id=session_id)
+    except Exception:
+        logger.exception("Telegram answer failed")
+        reply = TECHNICAL_ERROR_REPLY
+
+    try:
+        await send_text(chat_id, reply)
+    except Exception:
+        logger.exception("Telegram send failed")
+    else:
+        try:
+            token = create_feedback_request(session_id, "telegram", str(chat_id), text, reply)
+            await _send_rating_prompt(chat_id, token)
+        except Exception:
+            logger.exception("Telegram rating prompt failed")
+
     logger.info("Telegram timing stage=background_total ms=%.1f",
                 _elapsed_ms(total_start))
 
@@ -221,6 +319,11 @@ async def telegram_webhook(
     update_id = update.get("update_id")
     if update_id is not None and not reserve_webhook_update("telegram", update_id):
         logger.info("Duplicate Telegram update ignored: %s", update_id)
+        return {"ok": True}
+
+    callback_query = update.get("callback_query") or {}
+    if callback_query:
+        await _handle_rating_callback(callback_query)
         return {"ok": True}
 
     message = update.get("message") or {}

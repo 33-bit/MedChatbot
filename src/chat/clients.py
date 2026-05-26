@@ -53,6 +53,20 @@ CREATE TABLE IF NOT EXISTS webhook_update (
     created_at REAL NOT NULL,
     PRIMARY KEY (channel, update_id)
 );
+
+CREATE TABLE IF NOT EXISTS response_feedback (
+    token TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    recipient_id TEXT NOT NULL,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    rating INTEGER,
+    created_at REAL NOT NULL,
+    rated_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_session ON response_feedback(session_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_channel_recipient ON response_feedback(channel, recipient_id);
 """
 
 

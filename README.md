@@ -97,8 +97,8 @@ TELEGRAM_BOT_TOKEN=...
 TELEGRAM_WEBHOOK_SECRET=...
 
 # Zalo 
-ZALO_OA_ACCESS_TOKEN=...
-ZALO_APP_SECRET=...
+ZALO_BOT_TOKEN=...
+ZALO_WEBHOOK_SECRET=...
 
 # Messenger 
 MESSENGER_PAGE_TOKEN=...
@@ -140,7 +140,7 @@ curl -X POST http://localhost:8000/chat \
 ## Run with Docker
 
 The Docker Compose setup starts the FastAPI API, exposes it through ngrok, and
-runs a one-shot Telegram `setWebhook` registration container.
+runs one-shot Telegram and Zalo `setWebhook` registration containers.
 
 Fill `.env` with your real values. `.env.docker.example` shows the Docker-specific
 variables:
@@ -151,6 +151,8 @@ NGROK_URL=https://your-static-domain.ngrok-free.dev
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_WEBHOOK_SECRET=...
 TELEGRAM_DROP_PENDING_UPDATES=true
+ZALO_BOT_TOKEN=...
+ZALO_WEBHOOK_SECRET=...
 ```
 
 Then start everything:
@@ -169,8 +171,8 @@ ${NGROK_URL}/webhook/zalo
 ${NGROK_URL}/webhook/messenger
 ```
 
-The `telegram-webhook` container exits after registering the webhook; this is
-expected. Keep the `api` and `ngrok` containers running.
+The `telegram-webhook` and `zalo-webhook` containers exit after registering
+webhooks; this is expected. Keep the `api` and `ngrok` containers running.
 
 
 ## Data and RAG pipeline

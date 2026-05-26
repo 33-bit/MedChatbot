@@ -13,6 +13,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, Query
 
@@ -29,13 +31,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="Medical RAG Chatbot")
-app.include_router(zalo.router)
-app.include_router(telegram.router)
-app.include_router(messenger.router)
 
-
-@app.on_event("startup")
 async def startup() -> None:
     await asyncio.to_thread(preload_retrieval_models)
     await asyncio.to_thread(ensure_fulltext_indexes)
@@ -43,6 +39,18 @@ async def startup() -> None:
         await telegram.setup_bot_menu()
     except Exception as exc:
         log.warning("Telegram command menu setup failed; continuing startup: %s", exc)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    await startup()
+    yield
+
+
+app = FastAPI(title="Medical RAG Chatbot", lifespan=lifespan)
+app.include_router(zalo.router)
+app.include_router(telegram.router)
+app.include_router(messenger.router)
 
 
 @app.get("/health")

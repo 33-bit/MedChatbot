@@ -11,12 +11,12 @@ import re
 import time
 
 from src.chat.clients import get_openai
-from src.chat.llm.mini import message_text
+from src.chat.llm.mini import chat_completion_extra_kwargs, message_text
 from src.chat.prompts import GENERATOR_SYSTEM
 from src.chat.replies import TECHNICAL_ERROR_REPLY
 from src.chat.retrieval.types import Hit
 from src.chat.timing import elapsed_ms
-from src.config import MODEL, MODEL_MAX_TOKENS
+from src.config import BASE_URL, MODEL, MODEL_MAX_TOKENS
 
 log = logging.getLogger(__name__)
 
@@ -174,7 +174,7 @@ def generate(
                 {"role": "user", "content": prompt_user},
             ],
             # reasoning_effort="high",
-            extra_body={"thinking": {"type": "disabled"}},
+            **chat_completion_extra_kwargs(BASE_URL),
         )
     except Exception as e:
         log.warning("Generator LLM call failed: %s", e)

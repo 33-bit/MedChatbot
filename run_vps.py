@@ -2,11 +2,12 @@
 One-command launcher for VPS deployments without container support.
 
 Usage:
-    python3 run_vps.py
+    python3 run_vps.py [--reload]
 """
 
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 import shlex
@@ -34,6 +35,8 @@ from src.config import (
     REDIS_URL,
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_WEBHOOK_SECRET,
+    ZALO_BOT_TOKEN,
+    ZALO_WEBHOOK_SECRET,
 )
 
 log = logging.getLogger(__name__)
@@ -51,6 +54,18 @@ STARTUP_TIMEOUT_SECONDS = float(os.getenv("VPS_STARTUP_TIMEOUT_SECONDS", "120"))
 PROCESS_STOP_TIMEOUT_SECONDS = float(os.getenv("VPS_STOP_TIMEOUT_SECONDS", "10"))
 
 
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run the chatbot server and supporting services for VPS deployments."
+    )
+    parser.add_argument(
+        "--reload",
+        action="store_true",
+        help="Start FastAPI with code reload enabled.",
+    )
+    return parser.parse_args(argv)
+
+
 def _command_from_env(name: str, default: str) -> list[str]:
     return shlex.split(os.getenv(name, default))
 
@@ -61,13 +76,35 @@ def validate_config() -> None:
         "NEO4J_URI": NEO4J_URI,
         "NEO4J_PASSWORD": NEO4J_PASSWORD,
         "QDRANT_URL": QDRANT_URL,
-        "TELEGRAM_BOT_TOKEN": TELEGRAM_BOT_TOKEN,
-        "TELEGRAM_WEBHOOK_SECRET": TELEGRAM_WEBHOOK_SECRET,
         "NGROK_AUTHTOKEN": NGROK_AUTHTOKEN,
     }
+    if telegram_configured():
+        required.update(
+            {
+                "TELEGRAM_BOT_TOKEN": TELEGRAM_BOT_TOKEN,
+                "TELEGRAM_WEBHOOK_SECRET": TELEGRAM_WEBHOOK_SECRET,
+            }
+        )
+    if zalo_configured():
+        required.update(
+            {
+                "ZALO_BOT_TOKEN": ZALO_BOT_TOKEN,
+                "ZALO_WEBHOOK_SECRET": ZALO_WEBHOOK_SECRET,
+            }
+        )
     missing = [name for name, value in required.items() if not value]
     if missing:
         raise RuntimeError("Missing required .env values: " + ", ".join(missing))
+    if not telegram_configured() and not zalo_configured():
+        raise RuntimeError("At least one messaging channel must be configured: Telegram or Zalo")
+
+
+def telegram_configured() -> bool:
+    return bool(TELEGRAM_BOT_TOKEN or TELEGRAM_WEBHOOK_SECRET)
+
+
+def zalo_configured() -> bool:
+    return bool(ZALO_BOT_TOKEN or ZALO_WEBHOOK_SECRET)
 
 
 def wait_until_ready(name: str, is_ready: Callable[[], bool]) -> None:
@@ -231,17 +268,18 @@ def fastapi_ready() -> bool:
         return False
 
 
-def start_fastapi() -> subprocess.Popen:
-    return _start_process(
-        [
-            sys.executable,
-            "run.py",
-            "--host",
-            FASTAPI_HOST,
-            "--port",
-            str(FASTAPI_PORT),
-        ]
-    )
+def start_fastapi(*, reload: bool = False) -> subprocess.Popen:
+    command = [
+        sys.executable,
+        "run.py",
+        "--host",
+        FASTAPI_HOST,
+        "--port",
+        str(FASTAPI_PORT),
+    ]
+    if reload:
+        command.append("--reload")
+    return _start_process(command)
 
 
 def start_ngrok() -> subprocess.Popen:
@@ -279,6 +317,10 @@ def telegram_webhook_url(public_url: str) -> str:
     return public_url.rstrip("/") + "/webhook/telegram"
 
 
+def zalo_webhook_url(public_url: str) -> str:
+    return public_url.rstrip("/") + "/webhook/zalo"
+
+
 def register_telegram_webhook(public_url: str) -> None:
     webhook_url = telegram_webhook_url(public_url)
     response = httpx.post(
@@ -297,12 +339,29 @@ def register_telegram_webhook(public_url: str) -> None:
     log.info("Telegram webhook registered: %s", webhook_url)
 
 
+def register_zalo_webhook(public_url: str) -> None:
+    webhook_url = zalo_webhook_url(public_url)
+    response = httpx.post(
+        f"https://bot-api.zaloplatforms.com/bot{ZALO_BOT_TOKEN}/setWebhook",
+        data={
+            "url": webhook_url,
+            "secret_token": ZALO_WEBHOOK_SECRET,
+        },
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not payload.get("ok"):
+        raise RuntimeError(f"Zalo setWebhook failed: {payload}")
+    log.info("Zalo webhook registered: %s", webhook_url)
+
+
 def wait_forever() -> None:
     while True:
         time.sleep(3600)
 
 
-def main() -> None:
+def main(*, reload: bool = False) -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -314,10 +373,18 @@ def main() -> None:
         ensure_service("Neo4j", neo4j_ready, start_neo4j, owned_processes)
         ensure_service("Qdrant", qdrant_ready, start_qdrant, owned_processes)
         ensure_bootstrap_data()
-        ensure_service("FastAPI", fastapi_ready, start_fastapi, owned_processes)
+        ensure_service(
+            "FastAPI",
+            fastapi_ready,
+            lambda: start_fastapi(reload=reload),
+            owned_processes,
+        )
         start_owned_process(start_ngrok, owned_processes)
         public_url = wait_for_ngrok_public_url()
-        register_telegram_webhook(public_url)
+        if telegram_configured():
+            register_telegram_webhook(public_url)
+        if zalo_configured():
+            register_zalo_webhook(public_url)
         log.info("Server ready: %s", public_url)
         wait_forever()
     except KeyboardInterrupt:
@@ -327,4 +394,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    main(reload=args.reload)

@@ -119,7 +119,13 @@ GUARDRAIL_MIN_LEN        = int(os.getenv("GUARDRAIL_MIN_LEN", "3"))
 GUARDRAIL_MAX_LEN        = int(os.getenv("GUARDRAIL_MAX_LEN", "2000"))
 
 # --- Messaging channels ---
+ZALO_BOT_TOKEN           = os.getenv("ZALO_BOT_TOKEN", os.getenv("ZALO_OA_ACCESS_TOKEN", ""))
+ZALO_WEBHOOK_SECRET      = os.getenv(
+    "ZALO_WEBHOOK_SECRET",
+    os.getenv("ZALO_OA_SECRET_KEY", os.getenv("ZALO_APP_SECRET", "")),
+)
 ZALO_OA_ACCESS_TOKEN     = os.getenv("ZALO_OA_ACCESS_TOKEN", "")
+ZALO_OA_SECRET_KEY       = os.getenv("ZALO_OA_SECRET_KEY", "")
 ZALO_APP_SECRET          = os.getenv("ZALO_APP_SECRET", "")
 
 TELEGRAM_BOT_TOKEN       = os.getenv("TELEGRAM_BOT_TOKEN", "")

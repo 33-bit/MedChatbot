@@ -133,6 +133,33 @@ services:
       echo "Telegram webhook registered: $${WEBHOOK_URL}"
     restart: "no"
 
+  zalo-webhook:
+    image: curlimages/curl:8.10.1
+    depends_on:
+      api:
+        condition: service_healthy
+      ngrok:
+        condition: service_started
+    env_file:
+      - .env
+    entrypoint:
+      - /bin/sh
+      - -c
+    command: |
+      set -eu
+      : "$${ZALO_BOT_TOKEN:?Set ZALO_BOT_TOKEN in .env}"
+      : "$${ZALO_WEBHOOK_SECRET:?Set ZALO_WEBHOOK_SECRET in .env}"
+      : "$${NGROK_URL:?Set NGROK_URL in .env}"
+      sleep "$${WEBHOOK_REGISTRATION_DELAY_SECONDS:-15}"
+      WEBHOOK_URL="$${NGROK_URL%/}/webhook/zalo"
+      curl --fail --show-error --silent --request POST \
+        "https://bot-api.zaloplatforms.com/bot$${ZALO_BOT_TOKEN}/setWebhook" \
+        --form "url=$${WEBHOOK_URL}" \
+        --form "secret_token=$${ZALO_WEBHOOK_SECRET}"
+      echo
+      echo "Zalo webhook registered: $${WEBHOOK_URL}"
+    restart: "no"
+
 volumes:
   hf-cache:
   redis-data:

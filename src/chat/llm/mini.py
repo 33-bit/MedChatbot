@@ -18,14 +18,23 @@ import json
 import logging
 import re
 import time
+from urllib.parse import urlparse
 
 from src.chat.clients import get_openai
 from src.chat.timing import elapsed_ms
-from src.config import FAST_MODEL, FAST_MODEL_MAX_TOKENS
+from src.config import BASE_URL, FAST_MODEL, FAST_MODEL_MAX_TOKENS
 
 log = logging.getLogger(__name__)
 
 _JSON_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
+
+
+def chat_completion_extra_kwargs(base_url: str | None = None) -> dict:
+    resolved_base_url = BASE_URL if base_url is None else base_url
+    host = urlparse(resolved_base_url).hostname or ""
+    if "mistral.ai" in host:
+        return {}
+    return {"extra_body": {"thinking": {"type": "disabled"}}}
 
 
 def parse_json(text: str):
@@ -94,7 +103,7 @@ def call_mini(
             ],
             temperature=0,
             response_format={"type": "json_object"},
-            extra_body={"thinking": {"type": "disabled"}},
+            **chat_completion_extra_kwargs(),
         )
     except Exception as e:
         log.warning("Mini LLM call failed: %s", e)
