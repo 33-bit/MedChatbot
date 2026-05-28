@@ -33,7 +33,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.config import BATCH_MAX_TOKENS, MODEL, OUTPUT_DIR
+from src.config import BATCH_MAX_TOKENS, FAST_MODEL, MODEL, OUTPUT_DIR
+from src.chat.diagnosis.clarification_options import normalize_options
 from src.processing.batch_api import (
     chat_completion_request,
     fetch_results,
@@ -46,6 +47,7 @@ DISEASE_ENTITY_DIR = OUTPUT_DIR / "entities" / "diseases"
 DRUG_ENTITY_DIR = OUTPUT_DIR / "entities" / "drugs"
 SYMPTOM_OUT = OUTPUT_DIR / "entities" / "symptoms"
 WORK_DIR = OUTPUT_DIR / "batch" / "symptom_canon"
+OPTION_WORK_DIR = OUTPUT_DIR / "batch" / "symptom_options"
 
 TRIVIAL_MERGES = {
     "symptom:S_seizure": "symptom:S_seizures",
@@ -173,6 +175,42 @@ Nhiệm vụ:
 Trả về JSON array đã chuẩn hóa, giữ nguyên thứ tự. CHỈ trả JSON, không giải thích."""
 
 BATCH_SIZE = 50
+OPTION_BATCH_SIZE = 50
+
+OPTION_SYSTEM_PROMPT = """Bạn là chuyên gia y tế thiết kế nút trả lời nhanh cho chatbot y tế.
+
+Input là JSON array các triệu chứng. Mỗi item có:
+- symptom_id
+- name_vi
+- clarification_questions: object có thể gồm onset/severity/pattern/associated
+
+Nhiệm vụ:
+1. Tạo field clarification_options cho từng symptom_id.
+2. clarification_options luôn có key "presence" và các key tương ứng với
+   clarification_questions đang có.
+3. Mỗi value là array string tiếng Việt, ngắn gọn, dễ bấm trên điện thoại.
+4. Mỗi array phải có "Không rõ" và "Trả lời luôn" ở cuối, trừ khi đã có sẵn.
+5. presence nên là lựa chọn xác nhận triệu chứng, ví dụ:
+   ["Có sốt", "Không sốt", "Không rõ", "Trả lời luôn"].
+6. Nếu câu hỏi hỏi nhiều triệu chứng liên quan, tạo lựa chọn riêng cho từng ý,
+   ví dụ "Có kèm theo nôn hoặc vàng da không?" →
+   ["Có nôn", "Có vàng da", "Cả hai", "Không", "Không rõ", "Trả lời luôn"].
+7. Không đưa chẩn đoán, thuốc, xét nghiệm hoặc lời khuyên điều trị vào options.
+8. Không đổi câu hỏi, không đổi symptom_id, không thêm giải thích.
+
+Trả về JSON array đúng thứ tự input. Mỗi item chỉ gồm:
+{
+  "symptom_id": "...",
+  "clarification_options": {
+    "presence": [...],
+    "onset": [...],
+    "severity": [...],
+    "pattern": [...],
+    "associated": [...]
+  }
+}
+
+CHỈ trả JSON, không markdown, không giải thích."""
 
 
 def cmd_prepare(args) -> None:
@@ -205,6 +243,55 @@ def cmd_prepare(args) -> None:
           f"batch size {BATCH_SIZE}) → {jsonl_path}")
 
 
+def _load_symptom_entities() -> list[dict]:
+    items: list[dict] = []
+    for path in sorted(SYMPTOM_OUT.glob("*.json")):
+        if path.name.startswith("_"):
+            continue
+        try:
+            item = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if item.get("symptom_id"):
+            items.append(item)
+    return items
+
+
+def _option_prompt_item(item: dict) -> dict:
+    return {
+        "symptom_id": item.get("symptom_id", ""),
+        "name_vi": item.get("name_vi", ""),
+        "clarification_questions": item.get("clarification_questions", {}) or {},
+    }
+
+
+def cmd_prepare_options(args) -> None:
+    items = [_option_prompt_item(item) for item in _load_symptom_entities()]
+    if not items:
+        raise SystemExit(f"Không tìm thấy symptom entities trong {SYMPTOM_OUT}")
+
+    requests = []
+    for i in range(0, len(items), OPTION_BATCH_SIZE):
+        batch_items = items[i : i + OPTION_BATCH_SIZE]
+        batch_id = f"symptom_options_{i:04d}"
+        requests.append(chat_completion_request(
+            batch_id,
+            FAST_MODEL,
+            [{
+                "role": "user",
+                "content": json.dumps(batch_items, ensure_ascii=False),
+            }],
+            system=OPTION_SYSTEM_PROMPT,
+            max_tokens=BATCH_MAX_TOKENS,
+        ))
+
+    OPTION_WORK_DIR.mkdir(parents=True, exist_ok=True)
+    jsonl_path = OPTION_WORK_DIR / "requests.jsonl"
+    write_jsonl(requests, jsonl_path)
+    print(f"Prepared {len(requests)} option requests ({len(items)} symptoms, "
+          f"batch size {OPTION_BATCH_SIZE}) → {jsonl_path}")
+
+
 def cmd_submit(args) -> None:
     jsonl_path = WORK_DIR / "requests.jsonl"
     if not jsonl_path.exists():
@@ -214,8 +301,22 @@ def cmd_submit(args) -> None:
     print(f"Đã lưu batch_id → {WORK_DIR / 'batch_id.txt'}")
 
 
+def cmd_submit_options(args) -> None:
+    jsonl_path = OPTION_WORK_DIR / "requests.jsonl"
+    if not jsonl_path.exists():
+        raise SystemExit("Chưa có option requests.jsonl. Chạy `prepare_options` trước.")
+    batch_id = submit_batch(jsonl_path, "symptom_options")
+    (OPTION_WORK_DIR / "batch_id.txt").write_text(batch_id, encoding="utf-8")
+    print(f"Đã lưu batch_id → {OPTION_WORK_DIR / 'batch_id.txt'}")
+
+
 def cmd_status(args) -> None:
     batch_id = (WORK_DIR / "batch_id.txt").read_text(encoding="utf-8").strip()
+    print(json.dumps(get_batch(batch_id), ensure_ascii=False, indent=2))
+
+
+def cmd_options_status(args) -> None:
+    batch_id = (OPTION_WORK_DIR / "batch_id.txt").read_text(encoding="utf-8").strip()
     print(json.dumps(get_batch(batch_id), ensure_ascii=False, indent=2))
 
 
@@ -294,10 +395,89 @@ def cmd_collect_results(args) -> None:
     print(f"\nĐã lưu {ok} symptom entities ({bad} batch parse fail) → {SYMPTOM_OUT}")
 
 
+def _symptom_path(symptom_id: str) -> Path:
+    slug = symptom_id.replace("symptom:", "").strip()
+    return SYMPTOM_OUT / f"{slug}.json"
+
+
+def _normalized_option_map(raw_options: dict, allowed_slots: set[str]) -> dict[str, list[str]]:
+    normalized: dict[str, list[str]] = {}
+    for slot, options in raw_options.items():
+        if slot not in allowed_slots:
+            continue
+        labels = normalize_options(options)
+        if labels:
+            normalized[slot] = list(labels)
+    return normalized
+
+
+def _merge_option_payload(payload: dict) -> bool:
+    symptom_id = payload.get("symptom_id", "")
+    if not symptom_id:
+        return False
+    path = _symptom_path(symptom_id)
+    if not path.exists():
+        return False
+    try:
+        current = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+
+    questions = current.get("clarification_questions", {}) or {}
+    if not isinstance(questions, dict):
+        questions = {}
+    raw_options = payload.get("clarification_options", {})
+    if not isinstance(raw_options, dict):
+        return False
+    allowed_slots = {"presence", *questions.keys()}
+    options = _normalized_option_map(raw_options, allowed_slots)
+    if not options.get("presence"):
+        return False
+    current["clarification_options"] = options
+    path.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+    return True
+
+
+def cmd_collect_options(args) -> None:
+    batch_id = (OPTION_WORK_DIR / "batch_id.txt").read_text(encoding="utf-8").strip()
+    results = fetch_results(batch_id)
+    print(f"Fetched {len(results)} option results")
+
+    ok = bad = 0
+    for r in results:
+        cid = r.get("custom_id", "")
+        try:
+            text = r["response"]["body"]["choices"][0]["message"]["content"]
+        except Exception:
+            text = ""
+
+        parsed = parse_llm_json(text)
+        if parsed is None:
+            bad += 1
+            print(f"  ! {cid}: JSON parse fail")
+            continue
+        if isinstance(parsed, dict) and "symptoms" in parsed:
+            parsed = parsed["symptoms"]
+        if not isinstance(parsed, list):
+            bad += 1
+            print(f"  ! {cid}: expected array, got {type(parsed).__name__}")
+            continue
+
+        for item in parsed:
+            if _merge_option_payload(item):
+                ok += 1
+            else:
+                bad += 1
+                print(f"  ! {cid}: option merge fail")
+
+    print(f"\nĐã cập nhật clarification_options cho {ok} symptom entities ({bad} lỗi) → {SYMPTOM_OUT}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("cmd", choices=[
         "collect", "prepare", "submit", "status", "collect_results",
+        "prepare_options", "submit_options", "options_status", "collect_options",
     ])
     args = parser.parse_args()
 
@@ -307,6 +487,10 @@ def main() -> None:
         "submit": cmd_submit,
         "status": cmd_status,
         "collect_results": cmd_collect_results,
+        "prepare_options": cmd_prepare_options,
+        "submit_options": cmd_submit_options,
+        "options_status": cmd_options_status,
+        "collect_options": cmd_collect_options,
     }[args.cmd](args)
 
 

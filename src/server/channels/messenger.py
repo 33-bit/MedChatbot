@@ -23,15 +23,30 @@ router = APIRouter()
 GRAPH_SEND_URL = "https://graph.facebook.com/v18.0/me/messages"
 
 
-async def send_text(recipient_id: str, text: str) -> None:
+def _quick_replies(choices: list[str] | tuple[str, ...]) -> list[dict]:
+    replies = []
+    for choice in choices[:13]:
+        title = choice[:20]
+        replies.append({
+            "content_type": "text",
+            "title": title,
+            "payload": f"choice:{title}",
+        })
+    return replies
+
+
+async def send_text(recipient_id: str, text: str, choices: list[str] | tuple[str, ...] = ()) -> None:
     if not MESSENGER_PAGE_TOKEN:
         logger.warning("MESSENGER_PAGE_TOKEN chưa cấu hình; bỏ qua gửi tin.")
         return
     params = {"access_token": MESSENGER_PAGE_TOKEN}
+    message = {"text": text}
+    if choices:
+        message["quick_replies"] = _quick_replies(choices)
     payload = {
         "recipient": {"id": recipient_id},
         "messaging_type": "RESPONSE",
-        "message": {"text": text},
+        "message": message,
     }
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(GRAPH_SEND_URL, params=params, json=payload)

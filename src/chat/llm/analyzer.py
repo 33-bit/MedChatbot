@@ -14,7 +14,7 @@ from src.chat.prompts import TURN_ANALYSIS_SYSTEM
 from src.config import GUARDRAIL_MAX_TOKENS, GUARDRAIL_MODEL
 
 VALID_LABELS = ("diagnostic", "informational", "clarification_answer", "greeting_other")
-ANALYZABLE_LABELS = {"diagnostic", "informational"}
+ANALYZABLE_LABELS = {"diagnostic", "informational", "clarification_answer"}
 
 
 def _dict_field(data: dict, key: str) -> dict:

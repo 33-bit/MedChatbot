@@ -13,4 +13,10 @@ def answer_with_meta(*args, **kwargs):
     return _answer_with_meta(*args, **kwargs)
 
 
-__all__ = ["answer", "answer_with_meta"]
+def answer_with_choices(*args, **kwargs):
+    from src.chat.pipeline import answer_with_choices as _answer_with_choices
+
+    return _answer_with_choices(*args, **kwargs)
+
+
+__all__ = ["answer", "answer_with_choices", "answer_with_meta"]

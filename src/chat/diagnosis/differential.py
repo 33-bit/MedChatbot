@@ -6,8 +6,7 @@ Diagnostic narrowing via Neo4j KG + symptom catalog.
 Flow:
   1. Rank candidate diseases by symptom overlap
   2. Find discriminative symptoms (present in some candidates but not all)
-  3. Build clarification batch (3-5 questions at once) using
-     the symptom catalog's slot templates (onset/severity/pattern/associated)
+  3. Build one tap-friendly clarification question at a time
   4. Parse user answer back into slot updates via LLM mini
 """
 
@@ -104,21 +103,12 @@ def discriminative_symptoms(
 
 
 def build_clarification(symptom_ids: list[str]) -> str:
-    """Build a single user-facing question covering multiple symptoms + slots."""
+    """Build one tap-friendly yes/no clarification question."""
     catalog = symptom_catalog()
-    lines = ["Để thu hẹp chẩn đoán, bạn có thể cho biết thêm:"]
-    for i, sid in enumerate(symptom_ids, 1):
-        entry = catalog.get(sid, {})
-        name = entry.get("name_vi", sid.replace("symptom:S_", "").replace("_", " "))
-        cq = entry.get("clarification_questions", {}) or {}
-
-        parts = [f"{i}. Bạn có bị **{name}** không?"]
-        for key in ("onset", "severity", "pattern", "associated"):
-            q = cq.get(key)
-            if q:
-                parts.append(f"   - {q}")
-        lines.append("\n".join(parts))
-    return "\n\n".join(lines)
+    sid = symptom_ids[0] if symptom_ids else ""
+    entry = catalog.get(sid, {})
+    name = entry.get("name_vi", sid.replace("symptom:S_", "").replace("_", " "))
+    return f"Bạn có bị {name} không?"
 
 
 def parse_clarification_answer(

@@ -15,11 +15,17 @@ from __future__ import annotations
 import logging
 import threading
 import time
+import unicodedata
 import uuid
 from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from dataclasses import asdict
 from typing import Any
 
+from src.chat.diagnosis.clarification_options import (
+    detail_options_from_catalog,
+    fallback_detail_options,
+    presence_options_from_catalog,
+)
 from src.chat.diagnosis.differential import (
     build_clarification,
     discriminative_symptoms,
@@ -29,13 +35,13 @@ from src.chat.diagnosis.differential import (
     symptom_catalog,
 )
 from src.chat.diagnosis.entities import normalize_entities
-from src.chat.diagnosis.flow import direct_diagnostic_prompt
+from src.chat.diagnosis.flow import build_general_triage_prompt, direct_diagnostic_prompt
 from src.chat.guards.guardrail import VERDICT_REPLIES, regex_check
 from src.chat.guards.quota import check_both as check_llm_quota
 from src.chat.llm.analyzer import analyze_turn
 from src.chat.llm.generator import generate
 from src.chat.preflight import RATE_LIMIT_MSG, preflight
-from src.chat.replies import TECHNICAL_ERROR_REPLY
+from src.chat.replies import ChatReply, TECHNICAL_ERROR_REPLY
 from src.chat.retrieval import (
     Hit,
     format_kg_context,
@@ -51,10 +57,18 @@ from src.chat.storage.session import (
     save_session,
 )
 from src.chat.timing import elapsed_ms, log_trace_timing
-from src.config import CLARIFICATION_BATCH_SIZE, RERANK_TOP_K
+from src.config import RERANK_TOP_K
 
 GREETING_REPLY = ("Xin chào! Tôi là trợ lý y tế. Bạn có thể mô tả triệu chứng "
                   "hoặc hỏi về bệnh/thuốc cụ thể.")
+GENERAL_TRIAGE_MARKER = "general:triage"
+_START_CHOICES = {"bat dau", "duoc", "ok", "okay", "tiep", "tiep tuc"}
+_YES_CHOICES = {"co"}
+_NO_CHOICES = {"khong"}
+_UNKNOWN_CHOICES = {"khong ro", "khong biet", "chua ro", "chua biet"}
+_ANSWER_NOW_CHOICES = {"tra loi luon", "cu tra loi", "tra loi di"}
+_DETAIL_PREFIX = "detail:"
+_DETAIL_SLOT_ORDER = ("onset", "severity", "pattern", "associated")
 log = logging.getLogger(__name__)
 
 _META_LOCAL = threading.local()
@@ -125,6 +139,189 @@ def _last_bot_message(session: PatientSession) -> str:
     return ""
 
 
+def _choice_key(text: str) -> str:
+    normalized = unicodedata.normalize("NFD", text.strip().casefold())
+    no_marks = "".join(
+        char for char in normalized if unicodedata.category(char) != "Mn"
+    )
+    for char in ".!?":
+        no_marks = no_marks.replace(char, " ")
+    return " ".join(no_marks.split())
+
+
+def _is_yes_no_choice(text: str) -> bool:
+    return _choice_present(text) is not None
+
+
+def _choice_present(text: str) -> str | None:
+    key = _choice_key(text)
+    if key in _UNKNOWN_CHOICES:
+        return "unknown"
+    if key in _YES_CHOICES or key.startswith("co "):
+        return "yes"
+    if key in _NO_CHOICES or key.startswith("khong "):
+        return "no"
+    return None
+
+
+def _is_answer_now_choice(text: str) -> bool:
+    return _choice_key(text) in _ANSWER_NOW_CHOICES
+
+
+def _detail_question_id(symptom_id: str, slot: str) -> str:
+    return f"{_DETAIL_PREFIX}{slot}:{symptom_id}"
+
+
+def _parse_detail_question_id(question_id: str) -> tuple[str, str] | None:
+    if not question_id.startswith(_DETAIL_PREFIX):
+        return None
+    parts = question_id.split(":", 2)
+    if len(parts) != 3 or not parts[1] or not parts[2]:
+        return None
+    return parts[2], parts[1]
+
+
+def _is_detail_question_id(question_id: str) -> bool:
+    return _parse_detail_question_id(question_id) is not None
+
+
+def _detail_question_text(question_id: str, catalog: dict[str, dict]) -> str:
+    parsed = _parse_detail_question_id(question_id)
+    if not parsed:
+        return ""
+    symptom_id, slot = parsed
+    questions = catalog.get(symptom_id, {}).get("clarification_questions", {}) or {}
+    return questions.get(slot, "")
+
+
+def _symptom_has_slot(session: PatientSession, symptom_id: str, slot: str) -> bool:
+    return any(
+        symptom.get("symptom_id") == symptom_id and bool(symptom.get(slot))
+        for symptom in session.symptoms
+    )
+
+
+def _detail_question_ids(
+    session: PatientSession,
+    symptom_id: str,
+    catalog: dict[str, dict],
+) -> list[str]:
+    questions = catalog.get(symptom_id, {}).get("clarification_questions", {}) or {}
+    answered = set(session.answered_questions)
+    queued = set(session.clarification_queue)
+    detail_ids: list[str] = []
+    for slot in _DETAIL_SLOT_ORDER:
+        if not questions.get(slot) or _symptom_has_slot(session, symptom_id, slot):
+            continue
+        question_id = _detail_question_id(symptom_id, slot)
+        if question_id not in answered and question_id not in queued:
+            detail_ids.append(question_id)
+    return detail_ids
+
+
+def _prepend_detail_questions(
+    session: PatientSession,
+    symptom_id: str,
+    catalog: dict[str, dict],
+) -> None:
+    detail_ids = _detail_question_ids(session, symptom_id, catalog)
+    if detail_ids:
+        session.clarification_queue = detail_ids + session.clarification_queue
+
+
+def _is_pending_clarification_choice(session: PatientSession, text: str) -> bool:
+    if not session.answered_questions:
+        return False
+    key = _choice_key(text)
+    last_question = session.answered_questions[-1]
+    if last_question == GENERAL_TRIAGE_MARKER:
+        return key in _START_CHOICES
+    if _is_detail_question_id(last_question):
+        return True
+    return _is_yes_no_choice(text) or _is_answer_now_choice(text)
+
+
+def _clarification_choice_analysis(text: str = "") -> dict:
+    answer_now = _is_answer_now_choice(text)
+    return {
+        "guardrail": {"verdict": "allow", "reason": "clarification choice"},
+        "turn": {"label": "clarification_answer", "direct_answer_requested": answer_now},
+        "rewrite": {"rewritten": "", "confident": True, "clarification": ""},
+        "entities": {"symptoms": [], "medications": []},
+    }
+
+
+def _symptom_group_key(symptom_id: str, catalog: dict[str, dict]) -> str:
+    entry = catalog.get(symptom_id, {})
+    name = entry.get("name_vi", symptom_id.replace("symptom:S_", "").replace("_", " "))
+    key = _choice_key(name)
+    if key in {"non", "buon non"} or key.startswith("non ") or "buon non" in key:
+        return "nausea_vomiting"
+    return key or symptom_id
+
+
+def _queue_clarification_symptoms(
+    session: PatientSession,
+    symptom_ids: list[str],
+) -> None:
+    catalog = symptom_catalog()
+    already_asked = {
+        sid for sid in session.answered_questions
+        if sid != GENERAL_TRIAGE_MARKER and not _is_detail_question_id(sid)
+    }
+    seen_groups = {
+        _symptom_group_key(sid, catalog)
+        for sid in already_asked
+    }
+    queued: list[str] = []
+    for sid in symptom_ids:
+        if not sid or sid == GENERAL_TRIAGE_MARKER or sid in already_asked:
+            continue
+        group_key = _symptom_group_key(sid, catalog)
+        if group_key in seen_groups:
+            continue
+        seen_groups.add(group_key)
+        queued.append(sid)
+    session.clarification_queue = queued
+    session.clarification_plan_started = True
+
+
+def _ask_next_queued_clarification(
+    session: PatientSession,
+    trace_id: str,
+    stage_start: float,
+) -> str | None:
+    while session.clarification_queue:
+        next_symptom = session.clarification_queue.pop(0)
+        if _is_detail_question_id(next_symptom):
+            detail_question = _detail_question_text(next_symptom, symptom_catalog())
+            if not detail_question:
+                continue
+            session.answered_questions.append(next_symptom)
+            _log_timing(
+                trace_id,
+                "diagnostic_clarification",
+                stage_start,
+                asked=1,
+                queued=len(session.clarification_queue),
+                kind="detail",
+            )
+            return detail_question
+        if next_symptom in session.answered_questions:
+            continue
+        session.answered_questions.append(next_symptom)
+        _log_timing(
+            trace_id,
+            "diagnostic_clarification",
+            stage_start,
+            asked=1,
+            queued=len(session.clarification_queue),
+            kind="presence",
+        )
+        return build_clarification([next_symptom])
+    return None
+
+
 def _ingest_entities(raw_entities: dict, session: PatientSession) -> None:
     ents = normalize_entities(raw_entities)
     for s in ents["symptoms"]:
@@ -158,7 +355,21 @@ def _handle_diagnostic(
     trace_id: str,
     force_answer: bool = False,
 ) -> str:
-    """New symptoms reported. Rank diseases, maybe ask batch clarification."""
+    """New symptoms reported. Rank diseases, maybe ask one clarification question."""
+    if not force_answer and not session.answered_questions:
+        session.answered_questions.append(GENERAL_TRIAGE_MARKER)
+        _log_timing(trace_id, "diagnostic_general_triage", time.perf_counter())
+        return build_general_triage_prompt(session)
+
+    stage_start = time.perf_counter()
+    if not force_answer:
+        queued_reply = _ask_next_queued_clarification(session, trace_id, stage_start)
+        if queued_reply:
+            return queued_reply
+    else:
+        session.clarification_queue.clear()
+        session.clarification_plan_started = True
+
     symptom_ids = [s["symptom_id"] for s in session.symptoms if s.get("symptom_id")]
     stage_start = time.perf_counter()
     candidates = rank_candidates(symptom_ids)
@@ -167,21 +378,23 @@ def _handle_diagnostic(
                 symptoms=len(symptom_ids), candidates=len(candidates))
 
     stage_start = time.perf_counter()
-    if not force_answer and should_ask_clarification(candidates):
+    if (
+        not force_answer
+        and not session.clarification_plan_started
+        and should_ask_clarification(candidates)
+    ):
         cand_ids = [c["disease_id"] for c in candidates]
         known = [s for s in symptom_ids if not s.startswith("raw:")]
         next_symptoms = discriminative_symptoms(cand_ids, known + session.answered_questions)
         if next_symptoms:
-            session.answered_questions.extend(next_symptoms)
-            names = ", ".join(c["name"] for c in candidates[:5] if c.get("name"))
-            header = f"Dựa trên triệu chứng bạn nêu, tôi đang cân nhắc các bệnh: {names}."
-            _log_timing(trace_id, "diagnostic_clarification", stage_start,
-                        asked=len(next_symptoms))
-            return header + "\n\n" + build_clarification(next_symptoms)
+            _queue_clarification_symptoms(session, next_symptoms)
+            queued_reply = _ask_next_queued_clarification(session, trace_id, stage_start)
+            if queued_reply:
+                return queued_reply
     _log_timing(trace_id, "diagnostic_clarification", stage_start,
                 asked=0, force_answer=force_answer)
 
-    if force_answer:
+    if force_answer or session.clarification_plan_started:
         prompt, retrieval_query = direct_diagnostic_prompt(session, question)
         return _handle_informational(
             session,
@@ -200,15 +413,39 @@ def _handle_clarification_answer(
     trace_id: str,
     force_answer: bool = False,
 ) -> str:
-    """Parse batched clarification reply, update slots, then re-narrow."""
-    asked_ids = session.answered_questions[-CLARIFICATION_BATCH_SIZE:]
+    """Parse one clarification reply, update slots, then re-narrow."""
+    if session.answered_questions and session.answered_questions[-1] == GENERAL_TRIAGE_MARKER:
+        session.clarification_parse_failures = 0
+        return _handle_diagnostic(session, user_answer, trace_id, force_answer=force_answer)
+    if force_answer and _is_answer_now_choice(user_answer):
+        session.clarification_parse_failures = 0
+        return _handle_diagnostic(session, user_answer, trace_id, force_answer=True)
+    last_question = session.answered_questions[-1] if session.answered_questions else ""
+    detail_question = _parse_detail_question_id(last_question)
+    if detail_question:
+        symptom_id, slot = detail_question
+        catalog = symptom_catalog()
+        entry = {
+            "symptom_id": symptom_id,
+            "name": catalog.get(symptom_id, {}).get("name_vi", symptom_id),
+            slot: user_answer.strip(),
+        }
+        session.upsert_symptom(entry)
+        session.clarification_parse_failures = 0
+        return _handle_diagnostic(session, user_answer, trace_id, force_answer=force_answer)
+
+    asked_ids = [last_question] if last_question else []
     catalog = symptom_catalog()
     asked = [
         {"symptom_id": sid, "name": catalog.get(sid, {}).get("name_vi", sid)}
         for sid in asked_ids
     ]
     stage_start = time.perf_counter()
-    parsed_answers = parse_clarification_answer(asked, user_answer)
+    present = _choice_present(user_answer)
+    if present is not None and len(asked_ids) == 1:
+        parsed_answers = [{"symptom_id": asked_ids[0], "present": present}]
+    else:
+        parsed_answers = parse_clarification_answer(asked, user_answer)
     _log_timing(trace_id, "clarification_parse", stage_start,
                 asked=len(asked), parsed=len(parsed_answers))
     if parsed_answers:
@@ -228,6 +465,7 @@ def _handle_clarification_answer(
             if r.get(k):
                 entry[k] = r[k]
         session.upsert_symptom(entry)
+        _prepend_detail_questions(session, sid, catalog)
 
     return _handle_diagnostic(session, user_answer, trace_id, force_answer=force_answer)
 
@@ -305,6 +543,25 @@ def _persist_final_turn(
     _log_timing(trace_id, "persist", stage_start)
 
 
+def suggested_choices(reply: str) -> tuple[str, ...]:
+    """Return short tap-friendly choices for clarification replies."""
+    compact_reply = reply.strip()
+    if "Để tôi định hướng tốt hơn, bạn cho tôi hỏi thêm một vài câu hỏi nhé." in reply:
+        return ("Bắt đầu",)
+    if (
+        compact_reply.startswith("Bạn có bị ")
+        and compact_reply.endswith(" không?")
+        and "\n" not in compact_reply
+    ):
+        return presence_options_from_catalog(compact_reply, symptom_catalog())
+    if compact_reply.endswith("?") and "\n" not in compact_reply:
+        return (
+            detail_options_from_catalog(compact_reply, symptom_catalog())
+            or fallback_detail_options(compact_reply)
+        )
+    return ()
+
+
 # ---------- Entry point ----------
 
 def _answer_inner(
@@ -318,12 +575,19 @@ def _answer_inner(
         return "Bạn hãy đặt câu hỏi cụ thể nhé."
 
     stage_start = time.perf_counter()
+    session = load_session(session_id)
+    _log_timing(trace_id, "load_session", stage_start)
+
+    is_clarification_choice = _is_pending_clarification_choice(session, question)
+    regex_check_for_turn = (lambda text: None) if is_clarification_choice else regex_check
+
+    stage_start = time.perf_counter()
     short_circuit = preflight(
         question,
         session_id,
         _guardrail_reply,
         check_rate_limit,
-        regex_check,
+        regex_check_for_turn,
         check_llm_quota,
     )
     _log_timing(trace_id, "preflight", stage_start)
@@ -332,15 +596,14 @@ def _answer_inner(
         return short_circuit
 
     stage_start = time.perf_counter()
-    session = load_session(session_id)
-    _log_timing(trace_id, "load_session", stage_start)
-
-    stage_start = time.perf_counter()
-    analysis = analyze_turn(
-        question,
-        last_bot_message=_last_bot_message(session),
-        history=session.conversation,
-    )
+    if is_clarification_choice:
+        analysis = _clarification_choice_analysis(question)
+    else:
+        analysis = analyze_turn(
+            question,
+            last_bot_message=_last_bot_message(session),
+            history=session.conversation,
+        )
     guard = analysis["guardrail"]
     turn = analysis["turn"]
     direct_answer_for_log = (
@@ -380,7 +643,7 @@ def _answer_inner(
     else:
         rewritten = question
 
-    if label in ("diagnostic", "informational"):
+    if label in ("diagnostic", "informational", "clarification_answer"):
         stage_start = time.perf_counter()
         _ingest_entities(analysis["entities"], session)
         _log_timing(trace_id, "entity_ingest", stage_start,
@@ -413,6 +676,11 @@ def answer(question: str, session_id: str = "default") -> str:
         log.exception("Pipeline failed trace=%s session=%s", trace_id, session_id)
         _log_timing(trace_id, "total", request_start, outcome="technical_error")
         return TECHNICAL_ERROR_REPLY
+
+
+def answer_with_choices(question: str, session_id: str = "default") -> ChatReply:
+    reply = answer(question, session_id=session_id)
+    return ChatReply(reply, suggested_choices(reply))
 
 
 def answer_with_meta(question: str, session_id: str = "default") -> tuple[str, dict[str, Any]]:

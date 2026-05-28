@@ -19,8 +19,8 @@ import time
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
-from src.chat import answer
-from src.chat.replies import TECHNICAL_ERROR_REPLY
+from src.chat import answer_with_choices
+from src.chat.replies import ChatReply, TECHNICAL_ERROR_REPLY
 from src.chat.storage.feedback import create_feedback_request, record_feedback_rating
 from src.chat.storage.session import clear_session, reserve_webhook_update
 from src.config import TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET
@@ -147,7 +147,18 @@ def _split_for_telegram(text: str, limit: int = TG_MAX_LEN) -> list[str]:
     return chunks
 
 
-async def send_text(chat_id: int | str, text: str) -> None:
+def _choice_keyboard(choices: list[str] | tuple[str, ...]) -> dict:
+    rows = []
+    for i in range(0, len(choices), 2):
+        rows.append([{"text": choice} for choice in choices[i:i + 2]])
+    return {
+        "keyboard": rows,
+        "resize_keyboard": True,
+        "one_time_keyboard": True,
+    }
+
+
+async def send_text(chat_id: int | str, text: str, choices: list[str] | tuple[str, ...] = ()) -> None:
     if not TELEGRAM_BOT_TOKEN:
         logger.warning("TELEGRAM_BOT_TOKEN chưa cấu hình; bỏ qua gửi tin.")
         return
@@ -162,6 +173,8 @@ async def send_text(chat_id: int | str, text: str) -> None:
                 "parse_mode": "HTML",
                 "disable_web_page_preview": True,
             }
+            if idx == len(chunks) and choices:
+                payload["reply_markup"] = _choice_keyboard(choices)
             chunk_start = time.perf_counter()
             r = await client.post(_send_url(), json=payload)
             logger.info("Telegram send → %s %s", r.status_code, r.text[:200])
@@ -263,21 +276,22 @@ async def _answer_and_send(chat_id: int | str, text: str) -> None:
     total_start = time.perf_counter()
     session_id = f"tg:{chat_id}"
     try:
-        reply = await asyncio.to_thread(answer, text, session_id=session_id)
+        reply = await asyncio.to_thread(answer_with_choices, text, session_id=session_id)
     except Exception:
         logger.exception("Telegram answer failed")
-        reply = TECHNICAL_ERROR_REPLY
+        reply = ChatReply(TECHNICAL_ERROR_REPLY)
 
     try:
-        await send_text(chat_id, reply)
+        await send_text(chat_id, reply.text, reply.choices)
     except Exception:
         logger.exception("Telegram send failed")
     else:
-        try:
-            token = create_feedback_request(session_id, "telegram", str(chat_id), text, reply)
-            await _send_rating_prompt(chat_id, token)
-        except Exception:
-            logger.exception("Telegram rating prompt failed")
+        if not reply.choices:
+            try:
+                token = create_feedback_request(session_id, "telegram", str(chat_id), text, reply.text)
+                await _send_rating_prompt(chat_id, token)
+            except Exception:
+                logger.exception("Telegram rating prompt failed")
 
     logger.info("Telegram timing stage=background_total ms=%.1f",
                 _elapsed_ms(total_start))

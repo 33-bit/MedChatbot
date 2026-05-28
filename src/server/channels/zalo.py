@@ -53,7 +53,18 @@ def _split_for_zalo(text: str, limit: int = ZALO_MAX_TEXT_LEN) -> list[str]:
     return chunks
 
 
-async def send_text(chat_id: str, text: str) -> None:
+def _choice_keyboard(choices: list[str] | tuple[str, ...]) -> dict:
+    rows = []
+    for i in range(0, len(choices), 2):
+        rows.append([{"text": choice} for choice in choices[i:i + 2]])
+    return {
+        "keyboard": rows,
+        "resize_keyboard": True,
+        "one_time_keyboard": True,
+    }
+
+
+async def send_text(chat_id: str, text: str, choices: list[str] | tuple[str, ...] = ()) -> None:
     if not ZALO_BOT_TOKEN:
         logger.warning("ZALO_BOT_TOKEN chưa cấu hình; bỏ qua gửi tin.")
         return
@@ -61,7 +72,14 @@ async def send_text(chat_id: str, text: str) -> None:
         chunks = _split_for_zalo(text)
         for idx, chunk in enumerate(chunks, 1):
             payload = {"chat_id": chat_id, "text": chunk}
+            if idx == len(chunks) and choices:
+                payload["reply_markup"] = _choice_keyboard(choices)
             r = await client.post(_api_url("sendMessage"), json=payload)
+            if r.status_code >= 400 and payload.get("reply_markup"):
+                logger.info("Zalo choices rejected; retrying without reply_markup → %s %s",
+                            r.status_code, r.text[:200])
+                payload.pop("reply_markup", None)
+                r = await client.post(_api_url("sendMessage"), json=payload)
             logger.info(
                 "Zalo send → %s %s chunk=%d/%d chars=%d",
                 r.status_code,

@@ -16,14 +16,50 @@ import json
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlparse
+
+import httpx
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.config import BATCH_MAX_TOKENS, make_openai_client
+from src.config import BASE_URL, BATCH_MAX_TOKENS, LLM_API_KEY, make_openai_client
 
 CHAT_COMPLETIONS_ENDPOINT = "/v1/chat/completions"
+MISTRAL_BATCH_JOBS_ENDPOINT = "/v1/batch/jobs"
+HTTP_TIMEOUT_SECONDS = 60.0
+
+
+def _is_mistral_base_url(base_url: str | None = None) -> bool:
+    resolved_base_url = BASE_URL if base_url is None else base_url
+    host = urlparse(resolved_base_url).hostname or ""
+    return "mistral.ai" in host
+
+
+def _provider_url(path: str) -> str:
+    base = BASE_URL.rstrip("/")
+    if base.endswith("/v1") and path.startswith("/v1/"):
+        path = path[3:]
+    return f"{base}{path if path.startswith('/') else '/' + path}"
+
+
+def _provider_headers() -> dict:
+    if not LLM_API_KEY:
+        raise RuntimeError("LLM_API_KEY not configured")
+    return {"Authorization": f"Bearer {LLM_API_KEY}"}
+
+
+def _provider_request(method: str, path: str, **kwargs):
+    response = httpx.request(
+        method,
+        _provider_url(path),
+        headers=_provider_headers(),
+        timeout=HTTP_TIMEOUT_SECONDS,
+        **kwargs,
+    )
+    response.raise_for_status()
+    return response
 
 
 def _plain(obj):
@@ -63,8 +99,9 @@ def chat_completion_request(
         "model": model,
         "messages": body_messages,
         "max_tokens": max_tokens or BATCH_MAX_TOKENS,
-        "thinking": {"type": thinking_type},
     }
+    if thinking_type and not _is_mistral_base_url():
+        body["thinking"] = {"type": thinking_type}
     if temperature is not None:
         body["temperature"] = temperature
     if response_format is not None:
@@ -83,10 +120,18 @@ def chat_completion_request(
 def _compat_record(record: dict) -> dict:
     """Accept old in-repo records with `params` while writing OpenAI batch input."""
     if "body" in record:
+        record = dict(record)
+        record["body"] = dict(record["body"])
         record.setdefault("method", "POST")
         record.setdefault("url", CHAT_COMPLETIONS_ENDPOINT)
         record["body"].setdefault("max_tokens", BATCH_MAX_TOKENS)
-        record["body"].setdefault("thinking", {"type": "disabled"})
+        if _is_mistral_base_url():
+            record.pop("method", None)
+            record.pop("url", None)
+            record["body"].pop("model", None)
+            record["body"].pop("thinking", None)
+        else:
+            record["body"].setdefault("thinking", {"type": "disabled"})
         return record
 
     params = record.get("params", {})
@@ -118,8 +163,32 @@ def _prepare_upload_file(jsonl_path: Path) -> tuple[Path, int]:
     return prepared_path, len(requests)
 
 
-def create_batch(input_file_id: str, name: str = "") -> str:
+def _first_request_model(jsonl_path: Path) -> str | None:
+    with open(jsonl_path, encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                return (json.loads(line).get("body") or {}).get("model")
+    return None
+
+
+def create_batch(input_file_id: str, name: str = "", model: str | None = None) -> str:
     """Create an OpenAI Batch job and return its ID."""
+    if _is_mistral_base_url():
+        payload = {
+            "input_files": [input_file_id],
+            "endpoint": CHAT_COMPLETIONS_ENDPOINT,
+        }
+        if model:
+            payload["model"] = model
+        if name:
+            payload["metadata"] = {"description": name}
+        batch = _provider_request(
+            "POST",
+            MISTRAL_BATCH_JOBS_ENDPOINT,
+            json=payload,
+        ).json()
+        return batch["id"]
+
     kwargs = {
         "input_file_id": input_file_id,
         "endpoint": CHAT_COMPLETIONS_ENDPOINT,
@@ -132,12 +201,27 @@ def create_batch(input_file_id: str, name: str = "") -> str:
 
 
 def get_batch(batch_id: str) -> dict:
+    if _is_mistral_base_url():
+        return _provider_request(
+            "GET",
+            f"{MISTRAL_BATCH_JOBS_ENDPOINT}/{batch_id}",
+        ).json()
+
     batch = make_openai_client().batches.retrieve(batch_id)
     return _plain(batch)
 
 
 def is_done(batch: dict) -> bool:
-    return batch.get("status") in {"completed", "failed", "expired", "cancelled"}
+    return batch.get("status") in {
+        "completed",
+        "failed",
+        "expired",
+        "cancelled",
+        "SUCCESS",
+        "FAILED",
+        "TIMEOUT_EXCEEDED",
+        "CANCELLED",
+    }
 
 
 def _file_text(file_response) -> str:
@@ -150,6 +234,10 @@ def _file_text(file_response) -> str:
         data = file_response.read()
         return data.decode("utf-8") if isinstance(data, bytes) else str(data)
     return str(file_response)
+
+
+def _download_provider_file(file_id: str) -> str:
+    return _provider_request("GET", f"/v1/files/{file_id}/content").text
 
 
 def _normalize_result(item: dict) -> dict:
@@ -182,12 +270,18 @@ def fetch_results(batch_id: str) -> list[dict]:
     """Fetch all results and normalize to the collector shape:
         {"custom_id": ..., "response": {"body": {"choices": [...]}}}
     """
-    client = make_openai_client()
     batch = get_batch(batch_id)
-    file_ids = [batch.get("output_file_id"), batch.get("error_file_id")]
+    if _is_mistral_base_url():
+        file_ids = [batch.get("output_file"), batch.get("error_file")]
+    else:
+        file_ids = [batch.get("output_file_id"), batch.get("error_file_id")]
+
     normalized: list[dict] = []
     for file_id in filter(None, file_ids):
-        content = _file_text(client.files.content(file_id))
+        if _is_mistral_base_url():
+            content = _download_provider_file(file_id)
+        else:
+            content = _file_text(make_openai_client().files.content(file_id))
         for line in content.splitlines():
             if line.strip():
                 normalized.append(_normalize_result(json.loads(line)))
@@ -203,13 +297,14 @@ def write_jsonl(records: list[dict], out_path: Path) -> None:
 
 def submit_batch(jsonl_path: Path, name: str) -> str:
     print(f"Loading {jsonl_path.name} ({jsonl_path.stat().st_size / 1024:.1f} KB) ...")
+    model = _first_request_model(jsonl_path)
     upload_path, request_count = _prepare_upload_file(jsonl_path)
     print(f"  requests: {request_count}")
     client = make_openai_client()
     with open(upload_path, "rb") as f:
         uploaded = client.files.create(file=f, purpose="batch")
     print(f"  input_file_id: {uploaded.id}")
-    batch_id = create_batch(uploaded.id, name)
+    batch_id = create_batch(uploaded.id, name, model=model)
     print(f"  batch_id: {batch_id}")
     return batch_id
 
@@ -218,12 +313,21 @@ def poll_until_done(batch_id: str, interval: int = 60) -> dict:
     """Polling loop — dùng khi muốn chờ đồng bộ."""
     while True:
         batch = get_batch(batch_id)
-        counts = batch.get("request_counts", {})
+        counts = batch.get("request_counts") or {}
+        completed = counts.get("completed")
+        failed = counts.get("failed")
+        total = counts.get("total")
+        if completed is None:
+            completed = batch.get("succeeded_requests", 0)
+        if failed is None:
+            failed = batch.get("failed_requests", 0)
+        if total is None:
+            total = batch.get("total_requests", 0)
         print(
             f"  status={batch.get('status')} "
-            f"completed={counts.get('completed', 0)} "
-            f"failed={counts.get('failed', 0)} "
-            f"total={counts.get('total', 0)}"
+            f"completed={completed} "
+            f"failed={failed} "
+            f"total={total}"
         )
         if is_done(batch):
             return batch

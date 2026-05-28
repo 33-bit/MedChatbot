@@ -12,6 +12,8 @@ class PatientSession:
     conversation: list[dict] = field(default_factory=list)
     candidate_diseases: list[dict] = field(default_factory=list)
     answered_questions: list[str] = field(default_factory=list)
+    clarification_queue: list[str] = field(default_factory=list)
+    clarification_plan_started: bool = False
     clarification_parse_failures: int = 0
 
     def to_json(self) -> str:
