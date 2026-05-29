@@ -9,6 +9,7 @@ to gather structured medical context.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 
 from neo4j.exceptions import Neo4jError, ServiceUnavailable
@@ -60,12 +61,15 @@ def ensure_fulltext_indexes() -> None:
 
 def fulltext_search(tx, index_name: str, query: str, limit: int = 5) -> list[dict]:
     """Run fulltext search, return list of {props, score}."""
+    safe_query = _sanitize_fulltext_query(query)
+    if not safe_query:
+        return []
     result = tx.run(
         "CALL db.index.fulltext.queryNodes($idx, $q) "
         "YIELD node, score WHERE score > 0.5 "
         "RETURN node {.*, _labels: labels(node)} AS props, score "
         "ORDER BY score DESC LIMIT $limit",
-        idx=index_name, q=query, limit=limit,
+        idx=index_name, q=safe_query, limit=limit,
     )
     return [{"props": r["props"], "score": r["score"]} for r in result]
 
@@ -188,6 +192,13 @@ _INDEX_TO_TYPE = {
     "drug_name":    "drug",
     "symptom_name": "symptom",
 }
+
+_LUCENE_SPECIAL_RE = re.compile(r"&&|\|\||[+\-!(){}\[\]^\"~*?:\\/]")
+
+
+def _sanitize_fulltext_query(query: str) -> str:
+    cleaned = _LUCENE_SPECIAL_RE.sub(" ", str(query or ""))
+    return " ".join(cleaned.split())
 
 
 def kg_search(query: str) -> KGContext:

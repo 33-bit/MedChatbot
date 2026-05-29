@@ -35,6 +35,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.config import BATCH_MAX_TOKENS, MODEL, OUTPUT_DIR
 from src.chat.diagnosis.clarification_options import (
+    choice_key,
     infer_selection_mode,
     normalize_options,
 )
@@ -101,12 +102,35 @@ def _question_variants(value) -> list[str]:
     return questions
 
 
+def _split_compound_question(question: str) -> list[str]:
+    if question.count("?") <= 1:
+        return [question]
+    parts: list[str] = []
+    start = 0
+    for match in re.finditer(r"\?", question):
+        part = question[start:match.end()].strip()
+        if part:
+            parts.append(part)
+        start = match.end()
+    tail = question[start:].strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
 def _normalize_question_map(raw_questions) -> dict[str, list[str]]:
     if not isinstance(raw_questions, dict):
         return {}
     normalized: dict[str, list[str]] = {}
     for slot in QUESTION_SLOTS:
-        questions = _question_variants(raw_questions.get(slot))
+        questions: list[str] = []
+        seen: set[str] = set()
+        for question in _question_variants(raw_questions.get(slot)):
+            for part in _split_compound_question(question):
+                if part in seen:
+                    continue
+                seen.add(part)
+                questions.append(part)
         if questions:
             normalized[slot] = questions
     return normalized
@@ -207,9 +231,15 @@ Nhiệm vụ:
 4. Với từng key trong clarification_questions:
    - Nếu các câu hỏi giống hoặc gần giống nhau, gộp thành 1 câu ngắn gọn.
    - Nếu các câu hỏi hỏi ý khác nhau về mặt lâm sàng, giữ thành nhiều câu.
-   - Không gộp nhiều ý lâm sàng khác nhau vào một câu hỏi nhiều vế.
+   - Mỗi câu hỏi chỉ được hỏi 1 ý lâm sàng.
+   - Nếu một câu gộp nhiều ý độc lập hoặc có nhiều hơn 1 dấu ?, tách thành
+     nhiều string trong cùng key; không tạo một string chứa nhiều dấu ?.
+     Ví dụ: "Đau liên tục hay từng cơn? Vị trí đau chính ở đâu (thượng vị,
+     quanh rốn, hạ vị...)?"
+     → ["Đau liên tục hay từng cơn?", "Vị trí đau chính ở đâu (thượng vị,
+     quanh rốn, hạ vị...)?"].
    - Mỗi value luôn là array string, kể cả khi chỉ còn 1 câu.
-   - Tối đa 3 câu mỗi key, ưu tiên câu hỏi dễ trả lời qua chat.
+   - Tối đa 4 câu mỗi key, ưu tiên câu hỏi dễ trả lời qua chat.
    - Không dùng dấu nháy kép " bên trong nội dung câu hỏi; nếu cần nhấn mạnh
      một cụm từ, dùng dấu nháy đơn hoặc bỏ dấu nháy.
 5. Nếu clarification_questions thiếu key onset/severity/pattern/associated
@@ -238,23 +268,57 @@ Nhiệm vụ:
    - Nếu clarification_questions[slot] có N câu hỏi, clarification_options[slot]
      phải là array có N phần tử.
    - Mỗi phần tử là array string options cho câu hỏi cùng index.
-5. clarification_selection_modes có cùng shape:
+5. Phân loại từng câu hỏi trước khi tạo options. Chọn options và mode cùng lúc,
+   không chọn mode độc lập sau khi đã tạo options:
+   - yes_no_presence: "Bạn có bị X không?" → mode=single.
+   - onset_time: hỏi bắt đầu khi nào/bao lâu → mode=single.
+   - numeric_or_severity: hỏi mức độ, thang điểm, nhiệt độ → mode=single.
+   - frequency: hỏi tần suất/số lần → mode=single.
+   - exclusive_pattern: liên tục/từng cơn/ngắt quãng → mode=single.
+   - primary_location: vị trí chính ở đâu → mode=single.
+   - trigger_or_relation: yếu tố làm tăng/giảm/liên quan → mode=single nếu
+     các lựa chọn loại trừ nhau, mode=multi nếu nhiều yếu tố có thể cùng đúng.
+   - multi_symptom_enumeration: "Có kèm A, B hoặc C không?" → mode=multi.
+   - compound_question: một câu hỏi có nhiều ý độc lập → ưu tiên tách thành
+     các option atomic và mode=multi.
+6. clarification_selection_modes có cùng shape:
    - presence luôn là "single".
    - Với onset/severity/pattern/associated, mỗi value là array có N phần tử.
    - Mỗi mode là "single" nếu người dùng chỉ nên chọn 1 option.
    - Mỗi mode là "multi" nếu nhiều option tích cực có thể cùng đúng.
-6. Mỗi option array phải có "Không rõ" và "Trả lời luôn" ở cuối, trừ khi đã có sẵn.
-7. Options phải ngắn gọn, dễ bấm trên điện thoại.
-8. presence nên là lựa chọn xác nhận triệu chứng, ví dụ:
+7. Mỗi option array phải có "Không rõ" và "Trả lời luôn" ở cuối, trừ khi đã có sẵn.
+8. Options phải ngắn gọn, dễ bấm trên điện thoại.
+9. presence nên là lựa chọn xác nhận triệu chứng, ví dụ:
    ["Có sốt", "Không sốt", "Không rõ", "Trả lời luôn"].
-9. Nếu câu hỏi hỏi nhiều triệu chứng liên quan, tạo lựa chọn riêng cho từng ý,
-   ví dụ "Có kèm theo nôn hoặc vàng da không?" →
-   ["Có nôn", "Có vàng da", "Không", "Không rõ", "Trả lời luôn"]
-   và mode tương ứng là "multi". Không cần tạo option "Cả hai" khi mode là "multi".
-10. "Không", "Không rõ", "Trả lời luôn" là lựa chọn loại trừ, không phải multi.
-11. Không đưa chẩn đoán, thuốc, xét nghiệm hoặc lời khuyên điều trị vào options.
-12. Không dùng dấu nháy kép " bên trong nội dung option.
-13. Không đổi câu hỏi, không đổi symptom_id, không thêm giải thích.
+10. Nếu câu hỏi hỏi nhiều triệu chứng liên quan, tạo lựa chọn riêng cho từng ý,
+    ví dụ "Có kèm theo nôn hoặc vàng da không?" →
+    ["Có nôn", "Có vàng da", "Không", "Không rõ", "Trả lời luôn"]
+    và mode tương ứng là "multi".
+11. Với mode=multi:
+    - Chỉ tạo option atomic dạng "Có X" cho từng triệu chứng/yếu tố đơn lẻ.
+    - Không tạo option kiểu 'Chỉ X + Y'.
+    - Không tạo "Cả hai", "Cả 3 triệu chứng", "Nhiều triệu chứng" hoặc
+      bất kỳ option gộp/tổ hợp nào.
+    - Mỗi option "Có ..." chỉ được chứa một triệu chứng/yếu tố từ câu hỏi;
+      không dùng dạng compound như "Có buồn nôn/nôn".
+12. Với mode=single:
+    - Các option phải loại trừ nhau.
+    - Numeric buckets phải không chồng lấn và phủ đủ khoảng hợp lý, ví dụ:
+      "< 38.5 độ", "38.5-39 độ", "> 39 độ", "Không đo".
+13. "Không", "Không rõ", "Trả lời luôn" là lựa chọn loại trừ, luôn đặt ở cuối.
+14. Không đưa chẩn đoán, thuốc, xét nghiệm hoặc lời khuyên điều trị vào options.
+15. Không dùng dấu nháy kép " bên trong nội dung option.
+16. Không đổi câu hỏi, không đổi symptom_id, không thêm giải thích.
+
+Ví dụ:
+- presence "Bạn có bị sốt không?" →
+  options ["Có sốt", "Không sốt", "Không rõ", "Trả lời luôn"], mode "single".
+- onset "Tiêu chảy bắt đầu từ khi nào?" →
+  options ["Dưới 6 giờ", "6-24 giờ", "Trên 24 giờ", "Không rõ", "Trả lời luôn"],
+  mode "single".
+- associated "Có kèm theo buồn nôn, nôn hoặc rối loạn thị giác không?" →
+  options ["Có buồn nôn", "Có nôn", "Có rối loạn thị giác", "Không", "Không rõ", "Trả lời luôn"],
+  mode "multi".
 
 Trả về JSON array đúng thứ tự input. Mỗi item chỉ gồm:
 {
@@ -484,6 +548,32 @@ def _symptom_path(symptom_id: str) -> Path:
     return SYMPTOM_OUT / f"{slug}.json"
 
 
+def _is_nested_option_group(value) -> bool:
+    if isinstance(value, list):
+        return True
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped.startswith("[") and stripped.endswith("]")
+    return False
+
+
+def _option_groups_for_questions(options, question_count: int) -> list:
+    option_groups = options if isinstance(options, list) else []
+    if question_count == 1:
+        return [option_groups] if option_groups else []
+    if option_groups and all(isinstance(group, list) for group in option_groups):
+        if len(option_groups) == 1:
+            nested_groups = [
+                group
+                for group in option_groups[0]
+                if _is_nested_option_group(group)
+            ]
+            if len(nested_groups) >= question_count:
+                return nested_groups[:question_count]
+        return option_groups[:question_count]
+    return [option_groups] if option_groups else []
+
+
 def _normalized_option_map(
     raw_options: dict,
     questions: dict[str, list[str]],
@@ -502,21 +592,43 @@ def _normalized_option_map(
         question_count = len(questions.get(slot, []))
         if question_count == 0:
             continue
-        option_groups = options if isinstance(options, list) else []
-        if question_count == 1:
-            groups = [option_groups] if option_groups else []
-        elif option_groups and all(isinstance(group, list) for group in option_groups):
-            groups = option_groups[:question_count]
-        else:
-            groups = [option_groups] if option_groups else []
+        groups = _option_groups_for_questions(options, question_count)
         normalized_groups: list[list[str]] = []
-        for group in groups:
+        for index, group in enumerate(groups):
             labels = normalize_options(group)
             if labels:
+                question = questions.get(slot, [""])[index] if index < question_count else ""
+                labels = _remove_multi_select_combiners(slot, labels, question)
                 normalized_groups.append(list(labels))
         if normalized_groups:
             normalized[slot] = normalized_groups
     return normalized
+
+
+def _is_multi_select_combiner(label: str) -> bool:
+    key = choice_key(label)
+    if key.startswith("chi ") and ("+" in label or " va " in key):
+        return True
+    if key.startswith("ca "):
+        return True
+    if key.startswith("nhieu trieu chung"):
+        return True
+    if key.startswith("tat ca"):
+        return True
+    return False
+
+
+def _remove_multi_select_combiners(
+    slot: str,
+    labels: tuple[str, ...],
+    question: str,
+) -> tuple[str, ...]:
+    if infer_selection_mode(slot, labels, question) != "multi":
+        return labels
+    return tuple(
+        label for label in labels
+        if not _is_multi_select_combiner(label)
+    )
 
 
 def _normalize_selection_mode(raw_mode, default: str) -> str:
