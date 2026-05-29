@@ -11,10 +11,13 @@ Setup:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import html as _html
 import logging
 import re
+import secrets
 import time
+from dataclasses import dataclass, field
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
@@ -30,6 +33,7 @@ router = APIRouter()
 
 TG_MAX_LEN = 4000  # safe under Telegram's 4096-byte limit
 TG_HARD_MAX_BYTES = 4096
+TYPING_REFRESH_SECONDS = 4.0
 BOT_COMMANDS = [
     {"command": "start", "description": "Bắt đầu bot"},
     {"command": "help", "description": "Cách đặt câu hỏi"},
@@ -63,6 +67,41 @@ MENU_TEXT = """Menu lệnh:
 /new - Xóa ngữ cảnh hội thoại hiện tại
 """
 RATING_PROMPT = "Bạn đánh giá câu trả lời này từ 1 đến 5 nhé."
+MULTI_SELECT_DONE = "Xong"
+MULTI_SELECT_PREFIX = "ms:"
+MULTI_SELECT_EXCLUSIVE_CHOICES = {"Không", "Không rõ", "Trả lời luôn"}
+MULTI_SELECT_COMBINED_PREFIXES = ("Cả ", "Nhiều triệu chứng", "Chỉ 1-2")
+ANSWER_NOW_CHOICE = "Trả lời luôn"
+ANSWER_NOW_ICON = "⏭️"
+DONE_ICON = "✅"
+SELECTED_ICON = "✓"
+_INCOMING_ICON_PREFIXES = (f"{ANSWER_NOW_ICON} ", f"{DONE_ICON} ", f"{SELECTED_ICON} ")
+
+
+def _decorate_choice_label(choice: str) -> str:
+    if choice == ANSWER_NOW_CHOICE:
+        return f"{ANSWER_NOW_ICON} {choice}"
+    return choice
+
+
+def _strip_choice_icon(text: str) -> str:
+    for prefix in _INCOMING_ICON_PREFIXES:
+        if text.startswith(prefix):
+            return text[len(prefix):]
+    return text
+
+
+@dataclass
+class MultiSelectState:
+    choices: tuple[str, ...]
+    selected: set[int] = field(default_factory=set)
+
+
+_MULTI_SELECTS: dict[str, MultiSelectState] = {}
+
+
+def _selection_confirmation_text(selection: str) -> str:
+    return f"Người dùng chọn: {selection}"
 
 
 def _send_url() -> str:
@@ -89,6 +128,33 @@ async def setup_bot_menu() -> None:
         logger.info("Telegram command menu configured.")
 
 
+async def _send_typing_action(chat_id: int | str) -> None:
+    if not TELEGRAM_BOT_TOKEN:
+        logger.warning("TELEGRAM_BOT_TOKEN chưa cấu hình; bỏ qua typing action.")
+        return
+    payload = {
+        "chat_id": chat_id,
+        "action": "typing",
+    }
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.post(_api_url("sendChatAction"), json=payload)
+    logger.info("Telegram typing action → %s %s", r.status_code, r.text[:200])
+
+
+async def _keep_typing(chat_id: int | str, stop: asyncio.Event) -> None:
+    while not stop.is_set():
+        try:
+            await _send_typing_action(chat_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Telegram typing action failed")
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=TYPING_REFRESH_SECONDS)
+        except asyncio.TimeoutError:
+            pass
+
+
 _CODE_FENCE_RE = re.compile(r"```([\s\S]*?)```")
 
 
@@ -100,6 +166,7 @@ def _format_non_code_markdown(text: str) -> str:
     s = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", r'<a href="\2">\1</a>', s)
     s = re.sub(r"\*\*([^*\n]+)\*\*", r"<b>\1</b>", s)
     s = re.sub(r"__([^_\n]+)__", r"<b>\1</b>", s)
+    s = re.sub(r"(?<![\*\w])\*([^*\n]+)\*(?!\w)", r"<i>\1</i>", s)
     return s
 
 
@@ -150,7 +217,7 @@ def _split_for_telegram(text: str, limit: int = TG_MAX_LEN) -> list[str]:
 def _choice_keyboard(choices: list[str] | tuple[str, ...]) -> dict:
     rows = []
     for i in range(0, len(choices), 2):
-        rows.append([{"text": choice} for choice in choices[i:i + 2]])
+        rows.append([{"text": _decorate_choice_label(choice)} for choice in choices[i:i + 2]])
     return {
         "keyboard": rows,
         "resize_keyboard": True,
@@ -158,7 +225,46 @@ def _choice_keyboard(choices: list[str] | tuple[str, ...]) -> dict:
     }
 
 
-async def send_text(chat_id: int | str, text: str, choices: list[str] | tuple[str, ...] = ()) -> None:
+def _new_multi_select_token() -> str:
+    return secrets.token_urlsafe(8)
+
+
+def _multi_select_choices(choices: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(
+        choice
+        for choice in choices
+        if not choice.startswith(MULTI_SELECT_COMBINED_PREFIXES)
+    )
+
+
+def _multi_choice_keyboard(
+    token: str,
+    choices: list[str] | tuple[str, ...],
+    selected: set[int],
+) -> dict:
+    rows = []
+    buttons = []
+    for index, choice in enumerate(choices):
+        if index in selected:
+            label = f"{SELECTED_ICON} {choice}"
+        elif choice == ANSWER_NOW_CHOICE:
+            label = f"{ANSWER_NOW_ICON} {choice}"
+        else:
+            label = choice
+        buttons.append({"text": label, "callback_data": f"{MULTI_SELECT_PREFIX}{token}:{index}"})
+    for i in range(0, len(buttons), 2):
+        rows.append(buttons[i:i + 2])
+    rows.append([{"text": f"{DONE_ICON} {MULTI_SELECT_DONE}", "callback_data": f"{MULTI_SELECT_PREFIX}{token}:done"}])
+    return {"inline_keyboard": rows}
+
+
+async def send_text(
+    chat_id: int | str,
+    text: str,
+    choices: list[str] | tuple[str, ...] = (),
+    *,
+    selection_mode: str = "single",
+) -> None:
     if not TELEGRAM_BOT_TOKEN:
         logger.warning("TELEGRAM_BOT_TOKEN chưa cấu hình; bỏ qua gửi tin.")
         return
@@ -173,10 +279,20 @@ async def send_text(chat_id: int | str, text: str, choices: list[str] | tuple[st
                 "parse_mode": "HTML",
                 "disable_web_page_preview": True,
             }
+            multi_token = ""
             if idx == len(chunks) and choices:
-                payload["reply_markup"] = _choice_keyboard(choices)
+                if selection_mode == "multi":
+                    choices = _multi_select_choices(choices)
+                    multi_token = _new_multi_select_token()
+                    payload["reply_markup"] = _multi_choice_keyboard(multi_token, choices, set())
+                else:
+                    payload["reply_markup"] = _choice_keyboard(choices)
+            elif idx == len(chunks):
+                payload["reply_markup"] = {"remove_keyboard": True}
             chunk_start = time.perf_counter()
             r = await client.post(_send_url(), json=payload)
+            if multi_token and r.status_code < 400:
+                _MULTI_SELECTS[multi_token] = MultiSelectState(tuple(choices))
             logger.info("Telegram send → %s %s", r.status_code, r.text[:200])
             logger.info("Telegram timing stage=send_chunk chunk=%d/%d ms=%.1f status=%s chars=%d",
                         idx, len(chunks), _elapsed_ms(chunk_start), r.status_code, len(chunk))
@@ -241,6 +357,103 @@ async def _answer_callback_query(callback_query_id: str, text: str) -> None:
     logger.info("Telegram callback answer → %s %s", r.status_code, r.text[:200])
 
 
+async def _edit_message_reply_markup(
+    chat_id: int | str,
+    message_id: int,
+    reply_markup: dict,
+) -> None:
+    if not TELEGRAM_BOT_TOKEN:
+        logger.warning("TELEGRAM_BOT_TOKEN chưa cấu hình; bỏ qua sửa reply_markup.")
+        return
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "reply_markup": reply_markup,
+    }
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.post(_api_url("editMessageReplyMarkup"), json=payload)
+    logger.info("Telegram edit reply_markup → %s %s", r.status_code, r.text[:200])
+
+
+def _parse_multi_select_callback(data: str) -> tuple[str, str] | None:
+    if not data.startswith(MULTI_SELECT_PREFIX):
+        return None
+    parts = data.split(":", 2)
+    if len(parts) != 3 or not parts[1] or not parts[2]:
+        return None
+    return parts[1], parts[2]
+
+
+async def _handle_multi_select_callback(
+    callback_query: dict,
+    background_tasks: BackgroundTasks,
+) -> bool:
+    parsed = _parse_multi_select_callback(str(callback_query.get("data") or ""))
+    if parsed is None:
+        return False
+    token, action = parsed
+    callback_query_id = callback_query.get("id")
+    state = _MULTI_SELECTS.get(token)
+    if state is None:
+        if callback_query_id:
+            await _answer_callback_query(str(callback_query_id), "Lựa chọn này đã hết hạn.")
+        return True
+
+    message = callback_query.get("message") or {}
+    chat_id = (message.get("chat") or {}).get("id")
+    message_id = message.get("message_id")
+    if chat_id is None or message_id is None:
+        if callback_query_id:
+            await _answer_callback_query(str(callback_query_id), "Không xử lý được lựa chọn này.")
+        return True
+
+    if action == "done":
+        if not state.selected:
+            if callback_query_id:
+                await _answer_callback_query(str(callback_query_id), "Bạn chọn ít nhất một ý nhé.")
+            return True
+        selected_text = ", ".join(
+            state.choices[index] for index in sorted(state.selected)
+        )
+        _MULTI_SELECTS.pop(token, None)
+        await _edit_message_reply_markup(chat_id, int(message_id), {"inline_keyboard": []})
+        if callback_query_id:
+            await _answer_callback_query(str(callback_query_id), "Đã chọn.")
+        await send_text(chat_id, _selection_confirmation_text(selected_text))
+        background_tasks.add_task(_answer_and_send, chat_id, selected_text)
+        return True
+
+    try:
+        index = int(action)
+    except ValueError:
+        return True
+    if index < 0 or index >= len(state.choices):
+        return True
+
+    choice = state.choices[index]
+    if choice in MULTI_SELECT_EXCLUSIVE_CHOICES:
+        _MULTI_SELECTS.pop(token, None)
+        await _edit_message_reply_markup(chat_id, int(message_id), {"inline_keyboard": []})
+        if callback_query_id:
+            await _answer_callback_query(str(callback_query_id), "Đã chọn.")
+        await send_text(chat_id, _selection_confirmation_text(choice))
+        background_tasks.add_task(_answer_and_send, chat_id, choice)
+        return True
+
+    if index in state.selected:
+        state.selected.remove(index)
+    else:
+        state.selected.add(index)
+    await _edit_message_reply_markup(
+        chat_id,
+        int(message_id),
+        _multi_choice_keyboard(token, state.choices, state.selected),
+    )
+    if callback_query_id:
+        await _answer_callback_query(str(callback_query_id), "Đã cập nhật.")
+    return True
+
+
 async def _delete_rating_message(chat_id: int | str, message_id: int) -> None:
     if not TELEGRAM_BOT_TOKEN:
         logger.warning("TELEGRAM_BOT_TOKEN chưa cấu hình; bỏ qua xóa tin nhắn đánh giá.")
@@ -275,14 +488,26 @@ async def _handle_rating_callback(callback_query: dict) -> bool:
 async def _answer_and_send(chat_id: int | str, text: str) -> None:
     total_start = time.perf_counter()
     session_id = f"tg:{chat_id}"
+    stop_typing = asyncio.Event()
+    typing_task = asyncio.create_task(_keep_typing(chat_id, stop_typing))
     try:
         reply = await asyncio.to_thread(answer_with_choices, text, session_id=session_id)
     except Exception:
         logger.exception("Telegram answer failed")
         reply = ChatReply(TECHNICAL_ERROR_REPLY)
+    finally:
+        stop_typing.set()
+        typing_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await typing_task
 
     try:
-        await send_text(chat_id, reply.text, reply.choices)
+        await send_text(
+            chat_id,
+            reply.text,
+            reply.choices,
+            selection_mode=reply.selection_mode,
+        )
     except Exception:
         logger.exception("Telegram send failed")
     else:
@@ -337,6 +562,8 @@ async def telegram_webhook(
 
     callback_query = update.get("callback_query") or {}
     if callback_query:
+        if await _handle_multi_select_callback(callback_query, background_tasks):
+            return {"ok": True}
         await _handle_rating_callback(callback_query)
         return {"ok": True}
 
@@ -349,5 +576,5 @@ async def telegram_webhook(
     if text.startswith("/") and await _handle_command(chat_id, text):
         return {"ok": True}
 
-    background_tasks.add_task(_answer_and_send, chat_id, text)
+    background_tasks.add_task(_answer_and_send, chat_id, _strip_choice_icon(text))
     return {"ok": True}

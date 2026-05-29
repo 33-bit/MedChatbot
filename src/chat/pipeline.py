@@ -23,7 +23,9 @@ from typing import Any
 
 from src.chat.diagnosis.clarification_options import (
     detail_options_from_catalog,
+    detail_selection_mode_from_catalog,
     fallback_detail_options,
+    fallback_selection_mode,
     presence_options_from_catalog,
 )
 from src.chat.diagnosis.differential import (
@@ -67,6 +69,26 @@ _YES_CHOICES = {"co"}
 _NO_CHOICES = {"khong"}
 _UNKNOWN_CHOICES = {"khong ro", "khong biet", "chua ro", "chua biet"}
 _ANSWER_NOW_CHOICES = {"tra loi luon", "cu tra loi", "tra loi di"}
+_MEDICATION_INFO_TERMS = (
+    "lieu",
+    "lieu dung",
+    "cach dung",
+    "dung thuoc",
+    "tac dung",
+    "cong dung",
+    "chi dinh",
+    "chi đinh",
+    "chong chi dinh",
+    "chong chi đinh",
+    "tuong tac",
+    "tac dung phu",
+    "qua lieu",
+    "bao nhieu",
+    "may vien",
+    "uong may",
+    "uong bao",
+    "ngay uong",
+)
 _DETAIL_PREFIX = "detail:"
 _DETAIL_SLOT_ORDER = ("onset", "severity", "pattern", "associated")
 log = logging.getLogger(__name__)
@@ -168,17 +190,41 @@ def _is_answer_now_choice(text: str) -> bool:
     return _choice_key(text) in _ANSWER_NOW_CHOICES
 
 
-def _detail_question_id(symptom_id: str, slot: str) -> str:
-    return f"{_DETAIL_PREFIX}{slot}:{symptom_id}"
+def _looks_like_medication_info_question(text: str) -> bool:
+    key = _choice_key(text)
+    return any(term in key for term in _MEDICATION_INFO_TERMS)
 
 
-def _parse_detail_question_id(question_id: str) -> tuple[str, str] | None:
+def _question_variants(value: Any) -> list[str]:
+    if not value:
+        return []
+    values = value if isinstance(value, list) else [value]
+    return [str(item).strip() for item in values if str(item).strip()]
+
+
+def _detail_question_id(symptom_id: str, slot: str, index: int | None = None) -> str:
+    if index is None:
+        return f"{_DETAIL_PREFIX}{slot}:{symptom_id}"
+    return f"{_DETAIL_PREFIX}{slot}:{index}:{symptom_id}"
+
+
+def _parse_detail_question_id(question_id: str) -> tuple[str, str, int | None] | None:
     if not question_id.startswith(_DETAIL_PREFIX):
         return None
-    parts = question_id.split(":", 2)
-    if len(parts) != 3 or not parts[1] or not parts[2]:
+    remainder = question_id[len(_DETAIL_PREFIX):]
+    if ":" not in remainder:
         return None
-    return parts[2], parts[1]
+    slot, tail = remainder.split(":", 1)
+    if not slot or not tail:
+        return None
+    index = None
+    symptom_id = tail
+    if ":" in tail:
+        maybe_index, rest = tail.split(":", 1)
+        if maybe_index.isdigit() and rest:
+            index = int(maybe_index)
+            symptom_id = rest
+    return symptom_id, slot, index
 
 
 def _is_detail_question_id(question_id: str) -> bool:
@@ -189,9 +235,14 @@ def _detail_question_text(question_id: str, catalog: dict[str, dict]) -> str:
     parsed = _parse_detail_question_id(question_id)
     if not parsed:
         return ""
-    symptom_id, slot = parsed
+    symptom_id, slot, index = parsed
     questions = catalog.get(symptom_id, {}).get("clarification_questions", {}) or {}
-    return questions.get(slot, "")
+    variants = _question_variants(questions.get(slot) if isinstance(questions, dict) else None)
+    if index is not None:
+        if 0 <= index < len(variants):
+            return variants[index]
+        return ""
+    return variants[0] if variants else ""
 
 
 def _symptom_has_slot(session: PatientSession, symptom_id: str, slot: str) -> bool:
@@ -211,11 +262,19 @@ def _detail_question_ids(
     queued = set(session.clarification_queue)
     detail_ids: list[str] = []
     for slot in _DETAIL_SLOT_ORDER:
-        if not questions.get(slot) or _symptom_has_slot(session, symptom_id, slot):
+        raw_questions = questions.get(slot)
+        variants = _question_variants(raw_questions)
+        if not variants or _symptom_has_slot(session, symptom_id, slot):
             continue
-        question_id = _detail_question_id(symptom_id, slot)
-        if question_id not in answered and question_id not in queued:
-            detail_ids.append(question_id)
+        use_index = isinstance(raw_questions, list)
+        for index, _question in enumerate(variants):
+            question_id = _detail_question_id(
+                symptom_id,
+                slot,
+                index if use_index else None,
+            )
+            if question_id not in answered and question_id not in queued:
+                detail_ids.append(question_id)
     return detail_ids
 
 
@@ -229,6 +288,35 @@ def _prepend_detail_questions(
         session.clarification_queue = detail_ids + session.clarification_queue
 
 
+def _prepend_known_symptom_detail_questions(
+    session: PatientSession,
+    catalog: dict[str, dict],
+) -> None:
+    detail_ids: list[str] = []
+    queued = set(session.clarification_queue)
+    for symptom in session.symptoms:
+        symptom_id = symptom.get("symptom_id")
+        if not symptom_id or symptom_id.startswith("raw:"):
+            continue
+        for question_id in _detail_question_ids(session, symptom_id, catalog):
+            if question_id in queued:
+                continue
+            queued.add(question_id)
+            detail_ids.append(question_id)
+    if detail_ids:
+        session.clarification_queue = detail_ids + session.clarification_queue
+
+
+def _append_detail_answer(existing: Any, answer: str) -> Any:
+    if not existing:
+        return answer
+    if isinstance(existing, list):
+        return existing if answer in existing else [*existing, answer]
+    if str(existing).strip() == answer:
+        return existing
+    return [existing, answer]
+
+
 def _is_pending_clarification_choice(session: PatientSession, text: str) -> bool:
     if not session.answered_questions:
         return False
@@ -237,7 +325,7 @@ def _is_pending_clarification_choice(session: PatientSession, text: str) -> bool
     if last_question == GENERAL_TRIAGE_MARKER:
         return key in _START_CHOICES
     if _is_detail_question_id(last_question):
-        return True
+        return not _looks_like_medication_info_question(text)
     return _is_yes_no_choice(text) or _is_answer_now_choice(text)
 
 
@@ -366,6 +454,11 @@ def _handle_diagnostic(
         queued_reply = _ask_next_queued_clarification(session, trace_id, stage_start)
         if queued_reply:
             return queued_reply
+        if not session.clarification_plan_started:
+            _prepend_known_symptom_detail_questions(session, symptom_catalog())
+            queued_reply = _ask_next_queued_clarification(session, trace_id, stage_start)
+            if queued_reply:
+                return queued_reply
     else:
         session.clarification_queue.clear()
         session.clarification_plan_started = True
@@ -423,12 +516,20 @@ def _handle_clarification_answer(
     last_question = session.answered_questions[-1] if session.answered_questions else ""
     detail_question = _parse_detail_question_id(last_question)
     if detail_question:
-        symptom_id, slot = detail_question
+        symptom_id, slot, _index = detail_question
         catalog = symptom_catalog()
+        existing_value = next(
+            (
+                symptom.get(slot)
+                for symptom in session.symptoms
+                if symptom.get("symptom_id") == symptom_id
+            ),
+            None,
+        )
         entry = {
             "symptom_id": symptom_id,
             "name": catalog.get(symptom_id, {}).get("name_vi", symptom_id),
-            slot: user_answer.strip(),
+            slot: _append_detail_answer(existing_value, user_answer.strip()),
         }
         session.upsert_symptom(entry)
         session.clarification_parse_failures = 0
@@ -520,7 +621,10 @@ def _route(label: str, session: PatientSession, question: str,
         session,
         rewritten,
         trace_id,
-        use_patient_context=bool(session.symptoms),
+        use_patient_context=(
+            bool(session.symptoms)
+            and not _looks_like_medication_info_question(rewritten)
+        ),
     )
 
 
@@ -560,6 +664,19 @@ def suggested_choices(reply: str) -> tuple[str, ...]:
             or fallback_detail_options(compact_reply)
         )
     return ()
+
+
+def suggested_selection_mode(reply: str) -> str:
+    """Return whether a clarification reply should render single or multi select."""
+    compact_reply = reply.strip()
+    if not compact_reply.endswith("?") or "\n" in compact_reply:
+        return "single"
+    if compact_reply.startswith("Bạn có bị ") and compact_reply.endswith(" không?"):
+        return "single"
+    return (
+        detail_selection_mode_from_catalog(compact_reply, symptom_catalog())
+        or fallback_selection_mode(compact_reply)
+    )
 
 
 # ---------- Entry point ----------
@@ -651,14 +768,21 @@ def _answer_inner(
                     medications=len(analysis["entities"]["medications"]))
 
     stage_start = time.perf_counter()
-    reply = _route(
-        label,
-        session,
-        question,
-        rewritten,
-        direct_answer_requested,
-        trace_id,
-    )
+    try:
+        reply = _route(
+            label,
+            session,
+            question,
+            rewritten,
+            direct_answer_requested,
+            trace_id,
+        )
+    except Exception:
+        log.exception("Pipeline route failed trace=%s session=%s", trace_id, session_id)
+        session.add_message("assistant", TECHNICAL_ERROR_REPLY)
+        _persist_final_turn(session, session_id, question, TECHNICAL_ERROR_REPLY, trace_id)
+        _log_timing(trace_id, "total", request_start, outcome="technical_error")
+        return TECHNICAL_ERROR_REPLY
     _log_timing(trace_id, "route", stage_start, label=label)
 
     session.add_message("assistant", reply)
@@ -680,7 +804,9 @@ def answer(question: str, session_id: str = "default") -> str:
 
 def answer_with_choices(question: str, session_id: str = "default") -> ChatReply:
     reply = answer(question, session_id=session_id)
-    return ChatReply(reply, suggested_choices(reply))
+    choices = suggested_choices(reply)
+    mode = suggested_selection_mode(reply) if choices else "single"
+    return ChatReply(reply, choices, mode)
 
 
 def answer_with_meta(question: str, session_id: str = "default") -> tuple[str, dict[str, Any]]:

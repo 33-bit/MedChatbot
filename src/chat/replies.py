@@ -9,6 +9,7 @@ from dataclasses import dataclass
 class ChatReply:
     text: str
     choices: tuple[str, ...] = ()
+    selection_mode: str = "single"
 
 TECHNICAL_ERROR_REPLY = (
     "Hiện hệ thống đang gặp sự cố kỹ thuật nên tôi chưa thể trả lời chính xác lúc này. "

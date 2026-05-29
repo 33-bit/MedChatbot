@@ -33,8 +33,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.config import BATCH_MAX_TOKENS, FAST_MODEL, MODEL, OUTPUT_DIR
-from src.chat.diagnosis.clarification_options import normalize_options
+from src.config import BATCH_MAX_TOKENS, MODEL, OUTPUT_DIR
+from src.chat.diagnosis.clarification_options import (
+    infer_selection_mode,
+    normalize_options,
+)
 from src.processing.batch_api import (
     chat_completion_request,
     fetch_results,
@@ -80,6 +83,35 @@ TRIVIAL_MERGES = {
 }
 
 
+QUESTION_SLOTS = ("onset", "severity", "pattern", "associated")
+
+
+def _question_variants(value) -> list[str]:
+    if not value:
+        return []
+    values = value if isinstance(value, list) else [value]
+    questions: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        question = str(raw).strip()
+        if not question or question in seen:
+            continue
+        seen.add(question)
+        questions.append(question)
+    return questions
+
+
+def _normalize_question_map(raw_questions) -> dict[str, list[str]]:
+    if not isinstance(raw_questions, dict):
+        return {}
+    normalized: dict[str, list[str]] = {}
+    for slot in QUESTION_SLOTS:
+        questions = _question_variants(raw_questions.get(slot))
+        if questions:
+            normalized[slot] = questions
+    return normalized
+
+
 def collect_symptoms() -> dict[str, dict]:
     """Collect all symptom_details from disease entities, merge by canonical ID."""
     raw: dict[str, list[dict]] = defaultdict(list)
@@ -119,12 +151,14 @@ def collect_symptoms() -> dict[str, dict]:
         body_sys_counter = Counter(d.get("body_system", "") for d in details_list if d.get("body_system"))
         type_counter = Counter(d.get("type", "") for d in details_list if d.get("type"))
 
-        best_q = {}
+        question_variants: dict[str, list[str]] = {}
         for d in details_list:
             cq = d.get("clarification_questions", {})
-            for k in ("onset", "severity", "pattern", "associated"):
-                if cq.get(k) and k not in best_q:
-                    best_q[k] = cq[k]
+            for slot in QUESTION_SLOTS:
+                for question in _question_variants(cq.get(slot) if isinstance(cq, dict) else None):
+                    question_variants.setdefault(slot, [])
+                    if question not in question_variants[slot]:
+                        question_variants[slot].append(question)
 
         catalog[sid] = {
             "symptom_id": sid,
@@ -132,7 +166,7 @@ def collect_symptoms() -> dict[str, dict]:
             "name_en": name_en_counter.most_common(1)[0][0] if name_en_counter else "",
             "body_system": body_sys_counter.most_common(1)[0][0] if body_sys_counter else "",
             "type": type_counter.most_common(1)[0][0] if type_counter else "",
-            "clarification_questions": best_q,
+            "clarification_questions": question_variants,
             "source_count": len(details_list),
         }
 
@@ -160,7 +194,9 @@ def cmd_collect(args) -> None:
 SYSTEM_PROMPT = """Bạn là chuyên gia y tế. Nhiệm vụ: chuẩn hóa danh mục triệu chứng y khoa.
 
 Nhận input là danh sách triệu chứng (JSON array), mỗi item có:
-- symptom_id, name_vi, name_en, body_system, type, clarification_questions
+- symptom_id, name_vi, name_en, body_system, type, clarification_questions.
+- clarification_questions là object; mỗi key onset/severity/pattern/associated
+  có value là array câu hỏi lấy từ các bệnh có triệu chứng này.
 
 Nhiệm vụ:
 1. Kiểm tra và sửa name_vi, name_en cho chính xác (thuật ngữ y khoa chuẩn).
@@ -168,45 +204,74 @@ Nhiệm vụ:
 3. Chuẩn hóa body_system thành 1 trong: Tim mạch, Hô hấp, Tiêu hóa, Thần kinh,
    Cơ xương khớp, Nội tiết, Huyết học, Thận - Tiết niệu, Da, Mắt, Tai Mũi Họng,
    Toàn thân, Tâm thần, Sinh dục, Miễn dịch.
-4. Nếu clarification_questions thiếu bất kỳ key nào (onset/severity/pattern/associated)
-   → bổ sung câu hỏi phù hợp bằng tiếng Việt.
-5. Nếu type trống → điền "objective" hoặc "subjective".
+4. Với từng key trong clarification_questions:
+   - Nếu các câu hỏi giống hoặc gần giống nhau, gộp thành 1 câu ngắn gọn.
+   - Nếu các câu hỏi hỏi ý khác nhau về mặt lâm sàng, giữ thành nhiều câu.
+   - Không gộp nhiều ý lâm sàng khác nhau vào một câu hỏi nhiều vế.
+   - Mỗi value luôn là array string, kể cả khi chỉ còn 1 câu.
+   - Tối đa 3 câu mỗi key, ưu tiên câu hỏi dễ trả lời qua chat.
+   - Không dùng dấu nháy kép " bên trong nội dung câu hỏi; nếu cần nhấn mạnh
+     một cụm từ, dùng dấu nháy đơn hoặc bỏ dấu nháy.
+5. Nếu clarification_questions thiếu key onset/severity/pattern/associated
+   → bổ sung 1 câu hỏi phù hợp bằng tiếng Việt dưới dạng array 1 phần tử.
+6. Nếu type trống → điền "objective" hoặc "subjective".
 
 Trả về JSON array đã chuẩn hóa, giữ nguyên thứ tự. CHỈ trả JSON, không giải thích."""
 
-BATCH_SIZE = 50
-OPTION_BATCH_SIZE = 50
+BATCH_SIZE = 5
+OPTION_BATCH_SIZE = 5
 
 OPTION_SYSTEM_PROMPT = """Bạn là chuyên gia y tế thiết kế nút trả lời nhanh cho chatbot y tế.
 
 Input là JSON array các triệu chứng. Mỗi item có:
 - symptom_id
 - name_vi
-- clarification_questions: object có thể gồm onset/severity/pattern/associated
+- clarification_questions: object có thể gồm onset/severity/pattern/associated.
+  Mỗi value là array câu hỏi tiếng Việt.
 
 Nhiệm vụ:
 1. Tạo field clarification_options cho từng symptom_id.
-2. clarification_options luôn có key "presence" và các key tương ứng với
+2. Tạo field clarification_selection_modes cho từng symptom_id.
+3. clarification_options luôn có key "presence" và các key tương ứng với
    clarification_questions đang có.
-3. Mỗi value là array string tiếng Việt, ngắn gọn, dễ bấm trên điện thoại.
-4. Mỗi array phải có "Không rõ" và "Trả lời luôn" ở cuối, trừ khi đã có sẵn.
-5. presence nên là lựa chọn xác nhận triệu chứng, ví dụ:
+4. presence là array string. Với onset/severity/pattern/associated:
+   - Nếu clarification_questions[slot] có N câu hỏi, clarification_options[slot]
+     phải là array có N phần tử.
+   - Mỗi phần tử là array string options cho câu hỏi cùng index.
+5. clarification_selection_modes có cùng shape:
+   - presence luôn là "single".
+   - Với onset/severity/pattern/associated, mỗi value là array có N phần tử.
+   - Mỗi mode là "single" nếu người dùng chỉ nên chọn 1 option.
+   - Mỗi mode là "multi" nếu nhiều option tích cực có thể cùng đúng.
+6. Mỗi option array phải có "Không rõ" và "Trả lời luôn" ở cuối, trừ khi đã có sẵn.
+7. Options phải ngắn gọn, dễ bấm trên điện thoại.
+8. presence nên là lựa chọn xác nhận triệu chứng, ví dụ:
    ["Có sốt", "Không sốt", "Không rõ", "Trả lời luôn"].
-6. Nếu câu hỏi hỏi nhiều triệu chứng liên quan, tạo lựa chọn riêng cho từng ý,
+9. Nếu câu hỏi hỏi nhiều triệu chứng liên quan, tạo lựa chọn riêng cho từng ý,
    ví dụ "Có kèm theo nôn hoặc vàng da không?" →
-   ["Có nôn", "Có vàng da", "Cả hai", "Không", "Không rõ", "Trả lời luôn"].
-7. Không đưa chẩn đoán, thuốc, xét nghiệm hoặc lời khuyên điều trị vào options.
-8. Không đổi câu hỏi, không đổi symptom_id, không thêm giải thích.
+   ["Có nôn", "Có vàng da", "Không", "Không rõ", "Trả lời luôn"]
+   và mode tương ứng là "multi". Không cần tạo option "Cả hai" khi mode là "multi".
+10. "Không", "Không rõ", "Trả lời luôn" là lựa chọn loại trừ, không phải multi.
+11. Không đưa chẩn đoán, thuốc, xét nghiệm hoặc lời khuyên điều trị vào options.
+12. Không dùng dấu nháy kép " bên trong nội dung option.
+13. Không đổi câu hỏi, không đổi symptom_id, không thêm giải thích.
 
 Trả về JSON array đúng thứ tự input. Mỗi item chỉ gồm:
 {
   "symptom_id": "...",
   "clarification_options": {
     "presence": [...],
-    "onset": [...],
-    "severity": [...],
-    "pattern": [...],
-    "associated": [...]
+    "onset": [[...], [...]],
+    "severity": [[...]],
+    "pattern": [[...]],
+    "associated": [[...]]
+  },
+  "clarification_selection_modes": {
+    "presence": "single",
+    "onset": ["single", "single"],
+    "severity": ["single"],
+    "pattern": ["single"],
+    "associated": ["multi"]
   }
 }
 
@@ -261,7 +326,9 @@ def _option_prompt_item(item: dict) -> dict:
     return {
         "symptom_id": item.get("symptom_id", ""),
         "name_vi": item.get("name_vi", ""),
-        "clarification_questions": item.get("clarification_questions", {}) or {},
+        "clarification_questions": _normalize_question_map(
+            item.get("clarification_questions", {}) or {}
+        ),
     }
 
 
@@ -276,7 +343,7 @@ def cmd_prepare_options(args) -> None:
         batch_id = f"symptom_options_{i:04d}"
         requests.append(chat_completion_request(
             batch_id,
-            FAST_MODEL,
+            MODEL,
             [{
                 "role": "user",
                 "content": json.dumps(batch_items, ensure_ascii=False),
@@ -351,8 +418,14 @@ def cmd_collect_results(args) -> None:
     print(f"Fetched {len(results)} results")
 
     SYMPTOM_OUT.mkdir(parents=True, exist_ok=True)
+    expected_ids: set[str] = set()
+    catalog_path = WORK_DIR / "symptom_catalog_raw.json"
+    if catalog_path.exists():
+        raw_catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        expected_ids = set(raw_catalog.keys())
 
     ok = bad = 0
+    saved_ids: set[str] = set()
     for r in results:
         cid = r.get("custom_id", "")
         try:
@@ -377,6 +450,9 @@ def cmd_collect_results(args) -> None:
             sid = item.get("symptom_id", "")
             if not sid:
                 continue
+            item["clarification_questions"] = _normalize_question_map(
+                item.get("clarification_questions", {}) or {}
+            )
             slug = sid.replace("symptom:", "").strip()
             if not slug:
                 continue
@@ -384,6 +460,7 @@ def cmd_collect_results(args) -> None:
             out_path.write_text(
                 json.dumps(item, ensure_ascii=False, indent=2), encoding="utf-8"
             )
+            saved_ids.add(sid)
             ok += 1
 
     alias_src = WORK_DIR / "alias_map.json"
@@ -393,6 +470,13 @@ def cmd_collect_results(args) -> None:
         )
 
     print(f"\nĐã lưu {ok} symptom entities ({bad} batch parse fail) → {SYMPTOM_OUT}")
+    if expected_ids:
+        missing_ids = sorted(expected_ids - saved_ids)
+        if missing_ids:
+            preview = ", ".join(missing_ids[:10])
+            raise SystemExit(
+                f"Thiếu {len(missing_ids)} symptom từ kết quả LLM: {preview}"
+            )
 
 
 def _symptom_path(symptom_id: str) -> Path:
@@ -400,15 +484,75 @@ def _symptom_path(symptom_id: str) -> Path:
     return SYMPTOM_OUT / f"{slug}.json"
 
 
-def _normalized_option_map(raw_options: dict, allowed_slots: set[str]) -> dict[str, list[str]]:
-    normalized: dict[str, list[str]] = {}
+def _normalized_option_map(
+    raw_options: dict,
+    questions: dict[str, list[str]],
+) -> dict[str, list]:
+    allowed_slots = {"presence", *questions.keys()}
+    normalized: dict[str, list] = {}
     for slot, options in raw_options.items():
         if slot not in allowed_slots:
             continue
-        labels = normalize_options(options)
-        if labels:
-            normalized[slot] = list(labels)
+        if slot == "presence":
+            labels = normalize_options(options)
+            if labels:
+                normalized[slot] = list(labels)
+            continue
+
+        question_count = len(questions.get(slot, []))
+        if question_count == 0:
+            continue
+        option_groups = options if isinstance(options, list) else []
+        if question_count == 1:
+            groups = [option_groups] if option_groups else []
+        elif option_groups and all(isinstance(group, list) for group in option_groups):
+            groups = option_groups[:question_count]
+        else:
+            groups = [option_groups] if option_groups else []
+        normalized_groups: list[list[str]] = []
+        for group in groups:
+            labels = normalize_options(group)
+            if labels:
+                normalized_groups.append(list(labels))
+        if normalized_groups:
+            normalized[slot] = normalized_groups
     return normalized
+
+
+def _normalize_selection_mode(raw_mode, default: str) -> str:
+    mode = str(raw_mode or "").strip().casefold()
+    return mode if mode in {"single", "multi"} else default
+
+
+def _raw_slot_mode(raw_modes: dict, slot: str, index: int):
+    value = raw_modes.get(slot)
+    if isinstance(value, list):
+        if 0 <= index < len(value):
+            return value[index]
+        return None
+    return value
+
+
+def _normalized_selection_modes(
+    raw_modes: dict,
+    questions: dict[str, list[str]],
+    options: dict[str, list],
+) -> dict[str, list | str]:
+    modes: dict[str, list | str] = {"presence": "single"}
+    raw_modes = raw_modes if isinstance(raw_modes, dict) else {}
+    for slot, slot_questions in questions.items():
+        groups = options.get(slot, [])
+        slot_modes: list[str] = []
+        for index, question in enumerate(slot_questions):
+            group_options: tuple[str, ...] = ()
+            if isinstance(groups, list) and index < len(groups) and isinstance(groups[index], list):
+                group_options = tuple(str(option) for option in groups[index])
+            default = infer_selection_mode(slot, group_options, str(question))
+            mode = _normalize_selection_mode(_raw_slot_mode(raw_modes, slot, index), default)
+            slot_modes.append(default if default == "multi" else mode)
+        if slot_modes:
+            modes[slot] = slot_modes
+    return modes
 
 
 def _merge_option_payload(payload: dict) -> bool:
@@ -423,17 +567,20 @@ def _merge_option_payload(payload: dict) -> bool:
     except (json.JSONDecodeError, OSError):
         return False
 
-    questions = current.get("clarification_questions", {}) or {}
-    if not isinstance(questions, dict):
-        questions = {}
+    questions = _normalize_question_map(current.get("clarification_questions", {}) or {})
+    current["clarification_questions"] = questions
     raw_options = payload.get("clarification_options", {})
     if not isinstance(raw_options, dict):
         return False
-    allowed_slots = {"presence", *questions.keys()}
-    options = _normalized_option_map(raw_options, allowed_slots)
+    options = _normalized_option_map(raw_options, questions)
     if not options.get("presence"):
         return False
     current["clarification_options"] = options
+    current["clarification_selection_modes"] = _normalized_selection_modes(
+        payload.get("clarification_selection_modes", {}),
+        questions,
+        options,
+    )
     path.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
     return True
 

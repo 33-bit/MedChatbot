@@ -16,7 +16,7 @@ def symptom_names(session: PatientSession) -> list[str]:
         name = symptom.get("name") or symptom.get("symptom_id", "")
         if name:
             details = [
-                f"{label}: {symptom[key]}"
+                f"{label}: {_detail_value(symptom[key])}"
                 for key, label in _DETAIL_LABELS.items()
                 if symptom.get(key)
             ]
@@ -24,6 +24,12 @@ def symptom_names(session: PatientSession) -> list[str]:
                 name = f"{name} ({'; '.join(details)})"
             names.append(name)
     return names
+
+
+def _detail_value(value) -> str:
+    if isinstance(value, list):
+        return "; ".join(str(item) for item in value if item)
+    return str(value)
 
 
 def candidate_names(session: PatientSession, limit: int = 5) -> list[str]:
@@ -89,6 +95,8 @@ def direct_diagnostic_prompt(session: PatientSession, user_request: str) -> tupl
         f"Các bệnh hệ thống đang cân nhắc: {candidates}.\n"
         f"Yêu cầu mới nhất của người dùng: {user_request}.\n\n"
         "Yêu cầu trả lời theo template tư vấn:\n"
+        "- Trình bày tối đa 4 phần, mỗi phần có tiêu đề ngắn và 1-3 ý ngắn.\n"
+        "- Không dùng dòng phân cách như \"---\" và không tạo quá nhiều mục nhỏ.\n"
         "- Ghi nhận ngắn gọn điều người dùng đang lo.\n"
         "- Nhận định sơ bộ và nói rõ dữ kiện hiện tại chưa đủ để chẩn đoán chính xác, "
         "không chẩn đoán chắc chắn qua chat.\n"

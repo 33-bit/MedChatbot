@@ -44,6 +44,7 @@ from src.processing.batch_api import (
 FINAL_DIR = OUTPUT_DIR / "bachmai" / "final"
 ENTITY_OUT = OUTPUT_DIR / "entities" / "diseases"
 WORK_DIR = OUTPUT_DIR / "bachmai" / "batch" / "entities"
+QUESTION_SLOTS = ("onset", "severity", "pattern", "associated")
 
 SYSTEM_PROMPT = """Bạn là chuyên gia y khoa. Nhiệm vụ: phân tích bài hướng dẫn chẩn đoán & điều trị
 của 1 bệnh (tiếng Việt), trích xuất ra JSON entity theo schema dưới đây.
@@ -89,10 +90,10 @@ SCHEMA:
       "body_system": "Hệ cơ quan",
       "type": "objective | subjective",
       "clarification_questions": {
-        "onset": "Câu hỏi về thời gian khởi phát",
-        "severity": "Câu hỏi về mức độ",
-        "pattern": "Câu hỏi về kiểu",
-        "associated": "Câu hỏi về triệu chứng kèm theo"
+        "onset": ["Câu hỏi về thời gian khởi phát"],
+        "severity": ["Câu hỏi về mức độ"],
+        "pattern": ["Câu hỏi về kiểu/diễn tiến"],
+        "associated": ["Câu hỏi về triệu chứng kèm theo"]
       }
     }
   ]
@@ -109,12 +110,54 @@ QUY TẮC:
 - red_flag_ids: triệu chứng báo hiệu nặng / cần nhập viện.
 - symptom_details: liệt kê đầy đủ MỌI symptom đã đề cập (cả primary + red_flag).
   Mỗi symptom có clarification_questions để chatbot hỏi follow-up.
+  Trong clarification_questions, mỗi key onset/severity/pattern/associated là array string.
+  Với mỗi symptom trong từng bệnh, mỗi key có thể có nhiều câu hỏi nếu tài liệu gợi ý
+  nhiều khía cạnh cần làm rõ. Không gộp nhiều ý lâm sàng khác nhau vào một câu hỏi;
+  hãy tách thành nhiều câu trong cùng array. Tối đa 3 câu mỗi key.
 - hospitalization_criteria: extract từ nội dung "Chỉ định nhập viện" hoặc suy luận
   từ context. comorbid_disease_ids: bệnh nền làm tăng nguy cơ.
 - prevention_vi: extract từ section phòng bệnh. Nếu không có → [].
 - home_care_summary_vi: chỉ áp dụng cho bệnh có thể tự chăm sóc tại nhà.
 - Trích xuất TỪ NỘI DUNG bài viết, KHÔNG bịa thêm thông tin ngoài.
 - CHỈ trả về JSON, không code fence, không giải thích."""
+
+
+def _question_variants(value) -> list[str]:
+    if not value:
+        return []
+    values = value if isinstance(value, list) else [value]
+    questions: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        question = str(raw).strip()
+        if not question or question in seen:
+            continue
+        seen.add(question)
+        questions.append(question)
+    return questions
+
+
+def _normalize_question_map(raw_questions) -> dict[str, list[str]]:
+    if not isinstance(raw_questions, dict):
+        return {}
+    normalized: dict[str, list[str]] = {}
+    for slot in QUESTION_SLOTS:
+        questions = _question_variants(raw_questions.get(slot))
+        if questions:
+            normalized[slot] = questions
+    return normalized
+
+
+def _normalize_symptom_detail_questions(entity: dict) -> None:
+    details = entity.get("symptom_details")
+    if not isinstance(details, list):
+        return
+    for detail in details:
+        if not isinstance(detail, dict):
+            continue
+        detail["clarification_questions"] = _normalize_question_map(
+            detail.get("clarification_questions", {}) or {}
+        )
 
 
 def build_user_prompt(doc: dict) -> str:
@@ -237,6 +280,7 @@ def cmd_collect(args) -> None:
             print(f"  - {cid}: no ICD-10 → skipped")
             continue
 
+        _normalize_symptom_detail_questions(parsed)
         parsed["disease_slug"] = cid
         (ENTITY_OUT / f"{cid}.json").write_text(
             json.dumps(parsed, ensure_ascii=False, indent=2), encoding="utf-8"

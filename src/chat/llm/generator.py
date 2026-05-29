@@ -24,6 +24,7 @@ DRUG_URL_TEMPLATE = "https://trungtamthuoc.com/hoat-chat/{slug}"
 NO_DATA_REPLY = ("Tôi không tìm thấy thông tin phù hợp trong tài liệu. "
                  "Bạn vui lòng hỏi cụ thể hơn hoặc tham khảo ý kiến bác sĩ.")
 _CITATION_RE = re.compile(r"\[([0-9][0-9,\-\s]*)\]")
+_HORIZONTAL_RULE_RE = re.compile(r"(?m)^\s*-{3,}\s*$")
 
 
 def _source_key(h: Hit) -> tuple:
@@ -136,6 +137,12 @@ def _extract_usage(response) -> dict | None:
     }
 
 
+def _clean_answer_format(text: str) -> str:
+    text = _HORIZONTAL_RULE_RE.sub("", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 def generate(
     question: str,
     hits: list[Hit],
@@ -186,7 +193,7 @@ def generate(
                  MODEL, elapsed_ms(start))
 
     usage = _extract_usage(response)
-    answer = message_text(response).strip()
+    answer = _clean_answer_format(message_text(response))
     if not answer:
         log.warning("Generator LLM returned an empty response")
         if return_meta:
