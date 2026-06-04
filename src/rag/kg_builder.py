@@ -5,7 +5,8 @@ Build a Knowledge Graph in Neo4j from disease, drug, and symptom entities.
 
 Nodes: Disease, Drug, Symptom, ICD10, Chapter
 Edges: HAS_SYMPTOM, TREATS, CONTRAINDICATED_FOR, INTERACTS_WITH,
-       BELONGS_TO_CHAPTER, HAS_ICD10, RED_FLAG_FOR, RELIEVES, etc.
+       BELONGS_TO_CHAPTER, HAS_ICD10, RED_FLAG_FOR, RELIEVES,
+       MAY_CAUSE_ADR, etc.
 
 Usage:
     python -m src.rag.kg_builder          # load all into Neo4j
@@ -44,6 +45,12 @@ def load_alias_map() -> dict[str, str]:
 
 def canon(sid: str, alias_map: dict[str, str]) -> str:
     return alias_map.get(sid, sid)
+
+
+def adr_objects(items: object) -> list[dict]:
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
 
 
 def collect_graph(alias_map: dict[str, str]) -> tuple[dict[str, dict], list[dict]]:
@@ -122,6 +129,22 @@ def collect_graph(alias_map: dict[str, str]) -> tuple[dict[str, dict], list[dict
             "adr_common": json.dumps(d.get("adr_summary", {}).get("common", []), ensure_ascii=False),
             "adr_rare_serious": json.dumps(d.get("adr_summary", {}).get("rare_serious", []), ensure_ascii=False),
         }
+
+        adr_summary = d.get("adr_summary", {})
+        for frequency in ("common", "rare_serious"):
+            for adr in adr_objects(adr_summary.get(frequency, [])):
+                symptom_id = adr.get("symptom_id", "")
+                if not symptom_id:
+                    continue
+                edge = {
+                    "src": drug_id,
+                    "tgt": canon(symptom_id, alias_map),
+                    "type": "MAY_CAUSE_ADR",
+                    "frequency": frequency,
+                }
+                if adr.get("text"):
+                    edge["text"] = adr["text"]
+                edges.append(edge)
 
         for sid in d.get("indicated_for", {}).get("symptom_ids", []):
             edges.append({"src": drug_id, "tgt": canon(sid, alias_map), "type": "RELIEVES"})

@@ -2,10 +2,10 @@
 """Generate medical RAG benchmark cases from disease/drug source documents.
 
 Usage:
-    python3 eval/generate_llm_benchmark.py --target 1700
-    python3 eval/generate_llm_benchmark.py --target 1700 --concurrency 1
-    python3 eval/generate_llm_benchmark.py --target 1700 --concurrency 1 --content-budget 8000
-    python3 eval/generate_llm_benchmark.py --target 50 --out eval/medical_qa_benchmark.jsonl
+    python3 eval/generators/generate_llm_benchmark.py --target 1700
+    python3 eval/generators/generate_llm_benchmark.py --target 1700 --concurrency 1
+    python3 eval/generators/generate_llm_benchmark.py --target 1700 --concurrency 1 --content-budget 8000
+    python3 eval/generators/generate_llm_benchmark.py --target 50 --out eval/datasets/medical_qa_benchmark.jsonl
 
 For each indexed document, the fast LLM is asked to produce 2-3 test cases
 covering the configured categories. Each case carries:
@@ -35,7 +35,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.chat.clients import get_openai
@@ -83,7 +83,7 @@ Category = Literal[
     "safety_off_topic",
 ]
 
-DEFAULT_OUT = PROJECT_ROOT / "eval" / "medical_qa_benchmark.jsonl"
+DEFAULT_OUT = PROJECT_ROOT / "eval" / "datasets" / "medical_qa_benchmark.jsonl"
 DISEASE_DIR = PROJECT_ROOT / "outputs" / "bachmai" / "final"
 DRUG_DIR = PROJECT_ROOT / "outputs" / "otc_drugs" / "final_json"
 

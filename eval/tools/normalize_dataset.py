@@ -17,8 +17,8 @@ Walks an existing benchmark JSONL and rewrites every row so:
   `supporting_heading_paths`) cleared per the dataset spec.
 
 Usage:
-    python3 eval/normalize_dataset.py --in eval/medical_qa_benchmark.jsonl \
-                                      --out eval/medical_qa_benchmark.jsonl
+    python3 eval/tools/normalize_dataset.py --in eval/datasets/medical_qa_benchmark.jsonl \
+                                            --out eval/datasets/medical_qa_benchmark.jsonl
 
 Coercion rules (all idempotent):
 

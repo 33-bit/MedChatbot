@@ -20,9 +20,14 @@ How to evaluate the medical RAG chatbot — what we measure, why, and how to run
 A RAG chatbot fails in distinct places: the **retriever** can miss the right document; the **generator** can hallucinate or omit safety advice; the **system** can be slow or expensive. Reporting one headline pass rate hides this. The harness scores each stage separately and reports operational numbers alongside.
 
 Files:
-- `eval/medical_qa_benchmark.jsonl` — the JSONL benchmark dataset.
-- `eval/generate_llm_benchmark.py` — synthesize new cases from disease/drug source docs.
-- `eval/run_eval.py` — single entry point with all subcommands.
+- `eval/datasets/medical_qa_benchmark.jsonl` — legacy JSONL benchmark dataset.
+- `eval/datasets/medical_qa_benchmark_v2.jsonl` — current category-focused JSONL benchmark dataset.
+- `eval/core.py` — shared non-CLI evaluation plumbing.
+- `eval/generators/` — scripts that synthesize benchmark rows.
+- `eval/categories/` — category-specific evaluation scripts and policies.
+- `eval/metrics.py` — shared metric formulas imported by category modules and the runner.
+- `eval/tools/` — dataset normalization and viewer utilities.
+- `eval/artifacts/` — generated local artifacts such as the dataset viewer HTML.
 - `eval/results/` — JSONL results + `.summary.json` sidecars + per-category split (`<results>-by-category/<cat>.jsonl`).
 
 ---
@@ -49,15 +54,15 @@ Each case is one JSONL row. Cases are either authored by hand or synthesized by 
 ### 2.2 Generating new cases
 
 ```bash
-python3 eval/generate_llm_benchmark.py --target 250
-python3 eval/generate_llm_benchmark.py --target 250 --concurrency 1
-python3 eval/generate_llm_benchmark.py --target 250 --concurrency 1 --content-budget 8000
-python3 eval/generate_llm_benchmark.py --target 50 --out eval/medical_qa_benchmark.jsonl --seed 7
+python3 eval/generators/generate_llm_benchmark.py --target 250
+python3 eval/generators/generate_llm_benchmark.py --target 250 --concurrency 1
+python3 eval/generators/generate_llm_benchmark.py --target 250 --concurrency 1 --content-budget 8000
+python3 eval/generators/generate_llm_benchmark.py --target 50 --out eval/datasets/medical_qa_benchmark.jsonl --seed 7
 ```
 
 Flags:
 - `--target` — maximum number of LLM-generated cases to keep (default `250`).
-- `--out` — output JSONL path (default `eval/medical_qa_benchmark.jsonl`).
+- `--out` — output JSONL path (default `eval/datasets/medical_qa_benchmark.jsonl`).
 - `--seed` — random seed for document shuffling and per-doc case counts (default `42`).
 - `--concurrency` — maximum concurrent LLM requests (default from `MAX_CONCURRENCY`; use `1` for one request at a time).
 - `--content-budget` — maximum source-document characters sent in each prompt (default from `CONTENT_CHAR_BUDGET`; lower it for ds2api upload/long-context failures).
@@ -85,8 +90,8 @@ If the bot still asks a clarifying question on the last turn, the harness automa
 ### 2.3 Browsing the dataset
 
 ```bash
-python3 eval/export_dataset_viewer.py
-open eval/dataset_viewer.html
+python3 eval/tools/export_dataset_viewer.py
+open eval/artifacts/dataset_viewer.html
 ```
 
 Renders every case with category badges, reference answers, and source links. Useful for spotting low-quality auto-generated cases before running the full benchmark.
@@ -234,7 +239,7 @@ p95 is the headline operational number. Average hides spikes; p95 is what one in
 
 #### Token usage and cost
 
-When the pipeline returns meta (in-process via `answer_with_meta` or via `run-api --with-meta`), each case records `usage = {prompt_tokens, completion_tokens, total_tokens, cost_usd}`. Cost is computed from `MODEL_PRICING` (per 1k tokens, edit at the top of `eval/run_eval.py` to match your billing). When pricing is missing, cost reports `0.0` rather than guessing.
+When the pipeline returns meta (in-process via `answer_with_meta` or via `run-api --with-meta`), each case records `usage = {prompt_tokens, completion_tokens, total_tokens, cost_usd}`. Cost is computed from `MODEL_PRICING` (per 1k tokens, edit at the top of `eval/core.py` to match your billing). When pricing is missing, cost reports `0.0` rather than guessing.
 
 `avg_cost_per_answer_usd` is the headline rollup. `total_cost_usd` is the absolute spend for the run.
 
@@ -248,16 +253,20 @@ Counts pipeline exceptions, HTTP failures, and timeouts. Distinct from `pass_rat
 
 ---
 
-## 4. Running the harness
+## 4. Running Category Evaluations
 
-All commands live in `eval/run_eval.py`.
+Each category has its own executable file under `eval/categories/`. Edit that category file to add or remove metrics/checks for that category. Shared metric functions live in `eval/metrics.py`.
+
+Examples below use `disease_info.py`; replace it with `drug_info.py` or `symptom_triage.py` as needed.
 
 ### 4.1 Retrieval-only
 
 Call this **first**. If recall is bad, downstream numbers are doomed.
 
 ```bash
-python3 eval/run_eval.py run-retrieval --limit 50 --ks 5 10
+PYTHONPATH=. python3 eval/categories/disease_info.py run-retrieval \
+  --dataset eval/datasets/medical_qa_benchmark_v2.jsonl \
+  --limit 50 --ks 5 10
 ```
 
 Computes doc + chunk recall@k, MRR, and context precision per case. Skips cases without `source_docs` or `gold_chunks`.
@@ -265,8 +274,13 @@ Computes doc + chunk recall@k, MRR, and context precision per case. Skips cases 
 ### 4.2 Full pipeline (in-process)
 
 ```bash
-python3 eval/run_eval.py run-direct --use-judge --limit 50
-python3 eval/run_eval.py run-direct --limit 10  # cheap smoke test: deterministic checks only
+PYTHONPATH=. python3 eval/categories/disease_info.py run-direct \
+  --dataset eval/datasets/medical_qa_benchmark_v2.jsonl \
+  --use-judge --limit 50
+
+PYTHONPATH=. python3 eval/categories/disease_info.py run-direct \
+  --dataset eval/datasets/medical_qa_benchmark_v2.jsonl \
+  --limit 10
 ```
 
 Calls `answer_with_meta` directly. Each case is given a fresh `session_id` so multi-turn cases don't leak state across cases. Captures usage, retrieved chunks, and per-stage latency. Use `--use-judge` for headline pass/fail on document-grounded categories.
@@ -275,7 +289,9 @@ Calls `answer_with_meta` directly. Each case is given a fresh `session_id` so mu
 
 ```bash
 uvicorn src.server.app:app --host 0.0.0.0 --port 8000  # in another shell
-python3 eval/run_eval.py run-api --api-key "$CHAT_API_KEY" --with-meta --use-judge --limit 50
+PYTHONPATH=. python3 eval/categories/disease_info.py run-api \
+  --dataset eval/datasets/medical_qa_benchmark_v2.jsonl \
+  --api-key "$CHAT_API_KEY" --with-meta --use-judge --limit 50
 ```
 
 `--with-meta` adds `?include_meta=1` to each `/chat` request so the server returns usage + retrieved + latency. Without the flag, behavior is identical to the channel modules — answer text only.
@@ -285,33 +301,26 @@ python3 eval/run_eval.py run-api --api-key "$CHAT_API_KEY" --with-meta --use-jud
 If a third-party bot ran the dataset and saved `{case_id, answer}` rows to a file, score them:
 
 ```bash
-python3 eval/run_eval.py score-file --answers-file other_bot.jsonl --bot-name other-bot --use-judge
+PYTHONPATH=. python3 eval/categories/disease_info.py score-file \
+  --dataset eval/datasets/medical_qa_benchmark_v2.jsonl \
+  --answers-file other_bot.jsonl --bot-name other-bot --use-judge
 ```
 
 Same scoring rules, no retrieval/operational metrics (they aren't in the file).
 
-### 4.5 Compare runs
+### 4.5 Category Metric Files
+
+Each category file defines editable lists such as `ANSWER_CHECKS`, `RETRIEVAL_METRICS`, and `JUDGE_METRICS`. To add or remove a category-specific metric, edit only that category file and import metric functions from `eval/metrics.py`.
+
+### 4.6 Excluding Cases
+
+Category scripts already include only their own category. `--exclude-categories` is still available for ad hoc filtering:
 
 ```bash
-python3 eval/run_eval.py compare eval/results/*.jsonl --output eval/results/compare.json
+PYTHONPATH=. python3 eval/categories/disease_info.py run-direct \
+  --dataset eval/datasets/medical_qa_benchmark_v2.jsonl \
+  --exclude-categories disease_info
 ```
-
-Loads every result row from every file and aggregates a single summary table. Useful for A/B comparisons and tracking regressions across commits.
-
-### 4.6 Excluding categories
-
-Every run mode supports `--exclude-categories`. Pass space-separated category names to skip those cases entirely:
-
-```bash
-# Skip diagnostic_flow when comparing this bot to a single-shot competitor.
-python3 eval/run_eval.py run-direct --exclude-categories diagnostic_flow
-
-# Multiple categories.
-python3 eval/run_eval.py run-api --api-key "$CHAT_API_KEY" \
-    --exclude-categories diagnostic_flow safety_prompt_injection
-```
-
-This is the recommended way to publish cross-bot comparisons. Other chatbots don't implement a clarification-narrowing loop, so reporting `diagnostic_flow` against them gives a number that looks comparable but isn't. State exclusions explicitly when reporting.
 
 ### 4.7 Force-direct-answer for multi-turn cases
 

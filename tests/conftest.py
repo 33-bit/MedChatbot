@@ -32,6 +32,7 @@ def app_client(monkeypatch):
         return None
 
     monkeypatch.setattr(app_module, "preload_retrieval_models", lambda: None)
+    monkeypatch.setattr(app_module, "ensure_fulltext_indexes", lambda: None)
     monkeypatch.setattr(app_module.telegram, "setup_bot_menu", noop_setup_bot_menu)
 
     with TestClient(app_module.app) as client:

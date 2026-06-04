@@ -27,12 +27,14 @@ class KGContext:
     related_diseases: list[dict] = field(default_factory=list)
     related_drugs: list[dict] = field(default_factory=list)
     related_symptoms: list[dict] = field(default_factory=list)
+    related_adrs: list[dict] = field(default_factory=list)
     relationships: list[str] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
         return not (self.matched_entities or self.related_diseases
                     or self.related_drugs or self.related_symptoms
+                    or self.related_adrs
                     or self.relationships)
 
 
@@ -116,11 +118,18 @@ def _traverse_drug(tx, drug_id: str) -> dict:
         "RETURN other.id AS id, other.name_vi AS name LIMIT 10",
         did=drug_id,
     ).data()
+    adverse_reactions = tx.run(
+        "MATCH (dr {id: $did})-[r:MAY_CAUSE_ADR]->(s:Symptom) "
+        "RETURN s.id AS id, coalesce(s.name_vi, s.name_en, r.text) AS name, "
+        "r.frequency AS frequency LIMIT 10",
+        did=drug_id,
+    ).data()
     return {
         "treats": treats,
         "relieves": relieves,
         "contraindicated_for": contraindicated,
         "interactions": interactions,
+        "adverse_reactions": adverse_reactions,
     }
 
 
@@ -168,6 +177,9 @@ def _ingest_drug(ctx: KGContext, entity_name: str, info: dict) -> None:
     for i in info["interactions"]:
         if i.get("name"):
             ctx.relationships.append(f"{entity_name} tương tác với: {i['name']}")
+    for adr in info.get("adverse_reactions", []):
+        if adr.get("name"):
+            ctx.related_adrs.append(adr)
 
 
 def _ingest_symptom(ctx: KGContext, entity_name: str, info: dict) -> None:
@@ -260,6 +272,9 @@ def format_kg_context(ctx: KGContext) -> str:
 
     if (drugs := _dedupe_names(ctx.related_drugs)):
         parts.append(f"Thuốc liên quan: {', '.join(drugs)}")
+
+    if (adrs := _dedupe_names(ctx.related_adrs)):
+        parts.append(f"Tác dụng không mong muốn: {', '.join(adrs)}")
 
     if ctx.relationships:
         parts.append("Quan hệ y khoa:")

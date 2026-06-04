@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Single-file eval harness for the medical RAG chatbot.
+"""Shared evaluation core for category-specific eval scripts.
 
-Subcommands:
+Category files under eval/categories are the executable entrypoints. This
+module holds the shared mechanics for their subcommands:
   run-direct      Call src.chat.answer_with_meta in-process (full pipeline).
   run-api         Call a running /chat?include_meta=1 server.
   run-retrieval   Retrieval-only: recall@k, MRR (doc-level + chunk-level), context precision.
@@ -36,6 +37,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from eval import metrics as eval_metrics
+from eval.categories.registry import apply_category_checks as apply_registered_category_checks
+
 try:
     import httpx
 except ModuleNotFoundError:  # pragma: no cover - only needed for API mode
@@ -47,7 +55,7 @@ except ModuleNotFoundError:  # pragma: no cover - only needed for API mode
 # ---------------------------------------------------------------------------
 
 
-DEFAULT_DATASET = Path("eval/medical_qa_benchmark.jsonl")
+DEFAULT_DATASET = Path("eval/datasets/medical_qa_benchmark.jsonl")
 DEFAULT_OUT_DIR = Path("eval/results")
 DEFAULT_PASS_THRESHOLD = 0.75
 CITATION_RE = re.compile(r"\[(\d+)\]")
@@ -112,10 +120,12 @@ def iter_cases(
     ids: set[str] | None,
     limit: int | None,
     exclude_categories: set[str] | None = None,
+    include_categories: set[str] | None = None,
 ):
     selected = [
         case for case in cases
         if (not ids or case["id"] in ids)
+        and (not include_categories or case.get("category") in include_categories)
         and (not exclude_categories or case.get("category") not in exclude_categories)
     ]
     if limit is not None:
@@ -141,6 +151,20 @@ def is_still_clarifying(answer: str) -> bool:
 def result_path(out_dir: Path, bot_name: str, suffix: str = "results") -> Path:
     safe_bot = re.sub(r"[^A-Za-z0-9_.-]+", "_", bot_name).strip("_") or "bot"
     return out_dir / f"{safe_bot}-{suffix}-{timestamp()}.jsonl"
+
+
+def _include_categories_from_args(args: argparse.Namespace) -> set[str] | None:
+    categories = set(getattr(args, "include_categories", None) or [])
+    category = getattr(args, "category", None)
+    if category:
+        categories.add(category)
+    return categories or None
+
+
+def _result_path_for_args(args: argparse.Namespace, suffix: str) -> Path:
+    category = getattr(args, "category", None)
+    category_suffix = f"{category}-{suffix}" if category else suffix
+    return result_path(args.out_dir, args.bot_name, suffix=category_suffix)
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +273,15 @@ def retrieval_metrics(
                 round(sum(1 for cid in top if cid in chunk_set) / len(top), 4)
                 if top else 0.0
             )
+            coverage = eval_metrics.gold_chunk_coverage_at_k(gold_chunks, retrieved_chunks, k)
+            if coverage is not None:
+                metrics[f"gold_chunk_coverage@{k}"] = coverage
+            for source_type, value in eval_metrics.source_type_coverage_at_k(
+                gold_chunks,
+                retrieved_chunks,
+                k,
+            ).items():
+                metrics[f"{source_type}_source_coverage@{k}"] = value
     return metrics
 
 
@@ -364,8 +397,8 @@ def judge(case: dict[str, Any], answer: str, *, client=None, model: str | None =
         from src.chat.clients import get_openai
         client = get_openai()
     if model is None:
-        from src.config import FAST_MODEL
-        model = FAST_MODEL
+        from src.config import MODEL
+        model = MODEL
 
     question = case.get("question") or " | ".join(case.get("turns") or [])
     reference = case.get("reference_answer", "")
@@ -433,22 +466,11 @@ def evaluate_answer(
     use_judge: bool = False,
 ) -> dict[str, Any]:
     scored = score_answer(case, answer, pass_threshold)
+    scored = apply_registered_category_checks(case, answer, scored, pass_threshold)
     judge_result = maybe_judge(case, answer, enabled=use_judge)
     if judge_result is None:
         return scored
-
-    scored["judge"] = judge_result
-    judge_score = _coerce_score(judge_result.get("combined_score"))
-    if judge_score is None:
-        scored["scoring_mode"] = "judge_error"
-        return scored
-
-    required_checks_passed = all(check["passed"] for check in scored["checks"])
-    scored["deterministic_score"] = scored["score"]
-    scored["score"] = judge_score
-    scored["passed"] = scored["score"] >= pass_threshold and required_checks_passed
-    scored["scoring_mode"] = "judge"
-    return scored
+    return eval_metrics.apply_judge_score(scored, judge_result, pass_threshold)
 
 
 # ---------------------------------------------------------------------------
@@ -678,6 +700,7 @@ def run_direct(args: argparse.Namespace) -> int:
         set(args.ids or []) or None,
         args.limit,
         exclude_categories=set(getattr(args, "exclude_categories", None) or []) or None,
+        include_categories=_include_categories_from_args(args),
     )
 
     try:
@@ -729,7 +752,7 @@ def run_direct(args: argparse.Namespace) -> int:
         suffix = " [FORCED]" if forced_direct_answer else ""
         print(f"[{index}/{len(selected)}] {case['id']} {marker} score={row['score']:.2f}{suffix}")
 
-    out = args.output or result_path(args.out_dir, args.bot_name)
+    out = args.output or _result_path_for_args(args, "results")
     write_jsonl(out, rows)
     write_per_category_files(out, rows)
     summary = summarize(rows)
@@ -761,6 +784,7 @@ def run_api(args: argparse.Namespace) -> int:
         set(args.ids or []) or None,
         args.limit,
         exclude_categories=set(getattr(args, "exclude_categories", None) or []) or None,
+        include_categories=_include_categories_from_args(args),
     )
     base = args.base_url.rstrip("/")
     url = base + "/chat" + ("?include_meta=1" if args.with_meta else "")
@@ -823,7 +847,7 @@ def run_api(args: argparse.Namespace) -> int:
             suffix = " [FORCED]" if forced_direct_answer else ""
             print(f"[{index}/{len(selected)}] {case['id']} {marker} score={row['score']:.2f}{suffix}")
 
-    out = args.output or result_path(args.out_dir, args.bot_name)
+    out = args.output or _result_path_for_args(args, "results")
     write_jsonl(out, rows)
     write_per_category_files(out, rows)
     summary = summarize(rows)
@@ -843,6 +867,7 @@ def score_file(args: argparse.Namespace) -> int:
     cases = {case["id"]: case for case in load_jsonl(args.dataset)}
     answers = load_jsonl(args.answers_file)
     excluded = set(args.exclude_categories or [])
+    included = _include_categories_from_args(args)
     rows: list[dict[str, Any]] = []
 
     for index, item in enumerate(answers, start=1):
@@ -851,6 +876,8 @@ def score_file(args: argparse.Namespace) -> int:
             print(f"Skipping unknown case id: {case_id}", file=sys.stderr)
             continue
         case = cases[case_id]
+        if included and case.get("category") not in included:
+            continue
         if excluded and case.get("category") in excluded:
             continue
         answer_text = item.get("answer", "")
@@ -873,7 +900,7 @@ def score_file(args: argparse.Namespace) -> int:
         status = "PASS" if row["passed"] else "FAIL"
         print(f"[{index}/{len(answers)}] {case_id} {status} score={row['score']:.2f}")
 
-    out = args.output or result_path(args.out_dir, args.bot_name, suffix="scored")
+    out = args.output or _result_path_for_args(args, "scored")
     write_jsonl(out, rows)
     write_per_category_files(out, rows)
     summary = summarize(rows)
@@ -898,6 +925,9 @@ def _summarize_retrieval(rows: list[dict[str, Any]], ks: tuple[int, ...]) -> dic
         + [f"chunk_recall@{k}" for k in ks]
         + ["chunk_mrr"]
         + [f"context_precision@{k}" for k in ks]
+        + [f"gold_chunk_coverage@{k}" for k in ks]
+        + [f"disease_source_coverage@{k}" for k in ks]
+        + [f"drug_source_coverage@{k}" for k in ks]
     )
 
     def aggregate(items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -951,6 +981,7 @@ def run_retrieval(args: argparse.Namespace) -> int:
         set(args.ids or []) or None,
         args.limit,
         exclude_categories=set(getattr(args, "exclude_categories", None) or []) or None,
+        include_categories=_include_categories_from_args(args),
     )
 
     try:
@@ -1003,7 +1034,7 @@ def run_retrieval(args: argparse.Namespace) -> int:
         marker = "HIT" if metrics.get(f"recall@{ks[0]}") else "MISS"
         print(f"[{index}/{len(selected)}] {case['id']} {marker} mrr={metrics['mrr']:.2f}")
 
-    out = args.output or result_path(args.out_dir, args.bot_name, suffix="retrieval")
+    out = args.output or _result_path_for_args(args, "retrieval")
     write_jsonl(out, rows)
     write_per_category_files(out, rows)
     summary = _summarize_retrieval(rows, ks)
@@ -1061,8 +1092,10 @@ def add_judge_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser(category: str) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=f"Evaluate benchmark cases for category `{category}`.",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     direct = sub.add_parser("run-direct", help="Run the local pipeline in-process.")
@@ -1097,18 +1130,11 @@ def build_parser() -> argparse.ArgumentParser:
     retrieval.add_argument("--ks", nargs="+", type=int, default=[5, 10])
     retrieval.set_defaults(func=run_retrieval)
 
-    comp = sub.add_parser("compare", help="Aggregate one or more result JSONL files.")
-    comp.add_argument("result_files", type=Path, nargs="+")
-    comp.add_argument("--output", type=Path)
-    comp.set_defaults(func=compare)
-
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+def main_for_category(category: str, argv: list[str] | None = None) -> int:
+    args = build_parser(category).parse_args(argv)
+    args.category = category
+    args.include_categories = [category]
     return args.func(args)
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -2,8 +2,8 @@ import json
 from pathlib import Path
 
 def export_html():
-    jsonl_path = Path("eval/medical_qa_benchmark.jsonl")
-    html_path = Path("eval/dataset_viewer.html")
+    jsonl_path = Path("eval/datasets/medical_qa_benchmark_v2.jsonl")
+    html_path = Path("eval/artifacts/dataset_viewer.html")
 
     if not jsonl_path.exists():
         print("Dataset not found!")
@@ -213,6 +213,7 @@ def export_html():
 </body>
 </html>
 """
+    html_path.parent.mkdir(parents=True, exist_ok=True)
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(html_content)
     print(f"Generated viewer at: {html_path.absolute()}")
