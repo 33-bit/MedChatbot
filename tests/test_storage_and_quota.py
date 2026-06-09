@@ -175,3 +175,85 @@ def test_session_module_is_storage_facade():
     assert session_store.save_profile is sqlite_profile.save_profile
     assert session_store.check_rate_limit is rate_limit.check_rate_limit
     assert session_store.reserve_webhook_update is webhook_dedupe.reserve_webhook_update
+
+
+def test_chat_trace_storage_round_trips_meta():
+    from src.chat.storage import traces
+
+    saved = traces.save_chat_trace(
+        trace_id="trace-1",
+        session_id="debug-user",
+        internal_session_id="api:scoped",
+        mode="auto",
+        question="Tôi bị ho",
+        answer="Bạn nên nghỉ ngơi.",
+        meta={
+            "trace_id": "trace-1",
+            "latency_ms_total": 12.5,
+            "outcome": "informational",
+            "timings": [{"stage": "total", "ms": 12.5, "fields": {"outcome": "informational"}}],
+        },
+    )
+
+    loaded = traces.get_chat_trace("trace-1")
+
+    assert saved == loaded
+    assert loaded == {
+        "trace_id": "trace-1",
+        "session_id": "debug-user",
+        "internal_session_id": "api:scoped",
+        "mode": "auto",
+        "question": "Tôi bị ho",
+        "answer": "Bạn nên nghỉ ngơi.",
+        "created_at": saved["created_at"],
+        "meta": {
+            "trace_id": "trace-1",
+            "latency_ms_total": 12.5,
+            "outcome": "informational",
+            "timings": [{"stage": "total", "ms": 12.5, "fields": {"outcome": "informational"}}],
+        },
+    }
+
+
+def test_chat_trace_list_filters_and_limits():
+    from src.chat.storage import traces
+
+    traces.save_chat_trace(
+        trace_id="trace-old",
+        session_id="debug-user",
+        internal_session_id="api:old",
+        mode="auto",
+        question="old question",
+        answer="old answer",
+        meta={"trace_id": "trace-old", "latency_ms_total": 30, "outcome": "diagnostic"},
+        created_at=100.0,
+    )
+    traces.save_chat_trace(
+        trace_id="trace-new",
+        session_id="debug-user",
+        internal_session_id="api:new",
+        mode="information",
+        question="new question",
+        answer="new answer",
+        meta={"trace_id": "trace-new", "latency_ms_total": 10, "route_label": "informational"},
+        created_at=200.0,
+    )
+    traces.save_chat_trace(
+        trace_id="trace-other",
+        session_id="other-user",
+        internal_session_id="api:other",
+        mode="auto",
+        question="other question",
+        answer="other answer",
+        meta={"trace_id": "trace-other", "latency_ms_total": 5},
+        created_at=300.0,
+    )
+
+    summaries = traces.list_chat_traces(session_id="debug-user", trace_id=None, limit=1)
+    exact = traces.list_chat_traces(session_id=None, trace_id="trace-old", limit=20)
+
+    assert [row["trace_id"] for row in summaries] == ["trace-new"]
+    assert summaries[0]["answer_preview"] == "new answer"
+    assert summaries[0]["latency_ms_total"] == 10
+    assert summaries[0]["route"] == "informational"
+    assert [row["trace_id"] for row in exact] == ["trace-old"]

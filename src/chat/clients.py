@@ -35,6 +35,19 @@ CREATE TABLE IF NOT EXISTS consultations (
 );
 CREATE INDEX IF NOT EXISTS idx_consult_session ON consultations(session_id);
 
+CREATE TABLE IF NOT EXISTS chat_trace (
+    trace_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    internal_session_id TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    meta_json TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_trace_session_created
+    ON chat_trace(session_id, created_at);
+
 CREATE TABLE IF NOT EXISTS patient_profile (
     session_id TEXT PRIMARY KEY,
     profile_json TEXT NOT NULL,
