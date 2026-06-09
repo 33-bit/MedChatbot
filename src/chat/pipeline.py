@@ -141,6 +141,24 @@ def _record_latency(stage: str, ms: float) -> None:
     meta.setdefault("latency_ms", {})[stage] = round(ms, 2)
 
 
+def _record_timing(stage: str, ms: float, fields: dict[str, Any]) -> None:
+    meta = _meta()
+    if meta is None:
+        return
+    entry_fields = {
+        key: value
+        for key, value in fields.items()
+        if value is not None
+    }
+    meta.setdefault("timings", []).append(
+        {"stage": stage, "ms": round(ms, 2), "fields": entry_fields}
+    )
+    if stage == "route" and fields.get("label") is not None:
+        meta["route_label"] = fields["label"]
+    if stage == "total" and fields.get("outcome") is not None:
+        meta["outcome"] = fields["outcome"]
+
+
 def _record_mode_decision(
     mode: str,
     intent: str,
@@ -158,6 +176,7 @@ def _record_mode_decision(
 
 
 def _log_timing(trace_id: str, stage: str, start: float, **fields) -> None:
+    _record_timing(stage, elapsed_ms(start), fields)
     log_trace_timing(log, "pipeline", trace_id, stage, start, **fields)
 
 

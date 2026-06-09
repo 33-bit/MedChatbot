@@ -1736,3 +1736,32 @@ def test_pipeline_logs_core_timing_stages(monkeypatch, caplog):
 
     for stage in ("preflight", "load_session", "turn_analysis", "parallel_retrieval", "generate", "total"):
         assert f"stage={stage}" in caplog.text
+
+
+def test_answer_with_meta_records_timing_timeline(monkeypatch):
+    _patch_preflight_ok(monkeypatch)
+    _patch_persistence_noop(monkeypatch)
+    monkeypatch.setattr(pipeline, "analyze_turn", lambda *args, **kwargs: _analysis())
+    monkeypatch.setattr(pipeline, "_load_kg_context", lambda question, trace_id: "")
+    monkeypatch.setattr(pipeline, "_load_hybrid_hits", lambda question, trace_id: [])
+
+    def fake_generate(question, hits, kg_text="", patient=None, return_meta=False):
+        if return_meta:
+            return "answer", {
+                "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+                "model": "test-model",
+            }
+        return "answer"
+
+    monkeypatch.setattr(pipeline, "generate", fake_generate)
+
+    reply, meta = pipeline.answer_with_meta("Tôi bị ho", session_id="s")
+
+    stages = [entry["stage"] for entry in meta["timings"]]
+    assert reply == "answer"
+    for stage in ("load_session", "preflight", "turn_analysis", "parallel_retrieval", "generate", "route", "persist", "total"):
+        assert stage in stages
+    assert all(isinstance(entry["ms"], float) for entry in meta["timings"])
+    assert meta["route_label"] == "informational"
+    assert meta["outcome"] == "informational"
+    assert meta["usage"][0]["stage"] == "generator"
