@@ -187,3 +187,109 @@ def test_chat_returns_technical_reply_when_pipeline_raises(app_client, monkeypat
 
     assert response.status_code == 200
     assert response.json() == {"answer": TECHNICAL_ERROR_REPLY}
+
+
+def test_debug_chat_route_page_is_served(app_client):
+    client, _ = app_client
+
+    response = client.get("/debug/chat-route")
+
+    assert response.status_code == 200
+    assert "Chat Route Debug Console" in response.text
+    assert "/debug/chat-route/run" in response.text
+    assert "/debug/chat-route/traces" in response.text
+
+
+def test_debug_chat_route_run_requires_api_key(app_client, monkeypatch):
+    client, app_module = app_client
+    monkeypatch.setattr(app_module, "CHAT_API_KEY", "secret")
+
+    missing = client.post(
+        "/debug/chat-route/run",
+        json={"question": "Tôi bị ho", "session_id": "debug-user"},
+    )
+    wrong = client.post(
+        "/debug/chat-route/run",
+        headers={"X-API-Key": "wrong"},
+        json={"question": "Tôi bị ho", "session_id": "debug-user"},
+    )
+
+    assert missing.status_code == 401
+    assert wrong.status_code == 401
+
+
+def test_debug_chat_route_run_scopes_saves_and_returns_trace(app_client, monkeypatch):
+    client, app_module = app_client
+    monkeypatch.setattr(app_module, "CHAT_API_KEY", "secret")
+    seen: dict[str, str] = {}
+
+    def fake_answer_with_meta(question: str, session_id: str = "default", mode: str = "auto"):
+        seen["question"] = question
+        seen["session_id"] = session_id
+        seen["mode"] = mode
+        return "debug answer", {
+            "trace_id": "trace-api",
+            "latency_ms_total": 42.0,
+            "route_label": "informational",
+            "timings": [{"stage": "total", "ms": 42.0, "fields": {"outcome": "informational"}}],
+        }
+
+    monkeypatch.setattr(app_module, "answer_with_meta", fake_answer_with_meta)
+
+    response = client.post(
+        "/debug/chat-route/run",
+        headers={"X-API-Key": "secret"},
+        json={"question": "Tôi bị ho", "session_id": "debug-user", "mode": "information"},
+    )
+
+    expected_internal = "api:" + hashlib.sha256(b"secret\x00debug-user").hexdigest()[:32]
+    data = response.json()
+    assert response.status_code == 200
+    assert seen == {
+        "question": "Tôi bị ho",
+        "session_id": expected_internal,
+        "mode": "information",
+    }
+    assert data["trace"]["trace_id"] == "trace-api"
+    assert data["trace"]["session_id"] == "debug-user"
+    assert data["trace"]["internal_session_id"] == expected_internal
+    assert data["trace"]["answer"] == "debug answer"
+
+
+def test_debug_chat_route_lists_and_loads_saved_trace(app_client, monkeypatch):
+    client, app_module = app_client
+    monkeypatch.setattr(app_module, "CHAT_API_KEY", "secret")
+
+    def fake_answer_with_meta(question: str, session_id: str = "default", mode: str = "auto"):
+        return "answer", {
+            "trace_id": "trace-list",
+            "latency_ms_total": 7.0,
+            "outcome": "diagnostic",
+            "timings": [{"stage": "total", "ms": 7.0, "fields": {"outcome": "diagnostic"}}],
+        }
+
+    monkeypatch.setattr(app_module, "answer_with_meta", fake_answer_with_meta)
+    client.post(
+        "/debug/chat-route/run",
+        headers={"X-API-Key": "secret"},
+        json={"question": "Tôi đau đầu", "session_id": "debug-user"},
+    )
+
+    listed = client.get(
+        "/debug/chat-route/traces?session_id=debug-user",
+        headers={"X-API-Key": "secret"},
+    )
+    detail = client.get(
+        "/debug/chat-route/traces/trace-list",
+        headers={"X-API-Key": "secret"},
+    )
+    missing = client.get(
+        "/debug/chat-route/traces/missing",
+        headers={"X-API-Key": "secret"},
+    )
+
+    assert listed.status_code == 200
+    assert listed.json()["traces"][0]["trace_id"] == "trace-list"
+    assert detail.status_code == 200
+    assert detail.json()["trace"]["question"] == "Tôi đau đầu"
+    assert missing.status_code == 404
