@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -1765,3 +1766,46 @@ def test_answer_with_meta_records_timing_timeline(monkeypatch):
     assert meta["route_label"] == "informational"
     assert meta["outcome"] == "informational"
     assert meta["usage"][0]["stage"] == "generator"
+
+
+def test_answer_with_meta_records_worker_retrieval_timings(monkeypatch):
+    _patch_preflight_ok(monkeypatch)
+    _patch_persistence_noop(monkeypatch)
+    monkeypatch.setattr(pipeline, "analyze_turn", lambda *args, **kwargs: _analysis())
+    monkeypatch.setattr(
+        pipeline,
+        "kg_search",
+        lambda question: SimpleNamespace(matched_entities=[{"name": "Ho"}], is_empty=False),
+    )
+    monkeypatch.setattr(pipeline, "format_kg_context", lambda result: "KG context")
+    monkeypatch.setattr(
+        pipeline,
+        "hybrid_search",
+        lambda question, top_k: [
+            Hit(
+                text="context",
+                score=1.0,
+                source_type="disease",
+                source_name="Nguồn",
+                heading_path="",
+                source_slug="nguon",
+            )
+        ],
+    )
+
+    def fake_generate(question, hits, kg_text="", patient=None, return_meta=False):
+        if return_meta:
+            return "answer", {"usage": {}, "model": "test-model"}
+        return "answer"
+
+    monkeypatch.setattr(pipeline, "generate", fake_generate)
+
+    reply, meta = pipeline.answer_with_meta("Tôi bị ho", session_id="s")
+
+    kg_timings = [entry for entry in meta["timings"] if entry["stage"] == "kg_search"]
+    hybrid_timings = [entry for entry in meta["timings"] if entry["stage"] == "hybrid_search"]
+    assert reply == "answer"
+    assert len(kg_timings) == 1
+    assert kg_timings[0]["fields"] == {"kg_chars": len("KG context")}
+    assert len(hybrid_timings) == 1
+    assert hybrid_timings[0]["fields"] == {"hits": 1}

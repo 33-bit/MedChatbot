@@ -480,6 +480,12 @@ def _load_hybrid_hits(question: str, trace_id: str) -> list[Hit]:
     return hits
 
 
+def _call_with_elapsed(fn: Any, *args: Any) -> tuple[Any, float]:
+    stage_start = time.perf_counter()
+    result = fn(*args)
+    return result, elapsed_ms(stage_start)
+
+
 # ---------- Phase C: route handlers ----------
 
 def _handle_diagnostic(
@@ -626,16 +632,22 @@ def _handle_informational(
     stage_start = time.perf_counter()
     search_question = retrieval_question or question
     with ThreadPoolExecutor(max_workers=2, thread_name_prefix="retrieval") as executor:
-        kg_future = executor.submit(_load_kg_context, search_question, trace_id)
-        hits_future = executor.submit(_load_hybrid_hits, search_question, trace_id)
+        kg_future = executor.submit(
+            _call_with_elapsed, _load_kg_context, search_question, trace_id,
+        )
+        hits_future = executor.submit(
+            _call_with_elapsed, _load_hybrid_hits, search_question, trace_id,
+        )
         done, pending = wait((kg_future, hits_future), return_when=FIRST_EXCEPTION)
         for future in done:
             if future.exception() is not None:
                 for pending_future in pending:
                     pending_future.cancel()
                 raise future.exception()
-        kg_text = kg_future.result()
-        hits = hits_future.result()
+        kg_text, kg_elapsed = kg_future.result()
+        hits, hits_elapsed = hits_future.result()
+    _record_timing("kg_search", kg_elapsed, {"kg_chars": len(kg_text)})
+    _record_timing("hybrid_search", hits_elapsed, {"hits": len(hits)})
     _log_timing(trace_id, "parallel_retrieval", stage_start,
                 hits=len(hits), kg_chars=len(kg_text))
     _record_hits(hits)
