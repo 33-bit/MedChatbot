@@ -13,6 +13,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import time
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -128,7 +130,7 @@ DEBUG_CHAT_ROUTE_HTML = """<!doctype html>
         title.textContent = `${trace.question} (${trace.route || "unknown"})`;
         const meta = document.createElement("div");
         meta.className = "meta";
-        meta.textContent = `session=${trace.session_id} mode=${trace.mode} latency=${trace.latency_ms_total ?? "n/a"}ms`;
+        meta.textContent = `session=${trace.session_id} mode=${trace.mode} created_at=${trace.created_at ?? "n/a"} latency=${trace.latency_ms_total ?? "n/a"}ms`;
         item.append(title, meta, button);
         root.appendChild(item);
       }
@@ -154,7 +156,7 @@ DEBUG_CHAT_ROUTE_HTML = """<!doctype html>
     function renderTrace(trace, warning) {
       const meta = trace.meta || {};
       el("trace-summary").textContent =
-        `trace=${trace.trace_id} session=${trace.session_id} internal=${trace.internal_session_id} mode=${trace.mode} total=${meta.latency_ms_total ?? "n/a"} route=${meta.route_label || meta.outcome || "unknown"}${warning ? " warning=" + warning : ""}`;
+        `trace=${trace.trace_id} session=${trace.session_id} internal=${trace.internal_session_id} created_at=${trace.created_at} mode=${trace.mode} total=${meta.latency_ms_total ?? "n/a"} route=${meta.route_label || meta.outcome || "unknown"}${warning ? " warning=" + warning : ""}`;
       renderCollection("timeline", meta.timings, (item) => `${item.stage}: ${item.ms}ms ${JSON.stringify(item.fields || {})}`);
       renderCollection("retrieved", meta.retrieved, (item) => JSON.stringify(item));
       renderCollection("usage", meta.usage, (item) => JSON.stringify(item));
@@ -285,6 +287,31 @@ def _run_answer_with_meta(question: str, session_id: str, mode: str) -> tuple[st
     return answer_with_meta(question, session_id=session_id, mode=mode)
 
 
+def _build_debug_trace(
+    *,
+    reply: str,
+    meta: dict | None,
+    question: str,
+    session_id: str,
+    internal_session_id: str,
+    mode: str,
+) -> dict:
+    trace_meta = dict(meta or {})
+    trace_id = str(trace_meta.get("trace_id") or uuid.uuid4().hex)
+    trace_meta["trace_id"] = trace_id
+    created_at = time.time()
+    return {
+        "trace_id": trace_id,
+        "session_id": session_id,
+        "internal_session_id": internal_session_id,
+        "mode": mode,
+        "question": question,
+        "answer": reply,
+        "created_at": created_at,
+        "meta": trace_meta,
+    }
+
+
 @app.get("/debug/chat-route", response_class=HTMLResponse)
 def debug_chat_route_page() -> str:
     return DEBUG_CHAT_ROUTE_HTML
@@ -308,15 +335,14 @@ async def debug_chat_route_run(
         log.exception("Debug chat route run failed")
         reply = TECHNICAL_ERROR_REPLY
         meta = {"error": "technical_error"}
-    trace = {
-        "trace_id": str(meta.get("trace_id") or ""),
-        "session_id": client_session_id,
-        "internal_session_id": session_id,
-        "mode": mode,
-        "question": question,
-        "answer": reply,
-        "meta": meta,
-    }
+    trace = _build_debug_trace(
+        reply=reply,
+        meta=meta,
+        question=question,
+        session_id=client_session_id,
+        internal_session_id=session_id,
+        mode=mode,
+    )
     try:
         saved = save_chat_trace(
             trace_id=trace["trace_id"],
@@ -325,7 +351,7 @@ async def debug_chat_route_run(
             mode=mode,
             question=question,
             answer=reply,
-            meta=meta,
+            meta=trace["meta"],
         )
     except Exception:
         log.exception("Debug trace persistence failed")
