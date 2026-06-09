@@ -66,15 +66,7 @@ def save_chat_trace(
         conn.execute(
             "INSERT INTO chat_trace "
             "(trace_id, session_id, internal_session_id, mode, question, answer, meta_json, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(trace_id) DO UPDATE SET "
-            "session_id=excluded.session_id, "
-            "internal_session_id=excluded.internal_session_id, "
-            "mode=excluded.mode, "
-            "question=excluded.question, "
-            "answer=excluded.answer, "
-            "meta_json=excluded.meta_json, "
-            "created_at=excluded.created_at",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 trace_id,
                 session_id,
@@ -99,32 +91,30 @@ def save_chat_trace(
     }
 
 
-def get_chat_trace(trace_id: str) -> dict[str, Any] | None:
+def get_chat_trace(trace_id: str, *, internal_session_id: str) -> dict[str, Any] | None:
     with _SQLITE_LOCK:
         conn = get_sqlite()
         row = conn.execute(
             "SELECT trace_id, session_id, internal_session_id, mode, question, answer, meta_json, created_at "
-            "FROM chat_trace WHERE trace_id = ?",
-            (trace_id,),
+            "FROM chat_trace WHERE trace_id = ? AND internal_session_id = ?",
+            (trace_id, internal_session_id),
         ).fetchone()
     return _decode_trace(row) if row else None
 
 
 def list_chat_traces(
-    session_id: str | None = None,
+    *,
+    internal_session_id: str,
     trace_id: str | None = None,
     limit: int = 20,
 ) -> list[dict[str, Any]]:
     capped_limit = max(1, min(int(limit), 100))
-    clauses: list[str] = []
-    params: list[Any] = []
-    if session_id:
-        clauses.append("session_id = ?")
-        params.append(session_id)
+    clauses = ["internal_session_id = ?"]
+    params: list[Any] = [internal_session_id]
     if trace_id:
         clauses.append("trace_id = ?")
         params.append(trace_id)
-    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    where = f" WHERE {' AND '.join(clauses)}"
     params.append(capped_limit)
     with _SQLITE_LOCK:
         conn = get_sqlite()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
 from redis.exceptions import RedisError
 
 from src.chat.guards import quota
@@ -195,7 +196,7 @@ def test_chat_trace_storage_round_trips_meta():
         },
     )
 
-    loaded = traces.get_chat_trace("trace-1")
+    loaded = traces.get_chat_trace("trace-1", internal_session_id="api:scoped")
 
     assert saved == loaded
     assert loaded == {
@@ -221,7 +222,7 @@ def test_chat_trace_list_filters_and_limits():
     traces.save_chat_trace(
         trace_id="trace-old",
         session_id="debug-user",
-        internal_session_id="api:old",
+        internal_session_id="api:debug-user",
         mode="auto",
         question="old question",
         answer="old answer",
@@ -231,7 +232,7 @@ def test_chat_trace_list_filters_and_limits():
     traces.save_chat_trace(
         trace_id="trace-new",
         session_id="debug-user",
-        internal_session_id="api:new",
+        internal_session_id="api:debug-user",
         mode="information",
         question="new question",
         answer="new answer",
@@ -249,11 +250,65 @@ def test_chat_trace_list_filters_and_limits():
         created_at=300.0,
     )
 
-    summaries = traces.list_chat_traces(session_id="debug-user", trace_id=None, limit=1)
-    exact = traces.list_chat_traces(session_id=None, trace_id="trace-old", limit=20)
+    summaries = traces.list_chat_traces(
+        internal_session_id="api:debug-user",
+        trace_id=None,
+        limit=1,
+    )
+    exact = traces.list_chat_traces(
+        internal_session_id="api:debug-user",
+        trace_id="trace-old",
+        limit=20,
+    )
 
     assert [row["trace_id"] for row in summaries] == ["trace-new"]
     assert summaries[0]["answer_preview"] == "new answer"
     assert summaries[0]["latency_ms_total"] == 10
     assert summaries[0]["route"] == "informational"
     assert [row["trace_id"] for row in exact] == ["trace-old"]
+
+
+def test_chat_trace_reads_are_scoped_to_internal_session_id():
+    from src.chat.storage import traces
+
+    traces.save_chat_trace(
+        trace_id="trace-private",
+        session_id="debug-user",
+        internal_session_id="api:owner",
+        mode="auto",
+        question="private question",
+        answer="private answer",
+        meta={"trace_id": "trace-private"},
+    )
+
+    assert traces.get_chat_trace("trace-private", internal_session_id="api:other") is None
+    assert traces.list_chat_traces(internal_session_id="api:other") == []
+
+
+def test_chat_trace_duplicate_id_raises_integrity_error():
+    from src.chat.storage import traces
+
+    payload = {
+        "trace_id": "trace-duplicate",
+        "session_id": "debug-user",
+        "internal_session_id": "api:owner",
+        "mode": "auto",
+        "question": "first question",
+        "answer": "first answer",
+        "meta": {"trace_id": "trace-duplicate"},
+    }
+    traces.save_chat_trace(**payload)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        traces.save_chat_trace(
+            **{
+                **payload,
+                "question": "second question",
+                "answer": "second answer",
+            }
+        )
+
+    loaded = traces.get_chat_trace("trace-duplicate", internal_session_id="api:owner")
+    assert loaded is not None
+    assert loaded["question"] == "first question"
+    assert loaded["answer"] == "first answer"

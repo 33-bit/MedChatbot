@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import uuid
 
 from src.chat.replies import TECHNICAL_ERROR_REPLY
 
@@ -250,12 +251,15 @@ def test_debug_chat_route_run_scopes_saves_and_returns_trace(app_client, monkeyp
         "session_id": expected_internal,
         "mode": "information",
     }
-    assert data["trace"]["trace_id"] == "trace-api"
+    persisted_trace_id = data["trace"]["trace_id"]
+    assert str(uuid.UUID(persisted_trace_id)) == persisted_trace_id
+    assert persisted_trace_id != "trace-api"
     assert data["trace"]["session_id"] == "debug-user"
     assert data["trace"]["internal_session_id"] == expected_internal
     assert data["trace"]["answer"] == "debug answer"
     assert data["trace"]["created_at"] > 0
-    assert data["trace"]["meta"]["trace_id"] == "trace-api"
+    assert data["trace"]["meta"]["trace_id"] == persisted_trace_id
+    assert data["trace"]["meta"]["pipeline_trace_id"] == "trace-api"
 
 
 def test_debug_chat_route_lists_and_loads_saved_trace(app_client, monkeypatch):
@@ -271,41 +275,58 @@ def test_debug_chat_route_lists_and_loads_saved_trace(app_client, monkeypatch):
         }
 
     monkeypatch.setattr(app_module, "answer_with_meta", fake_answer_with_meta)
-    client.post(
+    run = client.post(
         "/debug/chat-route/run",
         headers={"X-API-Key": "secret"},
         json={"question": "Tôi đau đầu", "session_id": "debug-user"},
     )
+    trace_id = run.json()["trace"]["trace_id"]
 
     listed = client.get(
         "/debug/chat-route/traces?session_id=debug-user",
         headers={"X-API-Key": "secret"},
     )
     detail = client.get(
-        "/debug/chat-route/traces/trace-list",
+        f"/debug/chat-route/traces/{trace_id}?session_id=debug-user",
         headers={"X-API-Key": "secret"},
     )
     missing = client.get(
-        "/debug/chat-route/traces/missing",
+        "/debug/chat-route/traces/missing?session_id=debug-user",
+        headers={"X-API-Key": "secret"},
+    )
+    wrong_session_list = client.get(
+        "/debug/chat-route/traces?session_id=other-user",
+        headers={"X-API-Key": "secret"},
+    )
+    wrong_session_detail = client.get(
+        f"/debug/chat-route/traces/{trace_id}?session_id=other-user",
         headers={"X-API-Key": "secret"},
     )
 
     assert listed.status_code == 200
-    assert listed.json()["traces"][0]["trace_id"] == "trace-list"
+    assert listed.json()["traces"][0]["trace_id"] == trace_id
     assert detail.status_code == 200
     assert detail.json()["trace"]["question"] == "Tôi đau đầu"
     assert missing.status_code == 404
+    assert wrong_session_list.status_code == 200
+    assert wrong_session_list.json() == {"traces": []}
+    assert wrong_session_detail.status_code == 404
 
 
 def test_debug_chat_route_list_and_detail_require_api_key(app_client, monkeypatch):
     client, app_module = app_client
     monkeypatch.setattr(app_module, "CHAT_API_KEY", "secret")
 
-    missing_list = client.get("/debug/chat-route/traces")
-    wrong_list = client.get("/debug/chat-route/traces", headers={"X-API-Key": "wrong"})
-    missing_detail = client.get("/debug/chat-route/traces/trace-list")
+    missing_list = client.get("/debug/chat-route/traces?session_id=debug-user")
+    wrong_list = client.get(
+        "/debug/chat-route/traces?session_id=debug-user",
+        headers={"X-API-Key": "wrong"},
+    )
+    missing_detail = client.get(
+        "/debug/chat-route/traces/trace-list?session_id=debug-user"
+    )
     wrong_detail = client.get(
-        "/debug/chat-route/traces/trace-list",
+        "/debug/chat-route/traces/trace-list?session_id=debug-user",
         headers={"X-API-Key": "wrong"},
     )
 
@@ -313,6 +334,23 @@ def test_debug_chat_route_list_and_detail_require_api_key(app_client, monkeypatc
     assert wrong_list.status_code == 401
     assert missing_detail.status_code == 401
     assert wrong_detail.status_code == 401
+
+
+def test_debug_chat_route_list_and_detail_require_session_id(app_client, monkeypatch):
+    client, app_module = app_client
+    monkeypatch.setattr(app_module, "CHAT_API_KEY", "secret")
+
+    missing_list = client.get(
+        "/debug/chat-route/traces",
+        headers={"X-API-Key": "secret"},
+    )
+    missing_detail = client.get(
+        "/debug/chat-route/traces/trace-list",
+        headers={"X-API-Key": "secret"},
+    )
+
+    assert missing_list.status_code == 400
+    assert missing_detail.status_code == 400
 
 
 def test_debug_chat_route_run_uses_fallback_trace_id_and_created_at_when_pipeline_raises(app_client, monkeypatch):
@@ -340,7 +378,7 @@ def test_debug_chat_route_run_uses_fallback_trace_id_and_created_at_when_pipelin
     assert "warning" not in data
 
     replay = client.get(
-        f"/debug/chat-route/traces/{trace_id}",
+        f"/debug/chat-route/traces/{trace_id}?session_id=debug-user",
         headers={"X-API-Key": "secret"},
     )
 
@@ -376,6 +414,43 @@ def test_debug_chat_route_run_warns_when_trace_save_fails(app_client, monkeypatc
     assert data["trace"]["meta"]["trace_id"] == data["trace"]["trace_id"]
 
 
+def test_debug_chat_route_runs_with_same_pipeline_trace_id_get_unique_persisted_ids(app_client, monkeypatch):
+    client, app_module = app_client
+    monkeypatch.setattr(app_module, "CHAT_API_KEY", "secret")
+
+    def fake_answer_with_meta(question: str, session_id: str = "default", mode: str = "auto"):
+        return "answer", {"trace_id": "short-pipeline-id"}
+
+    monkeypatch.setattr(app_module, "answer_with_meta", fake_answer_with_meta)
+
+    first = client.post(
+        "/debug/chat-route/run",
+        headers={"X-API-Key": "secret"},
+        json={"question": "first", "session_id": "debug-user"},
+    ).json()["trace"]
+    second = client.post(
+        "/debug/chat-route/run",
+        headers={"X-API-Key": "secret"},
+        json={"question": "second", "session_id": "debug-user"},
+    ).json()["trace"]
+
+    assert first["trace_id"] != second["trace_id"]
+    assert first["meta"]["pipeline_trace_id"] == "short-pipeline-id"
+    assert second["meta"]["pipeline_trace_id"] == "short-pipeline-id"
+    assert first["meta"]["trace_id"] == first["trace_id"]
+    assert second["meta"]["trace_id"] == second["trace_id"]
+
+    listed = client.get(
+        "/debug/chat-route/traces?session_id=debug-user",
+        headers={"X-API-Key": "secret"},
+    )
+    assert listed.status_code == 200
+    assert {row["trace_id"] for row in listed.json()["traces"]} == {
+        first["trace_id"],
+        second["trace_id"],
+    }
+
+
 def test_debug_chat_route_page_shows_created_at_fields(app_client):
     client, _ = app_client
 
@@ -383,3 +458,5 @@ def test_debug_chat_route_page_shows_created_at_fields(app_client):
 
     assert response.status_code == 200
     assert "created_at" in response.text
+    assert 'params.set("session_id"' in response.text
+    assert "loadTrace(trace.trace_id)" in response.text

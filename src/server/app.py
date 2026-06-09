@@ -165,7 +165,9 @@ DEBUG_CHAT_ROUTE_HTML = """<!doctype html>
     }
 
     async function loadTrace(traceId) {
-      const response = await fetch(`/debug/chat-route/traces/${encodeURIComponent(traceId)}`, { headers: apiHeaders() });
+      const params = new URLSearchParams();
+      params.set("session_id", el("filter-session-id").value);
+      const response = await fetch(`/debug/chat-route/traces/${encodeURIComponent(traceId)}?${params.toString()}`, { headers: apiHeaders() });
       const data = await response.json();
       if (!response.ok) {
         el("run-status").textContent = data.detail || "Failed to load trace";
@@ -281,6 +283,12 @@ def _require_client_session_id(body: dict | None) -> str:
     return client_session_id.strip()
 
 
+def _require_query_session_id(session_id: str | None) -> str:
+    if not isinstance(session_id, str) or not session_id.strip():
+        raise HTTPException(status_code=400, detail="session_id is required")
+    return session_id.strip()
+
+
 def _run_answer_with_meta(question: str, session_id: str, mode: str) -> tuple[str, dict]:
     if mode == "auto":
         return answer_with_meta(question, session_id=session_id)
@@ -297,7 +305,10 @@ def _build_debug_trace(
     mode: str,
 ) -> dict:
     trace_meta = dict(meta or {})
-    trace_id = str(trace_meta.get("trace_id") or uuid.uuid4().hex)
+    pipeline_trace_id = trace_meta.get("trace_id")
+    trace_id = str(uuid.uuid4())
+    if pipeline_trace_id:
+        trace_meta["pipeline_trace_id"] = str(pipeline_trace_id)
     trace_meta["trace_id"] = trace_id
     created_at = time.time()
     return {
@@ -352,6 +363,7 @@ async def debug_chat_route_run(
             question=question,
             answer=reply,
             meta=trace["meta"],
+            created_at=trace["created_at"],
         )
     except Exception:
         log.exception("Debug trace persistence failed")
@@ -366,17 +378,28 @@ def debug_chat_route_traces(
     trace_id: str | None = Query(default=None),
     limit: int = Query(default=20),
 ) -> dict:
-    _require_chat_api_key(x_api_key)
-    return {"traces": list_chat_traces(session_id=session_id, trace_id=trace_id, limit=limit)}
+    api_key = _require_chat_api_key(x_api_key)
+    client_session_id = _require_query_session_id(session_id)
+    internal_session_id = _scoped_api_session_id(api_key, client_session_id)
+    return {
+        "traces": list_chat_traces(
+            internal_session_id=internal_session_id,
+            trace_id=trace_id,
+            limit=limit,
+        )
+    }
 
 
 @app.get("/debug/chat-route/traces/{trace_id}")
 def debug_chat_route_trace_detail(
     trace_id: str,
     x_api_key: str | None = Header(default=None),
+    session_id: str | None = Query(default=None),
 ) -> dict:
-    _require_chat_api_key(x_api_key)
-    trace = get_chat_trace(trace_id)
+    api_key = _require_chat_api_key(x_api_key)
+    client_session_id = _require_query_session_id(session_id)
+    internal_session_id = _scoped_api_session_id(api_key, client_session_id)
+    trace = get_chat_trace(trace_id, internal_session_id=internal_session_id)
     if trace is None:
         raise HTTPException(status_code=404, detail="Trace not found")
     return {"trace": trace}
