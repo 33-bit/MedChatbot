@@ -84,10 +84,14 @@ def test_run_api_sends_stable_session_id_per_case(tmp_path, monkeypatch):
     # The fake server returns "ok" with no `[n]` citation, so the multi-turn
     # case (QA-2) triggers the force-direct-answer follow-up after T2.
     assert [request["json"] for request in client.requests] == [
-        {"question": "Q1", "session_id": "eval-api:QA-1"},
-        {"question": "T1", "session_id": "eval-api:QA-2"},
-        {"question": "T2", "session_id": "eval-api:QA-2"},
-        {"question": runner.FORCE_ANSWER_PROMPT, "session_id": "eval-api:QA-2"},
+        {"question": "Q1", "session_id": "eval-api:QA-1", "mode": runner.EVAL_CHAT_MODE},
+        {"question": "T1", "session_id": "eval-api:QA-2", "mode": runner.EVAL_CHAT_MODE},
+        {"question": "T2", "session_id": "eval-api:QA-2", "mode": runner.EVAL_CHAT_MODE},
+        {
+            "question": runner.FORCE_ANSWER_PROMPT,
+            "session_id": "eval-api:QA-2",
+            "mode": runner.EVAL_CHAT_MODE,
+        },
     ]
 
 
@@ -513,8 +517,8 @@ def test_run_direct_force_direct_answer_on_multi_turn(tmp_path, monkeypatch):
 
     received = []
 
-    def fake_answer_with_meta(turn, session_id="default"):
-        received.append(turn)
+    def fake_answer_with_meta(turn, session_id="default", mode="auto"):
+        received.append((turn, mode))
         # No citation -> still_clarifying triggers force-answer.
         return "Bạn có sốt không?", {}
 
@@ -531,11 +535,12 @@ def test_run_direct_force_direct_answer_on_multi_turn(tmp_path, monkeypatch):
     rows = [json.loads(l) for l in (tmp_path / "out.jsonl").read_text().splitlines() if l.strip()]
     assert len(rows) == 1
     assert rows[0]["forced_direct_answer"] is True
+    assert rows[0]["forced_mode"] == runner.EVAL_CHAT_MODE
     # 2 scripted turns + 1 forced follow-up
     assert received == [
-        "Tôi bị ho 5 ngày",
-        "Tôi nên uống thuốc gì",
-        runner.FORCE_ANSWER_PROMPT,
+        ("Tôi bị ho 5 ngày", runner.EVAL_CHAT_MODE),
+        ("Tôi nên uống thuốc gì", runner.EVAL_CHAT_MODE),
+        (runner.FORCE_ANSWER_PROMPT, runner.EVAL_CHAT_MODE),
     ]
 
 
@@ -550,8 +555,8 @@ def test_run_direct_no_force_when_single_turn(tmp_path, monkeypatch):
 
     received = []
 
-    def fake_answer_with_meta(turn, session_id="default"):
-        received.append(turn)
+    def fake_answer_with_meta(turn, session_id="default", mode="auto"):
+        received.append((turn, mode))
         return "Cúm gây sốt cao và đau cơ.", {}
 
     fake_chat = SimpleNamespace(answer_with_meta=fake_answer_with_meta)
@@ -566,7 +571,8 @@ def test_run_direct_no_force_when_single_turn(tmp_path, monkeypatch):
     assert runner.run_direct(args) == 0
     rows = [json.loads(l) for l in (tmp_path / "out.jsonl").read_text().splitlines() if l.strip()]
     assert rows[0]["forced_direct_answer"] is False
-    assert received == ["Triệu chứng cúm?"]
+    assert rows[0]["forced_mode"] == runner.EVAL_CHAT_MODE
+    assert received == [("Triệu chứng cúm?", runner.EVAL_CHAT_MODE)]
 
 
 def test_write_per_category_files(tmp_path):

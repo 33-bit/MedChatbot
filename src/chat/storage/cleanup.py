@@ -20,6 +20,7 @@ import os
 import time
 
 from src.chat.clients import get_sqlite
+from src.chat.storage.doctors import sweep_idle
 
 CONSULT_RETENTION_DAYS = int(os.getenv("CONSULT_RETENTION_DAYS", "30"))
 PROFILE_RETENTION_DAYS = int(os.getenv("PROFILE_RETENTION_DAYS", "30"))
@@ -40,6 +41,9 @@ def run(verbose: bool = True, vacuum: bool = False) -> dict:
 
     cur = conn.execute("DELETE FROM rate_limit WHERE ts < ?", (now - 120,))
     stats["rate_limit_purged"] = cur.rowcount
+
+    ended = sweep_idle()
+    stats["doctor_consultations_ended"] = len(ended)
 
     conn.commit()
     if vacuum:

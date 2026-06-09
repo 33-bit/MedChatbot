@@ -23,6 +23,7 @@ def test_analyzer_falls_back_to_informational_when_mini_llm_fails(monkeypatch):
     assert result["guardrail"]["verdict"] == "allow"
     assert result["turn"] == {
         "label": "informational",
+        "intent": "pure_info",
         "direct_answer_requested": False,
     }
     assert result["rewrite"]["rewritten"] == "Tôi bị ho"
@@ -47,7 +48,36 @@ def test_analyzer_normalizes_direct_answer_requested_from_one_shot_llm(monkeypat
     result = analyzer.analyze_turn("tôi không biết, hãy trả lời luôn")
 
     assert result["turn"]["label"] == "clarification_answer"
+    assert result["turn"]["intent"] == "clarification_answer"
     assert result["turn"]["direct_answer_requested"] is True
+
+
+def test_analyzer_preserves_refined_intent_from_one_shot_llm(monkeypatch):
+    monkeypatch.setattr(
+        analyzer,
+        "call_mini",
+        lambda *args, **kwargs: {
+            "guardrail": {"verdict": "allow"},
+            "turn": {
+                "label": "diagnostic",
+                "intent": "contextual_drug_info",
+                "direct_answer_requested": False,
+            },
+            "rewrite": {
+                "rewritten": "Tôi bị rụng tóc, dùng Acid Pantothenic được không?",
+                "confident": True,
+            },
+            "entities": {
+                "symptoms": [{"name": "rụng tóc"}],
+                "medications": ["Acid Pantothenic"],
+            },
+        },
+    )
+
+    result = analyzer.analyze_turn("Tôi bị rụng tóc, dùng Acid Pantothenic được không?")
+
+    assert result["turn"]["label"] == "diagnostic"
+    assert result["turn"]["intent"] == "contextual_drug_info"
 
 
 def test_guardrail_reply_verdicts_are_valid_for_analyzer():
@@ -126,6 +156,9 @@ def test_turn_analysis_prompt_recognizes_tapped_clarification_replies():
     assert "Bắt đầu" in text
     assert "Bạn có bị" in text
     assert "Có / Không / Không rõ" in text
+    assert "contextual_drug_info" in text
+    assert "condition_management_info" in text
+    assert "symptom_triage" in text
 
 
 def test_generator_system_prompt_adopts_patient_friendly_template_rules():
@@ -319,6 +352,116 @@ def test_call_mini_omits_thinking_for_mistral_base_url(monkeypatch):
 
 def test_generator_returns_no_data_reply_without_retrieval_context():
     assert generator.generate("Bệnh hiếm XYZ điều trị thế nào?", []) == generator.NO_DATA_REPLY
+
+
+def test_generator_extracts_doctor_handoff_flag_from_llm_json(monkeypatch):
+    hits = [Hit("context", 1.0, "disease", "Bệnh cúm", "", "cum")]
+    fake_response = {
+        "choices": [{
+            "message": {
+                "content": (
+                    '{"answer":"Bạn nên uống đủ nước [1].",'
+                    '"doctor_handoff_recommended":true,'
+                    '"doctor_specialty":"Hô hấp"}'
+                )
+            }
+        }]
+    }
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=lambda **kwargs: fake_response)
+        )
+    )
+    monkeypatch.setattr(generator, "get_openai", lambda: fake_client)
+
+    answer, meta = generator.generate("Tôi bị sốt?", hits, return_meta=True)
+
+    assert answer.startswith("Bạn nên uống đủ nước")
+    assert meta["doctor_handoff_recommended"] is True
+    assert meta["doctor_specialty"] == "Hô hấp"
+
+
+def test_generator_marks_no_data_for_doctor_handoff():
+    answer, meta = generator.generate("Bệnh hiếm XYZ điều trị thế nào?", [], return_meta=True)
+
+    assert answer == generator.NO_DATA_REPLY
+    assert meta["doctor_handoff_recommended"] is True
+
+
+def test_generator_extracts_fenced_json_payload(monkeypatch):
+    hits = [Hit("context", 1.0, "disease", "Bệnh cúm", "", "cum")]
+    fake_response = {
+        "choices": [{"message": {"content": '```json\n{"answer":"Nội dung trả lời [1].","doctor_handoff_recommended":true}\n```'}}]
+    }
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=lambda **kwargs: fake_response)
+        )
+    )
+    monkeypatch.setattr(generator, "get_openai", lambda: fake_client)
+
+    answer, meta = generator.generate("Tôi bị sốt?", hits, return_meta=True)
+
+    assert answer.startswith("Nội dung trả lời")
+    assert "```" not in answer
+    assert meta["doctor_handoff_recommended"] is True
+
+
+def test_generator_extracts_json_payload_with_language_prefix(monkeypatch):
+    hits = [Hit("context", 1.0, "disease", "Bệnh cúm", "", "cum")]
+    fake_response = {
+        "choices": [{"message": {"content": 'json\n{"answer":"Nội dung trả lời [1].","doctor_handoff_recommended":true}'}}]
+    }
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=lambda **kwargs: fake_response)
+        )
+    )
+    monkeypatch.setattr(generator, "get_openai", lambda: fake_client)
+
+    answer, meta = generator.generate("Tôi bị sốt?", hits, return_meta=True)
+
+    assert answer.startswith("Nội dung trả lời")
+    assert "doctor_handoff_recommended" not in answer
+    assert meta["doctor_handoff_recommended"] is True
+
+
+def test_generator_extracts_malformed_json_with_raw_newlines(monkeypatch):
+    hits = [Hit("context", 1.0, "disease", "Bệnh cúm", "", "cum")]
+    fake_response = {
+        "choices": [{"message": {"content": 'json\n{"answer":"Dòng 1\n\nDòng 2 [1]",\n"doctor_handoff_recommended":true}'}}]
+    }
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=lambda **kwargs: fake_response)
+        )
+    )
+    monkeypatch.setattr(generator, "get_openai", lambda: fake_client)
+
+    answer, meta = generator.generate("Tôi bị sốt?", hits, return_meta=True)
+
+    assert answer.startswith("Dòng 1")
+    assert "doctor_handoff_recommended" not in answer
+    assert meta["doctor_handoff_recommended"] is True
+
+
+def test_generator_renders_literal_escaped_newlines(monkeypatch):
+    hits = [Hit("context", 1.0, "disease", "Bệnh cúm", "", "cum")]
+    fake_response = {
+        "choices": [{"message": {"content": '{"answer":"Dòng 1\\\\n\\\\nDòng 2 [1]","doctor_handoff_recommended":true}'}}]
+    }
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=lambda **kwargs: fake_response)
+        )
+    )
+    monkeypatch.setattr(generator, "get_openai", lambda: fake_client)
+
+    answer, meta = generator.generate("Tôi bị sốt?", hits, return_meta=True)
+
+    assert "Dòng 1\n\nDòng 2" in answer
+    assert "\\n" not in answer
+    assert meta["doctor_handoff_recommended"] is True
 
 
 def test_generator_returns_technical_reply_when_llm_fails(monkeypatch):

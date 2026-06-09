@@ -14,15 +14,23 @@ from src.chat.storage.session import PatientSession
 
 def _analysis(
     label: str = "informational",
+    intent: str | None = None,
     direct_answer_requested: bool = False,
     rewritten: str = "Tôi bị ho",
     entities: dict | None = None,
     verdict: str = "allow",
 ) -> dict:
+    if intent is None:
+        intent = {
+            "diagnostic": "symptom_triage",
+            "informational": "pure_info",
+            "clarification_answer": "clarification_answer",
+        }.get(label, "pure_info")
     return {
         "guardrail": {"verdict": verdict, "reason": ""},
         "turn": {
             "label": label,
+            "intent": intent,
             "direct_answer_requested": direct_answer_requested,
         },
         "rewrite": {
@@ -372,6 +380,213 @@ def test_medication_only_informational_turn_ignores_existing_symptom_context(mon
 
     assert reply == "vitamin A dosage answer"
     assert captured["use_patient_context"] is False
+
+
+def test_contextual_drug_info_uses_informational_route_not_diagnostic(monkeypatch):
+    _patch_preflight_ok(monkeypatch)
+    session = _patch_persistence_noop(monkeypatch, PatientSession(session_id="s"))
+    monkeypatch.setattr(
+        pipeline,
+        "analyze_turn",
+        lambda *args, **kwargs: _analysis(
+            label="diagnostic",
+            intent="contextual_drug_info",
+            rewritten="Tôi bị rụng tóc, dùng Acid Pantothenic được không?",
+            entities={
+                "symptoms": [{"name": "rụng tóc"}],
+                "medications": ["Acid Pantothenic"],
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "normalize_entities",
+        lambda raw: {
+            "symptoms": [{"symptom_id": "symptom:HAIR_LOSS", "name": "rụng tóc"}],
+            "medications": ["Acid Pantothenic"],
+        },
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_handle_diagnostic",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("contextual drug info should not start diagnostic narrowing")
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    def fake_informational(
+        saved_session: PatientSession,
+        question: str,
+        trace_id: str,
+        use_patient_context: bool = False,
+        retrieval_question: str | None = None,
+    ) -> str:
+        captured["question"] = question
+        captured["use_patient_context"] = use_patient_context
+        captured["retrieval_question"] = retrieval_question
+        return "acid pantothenic safety answer"
+
+    monkeypatch.setattr(pipeline, "_handle_informational", fake_informational)
+
+    reply = pipeline.answer(
+        "Tôi bị rụng tóc, dùng Acid Pantothenic được không?",
+        session_id="s",
+        mode="auto",
+    )
+
+    assert reply == "acid pantothenic safety answer"
+    assert captured == {
+        "question": "Tôi bị rụng tóc, dùng Acid Pantothenic được không?",
+        "use_patient_context": True,
+        "retrieval_question": None,
+    }
+    assert session.symptoms == [{"symptom_id": "symptom:HAIR_LOSS", "name": "rụng tóc"}]
+    assert session.medications == ["Acid Pantothenic"]
+
+
+def test_condition_management_info_uses_informational_route_not_diagnostic(monkeypatch):
+    _patch_preflight_ok(monkeypatch)
+    session = _patch_persistence_noop(monkeypatch, PatientSession(session_id="s"))
+    monkeypatch.setattr(
+        pipeline,
+        "analyze_turn",
+        lambda *args, **kwargs: _analysis(
+            label="diagnostic",
+            intent="condition_management_info",
+            rewritten="Tôi bị đau thần kinh tọa, điều trị không dùng thuốc được không?",
+            entities={"symptoms": [], "medications": []},
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_handle_diagnostic",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("condition management info should not start diagnostic narrowing")
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    def fake_informational(
+        saved_session: PatientSession,
+        question: str,
+        trace_id: str,
+        use_patient_context: bool = False,
+        retrieval_question: str | None = None,
+    ) -> str:
+        captured["question"] = question
+        captured["use_patient_context"] = use_patient_context
+        captured["retrieval_question"] = retrieval_question
+        return "sciatica management answer"
+
+    monkeypatch.setattr(pipeline, "_handle_informational", fake_informational)
+
+    reply = pipeline.answer(
+        "Tôi bị đau thần kinh tọa, điều trị không dùng thuốc được không?",
+        session_id="s",
+        mode="auto",
+    )
+
+    assert reply == "sciatica management answer"
+    assert captured == {
+        "question": "Tôi bị đau thần kinh tọa, điều trị không dùng thuốc được không?",
+        "use_patient_context": False,
+        "retrieval_question": None,
+    }
+
+
+def test_pure_info_in_diagnostic_mode_suggests_information_mode(monkeypatch):
+    _patch_preflight_ok(monkeypatch)
+    session = _patch_persistence_noop(monkeypatch, PatientSession(session_id="s"))
+    monkeypatch.setattr(
+        pipeline,
+        "analyze_turn",
+        lambda *args, **kwargs: _analysis(
+            label="informational",
+            intent="pure_info",
+            rewritten="Acid Pantothenic là gì?",
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_handle_informational",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("blocked pure info should not answer in diagnostic mode")
+        ),
+    )
+
+    reply = pipeline.answer("Acid Pantothenic là gì?", session_id="s", mode="diagnostic")
+
+    assert reply == (
+        "Câu hỏi này phù hợp với chế độ Thông tin hơn. "
+        "Bạn muốn trả lời ở chế độ Thông tin không?"
+    )
+    assert session.conversation == [
+        {"role": "user", "content": "Acid Pantothenic là gì?"},
+        {"role": "assistant", "content": reply},
+    ]
+
+
+def test_symptom_triage_in_information_mode_suggests_diagnostic_mode(monkeypatch):
+    _patch_preflight_ok(monkeypatch)
+    session = _patch_persistence_noop(monkeypatch, PatientSession(session_id="s"))
+    monkeypatch.setattr(
+        pipeline,
+        "analyze_turn",
+        lambda *args, **kwargs: _analysis(
+            label="diagnostic",
+            intent="symptom_triage",
+            rewritten="Tôi đau lưng lan xuống chân là bệnh gì?",
+            entities={"symptoms": [{"name": "đau lưng lan xuống chân"}], "medications": []},
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_handle_diagnostic",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("blocked symptom triage should not run diagnostic flow")
+        ),
+    )
+
+    reply = pipeline.answer(
+        "Tôi đau lưng lan xuống chân là bệnh gì?",
+        session_id="s",
+        mode="information",
+    )
+
+    assert reply == (
+        "Câu hỏi này giống tư vấn triệu chứng hơn. "
+        "Bạn muốn trả lời ở chế độ Chẩn đoán không?"
+    )
+    assert session.conversation == [
+        {"role": "user", "content": "Tôi đau lưng lan xuống chân là bệnh gì?"},
+        {"role": "assistant", "content": reply},
+    ]
+    assert all("mode" not in turn for turn in session.conversation)
+
+
+def test_answer_with_choices_exposes_mode_suggestion_metadata(monkeypatch):
+    _patch_preflight_ok(monkeypatch)
+    _patch_persistence_noop(monkeypatch, PatientSession(session_id="s"))
+    monkeypatch.setattr(
+        pipeline,
+        "analyze_turn",
+        lambda *args, **kwargs: _analysis(
+            label="diagnostic",
+            intent="symptom_triage",
+            rewritten="Tôi đau lưng là bệnh gì?",
+            entities={"symptoms": [{"name": "đau lưng"}], "medications": []},
+        ),
+    )
+
+    reply = pipeline.answer_with_choices("Tôi đau lưng là bệnh gì?", session_id="s", mode="information")
+
+    assert reply.text == (
+        "Câu hỏi này giống tư vấn triệu chứng hơn. "
+        "Bạn muốn trả lời ở chế độ Chẩn đoán không?"
+    )
+    assert reply.suggest_mode == "diagnostic"
+    assert reply.retry_question == "Tôi đau lưng là bệnh gì?"
 
 
 def test_first_diagnostic_turn_gives_overview_before_questions(monkeypatch):
@@ -748,6 +963,20 @@ def test_answer_with_choices_includes_selection_mode(monkeypatch):
         ("Có nôn", "Có vàng da", "Không"),
         "multi",
     )
+
+
+def test_answer_with_choices_includes_doctor_specialty(monkeypatch):
+    def fake_answer(question, session_id="default"):
+        pipeline._meta()["doctor_offer"] = True
+        pipeline._meta()["doctor_specialty"] = "Tiêu hóa"
+        return "Bạn nên đi khám bác sĩ."
+
+    monkeypatch.setattr(pipeline, "answer", fake_answer)
+
+    reply = pipeline.answer_with_choices("Tôi bị đau bụng", session_id="s")
+
+    assert reply.doctor_offer is True
+    assert reply.doctor_specialty == "Tiêu hóa"
 
 
 def test_suggested_choices_for_fever_severity_question(monkeypatch):

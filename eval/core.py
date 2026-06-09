@@ -58,6 +58,7 @@ except ModuleNotFoundError:  # pragma: no cover - only needed for API mode
 DEFAULT_DATASET = Path("eval/datasets/medical_qa_benchmark.jsonl")
 DEFAULT_OUT_DIR = Path("eval/results")
 DEFAULT_PASS_THRESHOLD = 0.75
+EVAL_CHAT_MODE = "information"
 CITATION_RE = re.compile(r"\[(\d+)\]")
 
 # Weights for the deterministic scorer.
@@ -721,11 +722,17 @@ def run_direct(args: argparse.Namespace) -> int:
         start = time.perf_counter()
         try:
             for turn in turns:
-                final_answer, final_meta = answer_with_meta(turn, session_id=session_id)
+                final_answer, final_meta = answer_with_meta(
+                    turn,
+                    session_id=session_id,
+                    mode=EVAL_CHAT_MODE,
+                )
             if len(turns) > 1 and is_still_clarifying(final_answer):
                 forced_direct_answer = True
                 final_answer, final_meta = answer_with_meta(
-                    FORCE_ANSWER_PROMPT, session_id=session_id,
+                    FORCE_ANSWER_PROMPT,
+                    session_id=session_id,
+                    mode=EVAL_CHAT_MODE,
                 )
         except Exception as exc:
             error = repr(exc)
@@ -743,6 +750,7 @@ def run_direct(args: argparse.Namespace) -> int:
             "question": case.get("question") or turns[-1],
             "turns": turns if case.get("turns") else None,
             "answer": final_answer, "latency_ms": latency_ms,
+            "forced_mode": EVAL_CHAT_MODE,
             "forced_direct_answer": forced_direct_answer,
             "error": error, **scored,
         }
@@ -807,7 +815,11 @@ def run_api(args: argparse.Namespace) -> int:
                 response = client.post(
                     url,
                     headers={"X-API-Key": api_key},
-                    json={"question": turn_text, "session_id": session_id},
+                    json={
+                        "question": turn_text,
+                        "session_id": session_id,
+                        "mode": EVAL_CHAT_MODE,
+                    },
                 )
                 nonlocal status_code
                 status_code = response.status_code
@@ -838,6 +850,7 @@ def run_api(args: argparse.Namespace) -> int:
                 "question": case.get("question") or turns[-1],
                 "turns": turns if case.get("turns") else None,
                 "answer": final_answer, "latency_ms": latency_ms,
+                "forced_mode": EVAL_CHAT_MODE,
                 "forced_direct_answer": forced_direct_answer,
                 "http_status": status_code, "error": error, **scored,
             }

@@ -3,6 +3,7 @@ Configuration and shared clients.
 """
 
 import os
+import re
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -133,6 +134,29 @@ ZALO_APP_SECRET          = os.getenv("ZALO_APP_SECRET", "")
 TELEGRAM_BOT_TOKEN       = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_WEBHOOK_SECRET  = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
 
+
+def _parse_id_set(raw: str) -> set[int]:
+    ids: set[int] = set()
+    for part in re.split(r"[,\s]+", raw.strip()):
+        if part:
+            try:
+                ids.add(int(part))
+            except ValueError:
+                pass
+    return ids
+
+
+# Numeric Telegram user ids allowed to run admin commands (e.g. /admin_paid).
+# Numeric ids are immutable, unlike usernames.
+TELEGRAM_ADMIN_IDS       = _parse_id_set(os.getenv("TELEGRAM_ADMIN_IDS", ""))
+
 MESSENGER_PAGE_TOKEN     = os.getenv("MESSENGER_PAGE_TOKEN", "")
 MESSENGER_VERIFY_TOKEN   = os.getenv("MESSENGER_VERIFY_TOKEN", "")
 MESSENGER_APP_SECRET     = os.getenv("MESSENGER_APP_SECRET", "")
+
+# --- Payments (PayOS / VietQR) ---
+PAYOS_CLIENT_ID          = os.getenv("PAYOS_CLIENT_ID", "")
+PAYOS_API_KEY            = os.getenv("PAYOS_API_KEY", "")
+PAYOS_CHECKSUM_KEY       = os.getenv("PAYOS_CHECKSUM_KEY", "")
+PAYOS_BASE_URL           = os.getenv("PAYOS_BASE_URL", "https://api-merchant.payos.vn")
+PUBLIC_BASE_URL          = os.getenv("PUBLIC_BASE_URL", "")

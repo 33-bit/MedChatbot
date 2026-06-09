@@ -10,6 +10,7 @@ import json
 
 from src.chat.guards.guardrail import VALID_VERDICTS
 from src.chat.llm.mini import call_mini
+from src.chat.mode_policy import normalize_intent
 from src.chat.prompts import TURN_ANALYSIS_SYSTEM
 from src.config import GUARDRAIL_MAX_TOKENS, GUARDRAIL_MODEL
 
@@ -66,6 +67,7 @@ def analyze_turn(
     label = turn.get("label", "informational")
     if label not in VALID_LABELS:
         label = "informational"
+    intent = normalize_intent(turn.get("intent"), label)
 
     entities = _dict_field(result, "entities")
     symptoms = _list_field(entities, "symptoms")
@@ -80,11 +82,13 @@ def analyze_turn(
         medications = []
         rewritten = user_message
         clarification = ""
+        intent = normalize_intent(None, label)
 
     return {
         "guardrail": {"verdict": verdict, "reason": guardrail.get("reason", "")},
         "turn": {
             "label": label,
+            "intent": intent,
             "direct_answer_requested": _bool_field(turn, "direct_answer_requested"),
         },
         "rewrite": {
@@ -101,6 +105,7 @@ def _fallback(user_message: str) -> dict:
         "guardrail": {"verdict": "allow", "reason": ""},
         "turn": {
             "label": "informational",
+            "intent": "pure_info",
             "direct_answer_requested": False,
         },
         "rewrite": {"rewritten": user_message, "confident": True, "clarification": ""},

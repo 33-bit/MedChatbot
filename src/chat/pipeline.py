@@ -42,6 +42,12 @@ from src.chat.guards.guardrail import VERDICT_REPLIES, regex_check
 from src.chat.guards.quota import check_both as check_llm_quota
 from src.chat.llm.analyzer import analyze_turn
 from src.chat.llm.generator import generate
+from src.chat.mode_policy import (
+    ModeDecision,
+    apply_mode_policy,
+    normalize_intent,
+    normalize_mode,
+)
 from src.chat.preflight import RATE_LIMIT_MSG, preflight
 from src.chat.replies import ChatReply, TECHNICAL_ERROR_REPLY
 from src.chat.retrieval import (
@@ -133,6 +139,22 @@ def _record_latency(stage: str, ms: float) -> None:
     if meta is None:
         return
     meta.setdefault("latency_ms", {})[stage] = round(ms, 2)
+
+
+def _record_mode_decision(
+    mode: str,
+    intent: str,
+    decision: ModeDecision,
+    question: str,
+) -> None:
+    meta = _meta()
+    if meta is None:
+        return
+    meta["mode"] = mode
+    meta["intent"] = intent
+    if decision.suggest_mode:
+        meta["suggest_mode"] = decision.suggest_mode
+        meta["retry_question"] = question
 
 
 def _log_timing(trace_id: str, stage: str, start: float, **fields) -> None:
@@ -333,7 +355,11 @@ def _clarification_choice_analysis(text: str = "") -> dict:
     answer_now = _is_answer_now_choice(text)
     return {
         "guardrail": {"verdict": "allow", "reason": "clarification choice"},
-        "turn": {"label": "clarification_answer", "direct_answer_requested": answer_now},
+        "turn": {
+            "label": "clarification_answer",
+            "intent": "clarification_answer",
+            "direct_answer_requested": answer_now,
+        },
         "rewrite": {"rewritten": "", "confident": True, "clarification": ""},
         "entities": {"symptoms": [], "medications": []},
     }
@@ -603,6 +629,8 @@ def _handle_informational(
             question, hits, kg_text=kg_text, patient=patient_dict, return_meta=True,
         )
         _record_usage("generator", gen_meta.get("usage"), model=gen_meta.get("model"))
+        _meta()["doctor_offer"] = bool(gen_meta.get("doctor_handoff_recommended"))
+        _meta()["doctor_specialty"] = gen_meta.get("doctor_specialty")
     else:
         reply = generate(question, hits, kg_text=kg_text, patient=patient_dict)
     _log_timing(trace_id, "generate", stage_start, chars=len(reply))
@@ -610,21 +638,33 @@ def _handle_informational(
     return reply
 
 
-def _route(label: str, session: PatientSession, question: str,
-           rewritten: str, force_answer: bool, trace_id: str) -> str:
+def _route(
+    label: str,
+    session: PatientSession,
+    question: str,
+    rewritten: str,
+    force_answer: bool,
+    trace_id: str,
+    use_patient_context_override: bool | None = None,
+) -> str:
     if label == "clarification_answer":
         return _handle_clarification_answer(session, question, trace_id, force_answer)
     if label == "diagnostic":
         return _handle_diagnostic(session, rewritten, trace_id, force_answer=force_answer)
     # informational: always answer; personalize if we have symptoms
+    use_patient_context = (
+        use_patient_context_override
+        if use_patient_context_override is not None
+        else (
+            bool(session.symptoms)
+            and not _looks_like_medication_info_question(rewritten)
+        )
+    )
     return _handle_informational(
         session,
         rewritten,
         trace_id,
-        use_patient_context=(
-            bool(session.symptoms)
-            and not _looks_like_medication_info_question(rewritten)
-        ),
+        use_patient_context=use_patient_context,
     )
 
 
@@ -686,10 +726,12 @@ def _answer_inner(
     session_id: str,
     trace_id: str,
     request_start: float,
+    mode: str = "auto",
 ) -> str:
     question = (question or "").strip()
     if not question:
         return "Bạn hãy đặt câu hỏi cụ thể nhé."
+    mode = normalize_mode(mode)
 
     stage_start = time.perf_counter()
     session = load_session(session_id)
@@ -723,18 +765,21 @@ def _answer_inner(
         )
     guard = analysis["guardrail"]
     turn = analysis["turn"]
+    label = turn["label"]
+    intent = normalize_intent(turn.get("intent"), label)
     direct_answer_for_log = (
         turn["direct_answer_requested"] if guard["verdict"] == "allow" else False
     )
     _log_timing(trace_id, "turn_analysis", stage_start,
                 verdict=guard["verdict"],
-                label=turn["label"],
+                label=label,
+                intent=intent,
+                mode=mode,
                 direct_answer=direct_answer_for_log)
     if guard["verdict"] != "allow":
         _log_timing(trace_id, "total", request_start, outcome="guardrail")
         return _guardrail_reply(session_id, question, guard["verdict"])
 
-    label = turn["label"]
     direct_answer_requested = turn["direct_answer_requested"]
     session.add_message("user", question)
 
@@ -760,6 +805,21 @@ def _answer_inner(
     else:
         rewritten = question
 
+    active_flow = bool(session.answered_questions or session.clarification_queue)
+    decision = apply_mode_policy(mode, intent, active_flow=active_flow)
+    _record_mode_decision(mode, intent, decision, question)
+    if not decision.allow:
+        reply = decision.reply or ""
+        session.add_message("assistant", reply)
+        _persist_final_turn(session, session_id, question, reply, trace_id)
+        _log_timing(
+            trace_id,
+            "total",
+            request_start,
+            outcome=f"mode_suggest_{decision.suggest_mode or 'blocked'}",
+        )
+        return reply
+
     if label in ("diagnostic", "informational", "clarification_answer"):
         stage_start = time.perf_counter()
         _ingest_entities(analysis["entities"], session)
@@ -768,14 +828,21 @@ def _answer_inner(
                     medications=len(analysis["entities"]["medications"]))
 
     stage_start = time.perf_counter()
+    route_label = decision.route_label or label
+    force_answer = (
+        decision.force_answer
+        if decision.force_answer is not None
+        else direct_answer_requested
+    )
     try:
         reply = _route(
-            label,
+            route_label,
             session,
             question,
             rewritten,
-            direct_answer_requested,
+            force_answer,
             trace_id,
+            use_patient_context_override=decision.use_patient_context,
         )
     except Exception:
         log.exception("Pipeline route failed trace=%s session=%s", trace_id, session_id)
@@ -783,33 +850,63 @@ def _answer_inner(
         _persist_final_turn(session, session_id, question, TECHNICAL_ERROR_REPLY, trace_id)
         _log_timing(trace_id, "total", request_start, outcome="technical_error")
         return TECHNICAL_ERROR_REPLY
-    _log_timing(trace_id, "route", stage_start, label=label)
+    _log_timing(trace_id, "route", stage_start, label=route_label)
 
     session.add_message("assistant", reply)
     _persist_final_turn(session, session_id, question, reply, trace_id)
-    _log_timing(trace_id, "total", request_start, outcome=label)
+    _log_timing(trace_id, "total", request_start, outcome=route_label)
     return reply
 
 
-def answer(question: str, session_id: str = "default") -> str:
+def answer(question: str, session_id: str = "default", mode: str = "auto") -> str:
     trace_id = uuid.uuid4().hex[:8]
     request_start = time.perf_counter()
     try:
-        return _answer_inner(question, session_id, trace_id, request_start)
+        return _answer_inner(question, session_id, trace_id, request_start, mode=mode)
     except Exception:
         log.exception("Pipeline failed trace=%s session=%s", trace_id, session_id)
         _log_timing(trace_id, "total", request_start, outcome="technical_error")
         return TECHNICAL_ERROR_REPLY
 
 
-def answer_with_choices(question: str, session_id: str = "default") -> ChatReply:
-    reply = answer(question, session_id=session_id)
+def answer_with_choices(
+    question: str,
+    session_id: str = "default",
+    mode: str = "auto",
+) -> ChatReply:
+    meta: dict[str, Any] = {}
+    previous_meta = _meta()
+    _META_LOCAL.current = meta
+    try:
+        if normalize_mode(mode) == "auto":
+            reply = answer(question, session_id=session_id)
+        else:
+            reply = answer(question, session_id=session_id, mode=mode)
+    finally:
+        _META_LOCAL.current = previous_meta
     choices = suggested_choices(reply)
-    mode = suggested_selection_mode(reply) if choices else "single"
-    return ChatReply(reply, choices, mode)
+    selection_mode = suggested_selection_mode(reply) if choices else "single"
+    doctor_offer = (
+        bool(meta.get("doctor_offer"))
+        if not choices and not meta.get("suggest_mode")
+        else False
+    )
+    return ChatReply(
+        reply,
+        choices,
+        selection_mode,
+        meta.get("suggest_mode"),
+        meta.get("retry_question"),
+        doctor_offer,
+        meta.get("doctor_specialty") if doctor_offer else None,
+    )
 
 
-def answer_with_meta(question: str, session_id: str = "default") -> tuple[str, dict[str, Any]]:
+def answer_with_meta(
+    question: str,
+    session_id: str = "default",
+    mode: str = "auto",
+) -> tuple[str, dict[str, Any]]:
     """Like `answer`, but also returns a meta dict capturing usage, retrieved
     hits, and per-stage latency for the turn. Eval-only entry point — channels
     should keep using `answer` since the meta payload changes per turn.
@@ -820,7 +917,7 @@ def answer_with_meta(question: str, session_id: str = "default") -> tuple[str, d
     _META_LOCAL.current = meta
     try:
         try:
-            reply = _answer_inner(question, session_id, trace_id, request_start)
+            reply = _answer_inner(question, session_id, trace_id, request_start, mode=mode)
         except Exception:
             log.exception("Pipeline failed trace=%s session=%s", trace_id, session_id)
             _log_timing(trace_id, "total", request_start, outcome="technical_error")

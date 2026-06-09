@@ -1,0 +1,88 @@
+{
+  "overall": {
+    "local-rag": {
+      "total": 83,
+      "passed": 37,
+      "pass_rate": 0.4458,
+      "pass_rate_ci95": [
+        0.3494,
+        0.5542
+      ],
+      "avg_score": 0.7052,
+      "avg_judge_score": 0.7052,
+      "error_rate": 0.0,
+      "avg_latency_ms": 30039.96,
+      "p50_latency_ms": 25730.97,
+      "p95_latency_ms": 41168.97,
+      "avg_retrieval_ms": 9998.63,
+      "avg_generator_ms": 28946.61,
+      "total_tokens": 270293,
+      "total_cost_usd": 0.0,
+      "avg_cost_per_answer_usd": 0.0
+    }
+  },
+  "by_category": {
+    "local-rag/symptom_triage": {
+      "total": 83,
+      "passed": 37,
+      "pass_rate": 0.4458,
+      "pass_rate_ci95": [
+        0.3494,
+        0.5542
+      ],
+      "avg_score": 0.7052,
+      "avg_judge_score": 0.7052,
+      "error_rate": 0.0,
+      "avg_latency_ms": 30039.96,
+      "p50_latency_ms": 25730.97,
+      "p95_latency_ms": 41168.97,
+      "avg_retrieval_ms": 9998.63,
+      "avg_generator_ms": 28946.61,
+      "total_tokens": 270293,
+      "total_cost_usd": 0.0,
+      "avg_cost_per_answer_usd": 0.0
+    }
+  },
+  "by_priority": {
+    "local-rag/high": {
+      "total": 75,
+      "passed": 37,
+      "pass_rate": 0.4933,
+      "pass_rate_ci95": [
+        0.3867,
+        0.6
+      ],
+      "avg_score": 0.7293,
+      "avg_judge_score": 0.7293,
+      "error_rate": 0.0,
+      "avg_latency_ms": 31829.02,
+      "p50_latency_ms": 25758.83,
+      "p95_latency_ms": 43827.94,
+      "avg_retrieval_ms": 10012.22,
+      "avg_generator_ms": 29347.36,
+      "total_tokens": 254199,
+      "total_cost_usd": 0.0,
+      "avg_cost_per_answer_usd": 0.0
+    },
+    "local-rag/medium": {
+      "total": 8,
+      "passed": 0,
+      "pass_rate": 0.0,
+      "pass_rate_ci95": [
+        0.0,
+        0.0
+      ],
+      "avg_score": 0.4792,
+      "avg_judge_score": 0.4792,
+      "error_rate": 0.0,
+      "avg_latency_ms": 13267.57,
+      "p50_latency_ms": 1686.38,
+      "p95_latency_ms": 35095.56,
+      "avg_retrieval_ms": 9740.46,
+      "avg_generator_ms": 21332.4,
+      "total_tokens": 16094,
+      "total_cost_usd": 0.0,
+      "avg_cost_per_answer_usd": 0.0
+    }
+  }
+}

@@ -74,6 +74,7 @@ Trả về JSON đúng cấu trúc:
   },
   "turn": {
     "label": "diagnostic" | "informational" | "clarification_answer" | "greeting_other",
+    "intent": "pure_info" | "condition_management_info" | "contextual_drug_info" | "symptom_triage" | "care_seeking_advice" | "emergency" | "clarification_answer" | "off_scope",
     "direct_answer_requested": true | false
   },
   "rewrite": {
@@ -102,9 +103,18 @@ Quy tắc phân loại:
 - "informational": hỏi thông tin về bệnh/thuốc/chăm sóc sức khỏe nói chung
 - "clarification_answer": đang trả lời câu hỏi làm rõ trước đó của bot
 - "greeting_other": chào hỏi/cảm ơn/lạc đề
+- intent="pure_info": hỏi thông tin chung về bệnh, thuốc, chất, phòng bệnh hoặc chăm sóc.
+- intent="condition_management_info": đã nêu bệnh/tình trạng đã biết và hỏi cách điều trị, theo dõi, phòng ngừa, không yêu cầu tìm nguyên nhân mới.
+- intent="contextual_drug_info": nêu triệu chứng/tình trạng kèm thuốc/thực phẩm bổ sung và hỏi có dùng được không, công dụng, an toàn, tương tác hoặc liều dùng.
+- intent="symptom_triage": hỏi triệu chứng là bệnh gì, nguyên nhân gì, cần định hướng chẩn đoán hoặc thu hẹp khả năng.
+- intent="care_seeking_advice": hỏi có cần đi khám/cấp cứu không, mức độ khẩn cấp, hoặc nên theo dõi thế nào.
+- intent="emergency": có dấu hiệu nguy hiểm như khó thở, đau ngực dữ dội, lơ mơ, yếu liệt, co giật, chảy máu nhiều, ngất/choáng, sốc, triệu chứng nặng lên nhanh.
+- intent="clarification_answer": đang trả lời câu hỏi làm rõ trước đó.
+- intent="off_scope": không phải câu hỏi y tế.
 - Nếu last_bot_message đang xin phép hỏi thêm bằng câu "Để tôi định hướng tốt hơn..." và user_message là "Bắt đầu", "được", "ok" hoặc tương tự, label="clarification_answer".
 - Nếu last_bot_message đang hỏi từng ý như "Bạn có bị ..." kèm lựa chọn "Có / Không / Không rõ" và user_message trả lời có/không/không biết/không rõ hoặc yêu cầu "trả lời luôn/cứ trả lời", label="clarification_answer".
 - "direct_answer_requested" true khi người dùng yêu cầu dừng hỏi thêm để trả lời ngay, ví dụ "trả lời tôi luôn", "cứ trả lời đi", "khỏi hỏi nữa", "đừng hỏi nữa", "tôi không biết, cứ trả lời". Giữ label theo vai trò thật của lượt: nếu đang trả lời câu hỏi làm rõ thì label="clarification_answer"; nếu đang nêu triệu chứng mới thì label="diagnostic". Nếu người dùng chỉ nói "không biết/không rõ" mà không yêu cầu trả lời ngay, đặt false.
+- Giữ label tương thích: pure_info/condition_management_info/contextual_drug_info dùng label="informational"; symptom_triage/care_seeking_advice/emergency dùng label="diagnostic"; clarification_answer dùng label="clarification_answer".
 
 Quy tắc rewrite:
 - Nếu user_message đã rõ ràng, rewritten = user_message và confident = true.

@@ -8,6 +8,7 @@ from typing import Any
 
 DEFAULT_RESULT = Path("eval/results/local-rag-disease_info-results-20260604-203627.jsonl")
 DEFAULT_OUTPUT = Path("eval/artifacts/result_viewer.html")
+DEFAULT_DATASET = Path("eval/datasets/medical_qa_benchmark_v2.jsonl")
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -27,11 +28,40 @@ def load_summary(path: Path) -> dict[str, Any] | None:
     return json.loads(summary_path.read_text(encoding="utf-8"))
 
 
+def load_expected_answers(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    expected: dict[str, str] = {}
+    for row in load_jsonl(path):
+        case_id = row.get("id")
+        answer = row.get("reference_answer")
+        if case_id and answer:
+            expected[str(case_id)] = str(answer)
+    return expected
+
+
+def with_expected_answers(rows: list[dict[str, Any]], dataset_path: Path) -> list[dict[str, Any]]:
+    expected_answers = load_expected_answers(dataset_path)
+    enriched: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        case_id = item.get("case_id") or item.get("id")
+        expected_answer = (
+            item.get("expected_answer")
+            or item.get("reference_answer")
+            or expected_answers.get(str(case_id), "")
+        )
+        item["expected_answer"] = expected_answer
+        enriched.append(item)
+    return enriched
+
+
 def write_html(result_path: Path, output_path: Path) -> None:
-    rows = load_jsonl(result_path)
+    rows = with_expected_answers(load_jsonl(result_path), DEFAULT_DATASET)
     summary = load_summary(result_path)
     payload = {
         "source": str(result_path),
+        "dataset": str(DEFAULT_DATASET),
         "rows": rows,
         "summary": summary,
     }
@@ -85,7 +115,7 @@ def write_html(result_path: Path, output_path: Path) -> None:
     }}
     main {{
       padding: 18px 20px 32px;
-      max-width: 1500px;
+      max-width: none;
       margin: 0 auto;
     }}
     .summary {{
@@ -133,10 +163,11 @@ def write_html(result_path: Path, output_path: Path) -> None:
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 8px;
-      overflow: hidden;
+      overflow-x: auto;
     }}
     table {{
       width: 100%;
+      min-width: 2100px;
       border-collapse: collapse;
       table-layout: fixed;
     }}
@@ -159,8 +190,9 @@ def write_html(result_path: Path, output_path: Path) -> None:
     .status {{ width: 88px; }}
     .latency {{ width: 120px; }}
     .retrieval {{ width: 165px; }}
-    .question {{ width: 27%; }}
-    .answer {{ width: auto; }}
+    .question {{ width: 380px; }}
+    .expected {{ width: 430px; }}
+    .answer {{ width: 620px; }}
     .badge {{
       display: inline-block;
       padding: 2px 7px;
@@ -174,7 +206,7 @@ def write_html(result_path: Path, output_path: Path) -> None:
     .fail {{ color: var(--bad); background: #fee4e2; }}
     .warn {{ color: var(--warn); background: #fff0d6; }}
     .muted {{ color: var(--muted); }}
-    .answer-text, .question-text {{
+    .answer-text, .expected-text, .question-text {{
       white-space: pre-wrap;
       overflow-wrap: anywhere;
       max-height: 165px;
@@ -249,8 +281,6 @@ def write_html(result_path: Path, output_path: Path) -> None:
     @media (max-width: 1100px) {{
       .summary {{ grid-template-columns: repeat(2, minmax(130px, 1fr)); }}
       .filters {{ grid-template-columns: 1fr 1fr; }}
-      table {{ min-width: 1250px; }}
-      .table-wrap {{ overflow-x: auto; }}
     }}
   </style>
 </head>
@@ -262,7 +292,7 @@ def write_html(result_path: Path, output_path: Path) -> None:
   <main>
     <section class="summary" id="summary"></section>
     <section class="filters">
-      <input id="search" type="search" placeholder="Search case, question, answer">
+      <input id="search" type="search" placeholder="Search case, question, expected answer, answer">
       <select id="statusFilter">
         <option value="all">All statuses</option>
         <option value="pass">Pass</option>
@@ -298,6 +328,7 @@ def write_html(result_path: Path, output_path: Path) -> None:
             <th class="latency">Latency</th>
             <th class="retrieval">Retrieval</th>
             <th class="question">Question</th>
+            <th class="expected">Expected Answer</th>
             <th class="answer">Answer</th>
           </tr>
         </thead>
@@ -420,7 +451,7 @@ def write_html(result_path: Path, output_path: Path) -> None:
       const routing = document.getElementById('routingFilter').value;
       const scoreFilter = document.getElementById('scoreFilter').value;
       const text = [
-        row.case_id, row.category, row.priority, row.question, row.answer,
+        row.case_id, row.category, row.priority, row.question, row.expected_answer, row.answer,
         JSON.stringify(row.retrieved_slugs || []),
         JSON.stringify(row.retrieved_chunks || []),
         JSON.stringify(row.judge || {{}})
@@ -528,6 +559,7 @@ def write_html(result_path: Path, output_path: Path) -> None:
             </div></td>
             <td class="retrieval">${{retrievalSummary(row)}}</td>
             <td class="question"><div class="question-text">${{escapeHtml(row.question || '')}}</div></td>
+            <td class="expected"><div class="expected-text">${{escapeHtml(row.expected_answer || '-')}}</div></td>
             <td class="answer">
               <div class="answer-text">${{escapeHtml(row.answer || '')}}</div>
               ${{details}}

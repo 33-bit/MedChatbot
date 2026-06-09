@@ -30,6 +30,7 @@ def test_cleanup_does_not_vacuum_by_default(monkeypatch):
         "consultations_deleted": 1,
         "profiles_deleted": 1,
         "rate_limit_purged": 1,
+        "doctor_consultations_ended": 0,
     }
     assert "VACUUM" not in db.statements
     assert db.commits == 1

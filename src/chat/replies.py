@@ -10,6 +10,10 @@ class ChatReply:
     text: str
     choices: tuple[str, ...] = ()
     selection_mode: str = "single"
+    suggest_mode: str | None = None
+    retry_question: str | None = None
+    doctor_offer: bool = False
+    doctor_specialty: str | None = None
 
 TECHNICAL_ERROR_REPLY = (
     "Hiện hệ thống đang gặp sự cố kỹ thuật nên tôi chưa thể trả lời chính xác lúc này. "
