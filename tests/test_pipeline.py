@@ -1857,6 +1857,13 @@ def test_answer_with_meta_records_structured_graph_trace(monkeypatch):
         "reranked_hits": [
             {"rank": 1, "stage": "reranked", "chunk_id": "disease:cum:trieu-chung"}
         ],
+        "timings_ms": {
+            "dense_search": 1.1,
+            "sparse_search": 2.2,
+            "fusion": 3.3,
+            "rerank": 4.4,
+            "hybrid_total": 11.0,
+        },
     }
     monkeypatch.setattr(
         pipeline,
@@ -1903,10 +1910,12 @@ def test_answer_with_meta_records_structured_graph_trace(monkeypatch):
     assert meta["retrieval_debug"] is retrieval_debug
     assert [node["id"] for node in meta["graph_nodes"]] == [
         "input",
+        "load_session",
         "preflight",
         "turn_analysis",
         "rewrite",
         "route",
+        "entity_ingest",
         "kg_search",
         "dense_search",
         "sparse_search",
@@ -1934,11 +1943,16 @@ def test_answer_with_meta_records_structured_graph_trace(monkeypatch):
     assert nodes["sparse_search"]["output"] == retrieval_debug["sparse_hits"]
     assert nodes["fusion"]["output"] == retrieval_debug["fused_hits"]
     assert nodes["rerank"]["output"] == retrieval_debug["reranked_hits"]
+    assert nodes["dense_search"]["ms"] == 1.1
+    assert nodes["sparse_search"]["ms"] == 2.2
+    assert nodes["fusion"]["ms"] == 3.3
+    assert nodes["rerank"]["ms"] == 4.4
     assert nodes["generate"]["output"] == {"reply": "answer"}
     assert nodes["total"]["output"] == {
         "outcome": "informational",
         "latency_ms_total": meta["latency_ms_total"],
     }
+    assert not any(key.startswith("_") for key in meta)
     for field in (
         "timings",
         "retrieved",
@@ -1950,6 +1964,84 @@ def test_answer_with_meta_records_structured_graph_trace(monkeypatch):
         assert field in meta
 
 
+def test_answer_with_meta_records_regex_guard_persistence(monkeypatch):
+    _patch_persistence_noop(monkeypatch)
+    monkeypatch.setattr(pipeline, "check_rate_limit", lambda session_id: True)
+    monkeypatch.setattr(
+        pipeline,
+        "regex_check",
+        lambda question: {"verdict": "off_topic"},
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "check_llm_quota",
+        lambda session_id: (_ for _ in ()).throw(
+            AssertionError("quota should not run after regex guard")
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "analyze_turn",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("analyzer should not run after regex guard")
+        ),
+    )
+
+    reply, meta = pipeline.answer_with_meta("Viết code Python", session_id="s")
+
+    nodes = {node["id"]: node for node in meta["graph_nodes"]}
+    assert reply == "Tôi chỉ hỗ trợ các câu hỏi về sức khỏe, bệnh lý và thuốc."
+    assert nodes["preflight"]["status"] == "success"
+    assert nodes["persist"]["status"] == "success"
+    assert nodes["persist"]["ms"] is not None
+
+
+def test_answer_with_meta_marks_regex_guard_persistence_failure(monkeypatch):
+    _patch_persistence_noop(monkeypatch)
+    monkeypatch.setattr(pipeline, "check_rate_limit", lambda session_id: True)
+    monkeypatch.setattr(
+        pipeline,
+        "regex_check",
+        lambda question: {"verdict": "off_topic"},
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "save_session",
+        lambda session: (_ for _ in ()).throw(RuntimeError("persist failed")),
+    )
+
+    reply, meta = pipeline.answer_with_meta("Viết code Python", session_id="s")
+
+    nodes = {node["id"]: node for node in meta["graph_nodes"]}
+    assert reply == TECHNICAL_ERROR_REPLY
+    assert nodes["preflight"]["status"] != "error"
+    assert nodes["persist"]["status"] == "error"
+    assert nodes["persist"]["ms"] is not None
+
+
+def test_answer_with_meta_records_blocked_mode_route_before_persist(monkeypatch):
+    _patch_preflight_ok(monkeypatch)
+    _patch_persistence_noop(monkeypatch)
+    monkeypatch.setattr(pipeline, "analyze_turn", lambda *args, **kwargs: _analysis())
+    monkeypatch.setattr(
+        pipeline,
+        "_route",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("blocked mode should not route")
+        ),
+    )
+
+    reply, meta = pipeline.answer_with_meta(
+        "Cho tôi thông tin về cúm",
+        session_id="s",
+        mode="diagnostic",
+    )
+
+    stages = [entry["stage"] for entry in meta["timings"]]
+    assert "chế độ Thông tin" in reply
+    assert stages.index("route") < stages.index("persist")
+
+
 def test_answer_with_meta_marks_failed_retrieval_node(monkeypatch):
     _patch_preflight_ok(monkeypatch)
     _patch_persistence_noop(monkeypatch)
@@ -1959,16 +2051,28 @@ def test_answer_with_meta_marks_failed_retrieval_node(monkeypatch):
         "_load_kg_context_with_debug",
         lambda question, trace_id: ("", {}),
     )
+    partial_debug = {
+        "query": "Tôi bị ho",
+        "dense_hits": [{"rank": 1, "stage": "dense", "chunk_id": "dense-1"}],
+        "timings_ms": {
+            "dense_search": 1.1,
+            "sparse_search": 2.2,
+            "hybrid_total": 3.3,
+        },
+        "error_stage": "sparse_search",
+    }
 
-    def fail_dense_retrieval(question: str, trace_id: str):
-        raise QdrantUnavailable(
-            "Qdrant collection check failed for medical_guidelines"
-        )
+    class PartialRetrievalFailure(QdrantUnavailable):
+        def __init__(self) -> None:
+            super().__init__("Sparse retrieval failed")
+            self.debug = partial_debug
 
     monkeypatch.setattr(
         pipeline,
         "_load_hybrid_hits_with_debug",
-        fail_dense_retrieval,
+        lambda question, trace_id: (_ for _ in ()).throw(
+            PartialRetrievalFailure()
+        ),
     )
     monkeypatch.setattr(
         pipeline,
@@ -1983,9 +2087,316 @@ def test_answer_with_meta_marks_failed_retrieval_node(monkeypatch):
     nodes = {node["id"]: node for node in meta["graph_nodes"]}
     assert reply == TECHNICAL_ERROR_REPLY
     assert meta["outcome"] == "technical_error"
-    assert nodes["dense_search"]["status"] == "error"
+    assert meta["retrieval_debug"] == partial_debug
+    assert nodes["kg_search"]["status"] == "success"
+    assert nodes["kg_search"]["ms"] is not None
+    assert nodes["dense_search"]["status"] == "success"
+    assert nodes["dense_search"]["output"] == partial_debug["dense_hits"]
+    assert nodes["dense_search"]["ms"] == 1.1
+    assert nodes["sparse_search"]["status"] == "error"
+    assert nodes["sparse_search"]["ms"] == 2.2
+    assert nodes["fusion"]["status"] == "skipped"
+    assert nodes["rerank"]["status"] == "skipped"
     assert nodes["generate"]["status"] == "skipped"
     assert nodes["total"]["status"] == "success"
+    assert not any(key.startswith("_") for key in meta)
+
+
+def test_answer_with_meta_preserves_retrieval_sibling_completed_during_shutdown(
+    monkeypatch,
+):
+    _patch_preflight_ok(monkeypatch)
+    _patch_persistence_noop(monkeypatch)
+    monkeypatch.setattr(pipeline, "analyze_turn", lambda *args, **kwargs: _analysis())
+    release_hybrid = threading.Event()
+    hybrid_started = threading.Event()
+    original_executor = pipeline.ThreadPoolExecutor
+    retrieval_debug = {
+        "query": "Tôi bị ho",
+        "dense_hits": [{"rank": 1, "stage": "dense", "chunk_id": "dense-1"}],
+        "sparse_hits": [{"rank": 1, "stage": "sparse", "chunk_id": "sparse-1"}],
+        "fused_hits": [{"rank": 1, "stage": "fused", "chunk_id": "fused-1"}],
+        "reranked_hits": [{"rank": 1, "stage": "reranked", "chunk_id": "reranked-1"}],
+    }
+
+    class ReleasingExecutor(original_executor):
+        def __exit__(self, exc_type, exc_value, traceback):
+            release_hybrid.set()
+            return super().__exit__(exc_type, exc_value, traceback)
+
+    def slow_hybrid(question: str, trace_id: str):
+        hybrid_started.set()
+        assert release_hybrid.wait(timeout=1.0)
+        return [], retrieval_debug
+
+    def fail_kg(question: str, trace_id: str):
+        assert hybrid_started.wait(timeout=1.0)
+        raise Neo4jUnavailable("Neo4j search failed")
+
+    monkeypatch.setattr(pipeline, "ThreadPoolExecutor", ReleasingExecutor)
+    monkeypatch.setattr(pipeline, "_load_kg_context_with_debug", fail_kg)
+    monkeypatch.setattr(pipeline, "_load_hybrid_hits_with_debug", slow_hybrid)
+
+    reply, meta = pipeline.answer_with_meta("Tôi bị ho", session_id="s")
+
+    nodes = {node["id"]: node for node in meta["graph_nodes"]}
+    assert reply == TECHNICAL_ERROR_REPLY
+    assert meta["retrieval_debug"] == retrieval_debug
+    assert nodes["kg_search"]["status"] == "error"
+    assert nodes["dense_search"]["status"] == "success"
+    assert nodes["sparse_search"]["status"] == "success"
+    assert nodes["fusion"]["status"] == "success"
+    assert nodes["rerank"]["status"] == "success"
+
+
+def test_answer_with_meta_marks_kg_failure_with_elapsed(monkeypatch):
+    _patch_preflight_ok(monkeypatch)
+    _patch_persistence_noop(monkeypatch)
+    monkeypatch.setattr(pipeline, "analyze_turn", lambda *args, **kwargs: _analysis())
+    retrieval_debug = {
+        "query": "Tôi bị ho",
+        "dense_hits": [],
+        "sparse_hits": [],
+        "fused_hits": [],
+        "reranked_hits": [],
+    }
+    monkeypatch.setattr(
+        pipeline,
+        "_load_kg_context_with_debug",
+        lambda question, trace_id: (_ for _ in ()).throw(
+            Neo4jUnavailable("Neo4j search failed")
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_load_hybrid_hits_with_debug",
+        lambda question, trace_id: ([], retrieval_debug),
+    )
+
+    reply, meta = pipeline.answer_with_meta("Tôi bị ho", session_id="s")
+
+    nodes = {node["id"]: node for node in meta["graph_nodes"]}
+    assert reply == TECHNICAL_ERROR_REPLY
+    assert nodes["kg_search"]["status"] == "error"
+    assert nodes["kg_search"]["ms"] is not None
+
+
+def test_answer_with_meta_marks_both_parallel_retrieval_failures(monkeypatch):
+    _patch_preflight_ok(monkeypatch)
+    _patch_persistence_noop(monkeypatch)
+    monkeypatch.setattr(pipeline, "analyze_turn", lambda *args, **kwargs: _analysis())
+    original_wait = pipeline.wait
+    retrieval_debug = {
+        "query": "Tôi bị ho",
+        "timings_ms": {"dense_search": 1.1, "hybrid_total": 1.1},
+        "error_stage": "dense_search",
+    }
+
+    class PartialRetrievalFailure(QdrantUnavailable):
+        def __init__(self) -> None:
+            super().__init__("Dense retrieval failed")
+            self.debug = retrieval_debug
+
+    def wait_for_both(futures, return_when=None):
+        original_wait(futures)
+        return list(futures), set()
+
+    monkeypatch.setattr(pipeline, "wait", wait_for_both)
+    monkeypatch.setattr(
+        pipeline,
+        "_load_kg_context_with_debug",
+        lambda question, trace_id: (_ for _ in ()).throw(
+            Neo4jUnavailable("Neo4j search failed")
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_load_hybrid_hits_with_debug",
+        lambda question, trace_id: (_ for _ in ()).throw(
+            PartialRetrievalFailure()
+        ),
+    )
+
+    reply, meta = pipeline.answer_with_meta("Tôi bị ho", session_id="s")
+
+    nodes = {node["id"]: node for node in meta["graph_nodes"]}
+    assert reply == TECHNICAL_ERROR_REPLY
+    assert nodes["kg_search"]["status"] == "error"
+    assert nodes["kg_search"]["ms"] is not None
+    assert meta["retrieval_debug"] == retrieval_debug
+    assert nodes["dense_search"]["status"] == "error"
+    assert nodes["dense_search"]["ms"] == 1.1
+
+
+def test_answer_with_meta_marks_generation_failure_not_route(monkeypatch):
+    _patch_preflight_ok(monkeypatch)
+    _patch_persistence_noop(monkeypatch)
+    monkeypatch.setattr(pipeline, "analyze_turn", lambda *args, **kwargs: _analysis())
+    monkeypatch.setattr(
+        pipeline,
+        "_load_kg_context_with_debug",
+        lambda question, trace_id: ("", {}),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_load_hybrid_hits_with_debug",
+        lambda question, trace_id: (
+            [],
+            {
+                "query": question,
+                "dense_hits": [],
+                "sparse_hits": [],
+                "fused_hits": [],
+                "reranked_hits": [],
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "generate",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("generation failed")
+        ),
+    )
+
+    reply, meta = pipeline.answer_with_meta("Tôi bị ho", session_id="s")
+
+    nodes = {node["id"]: node for node in meta["graph_nodes"]}
+    assert reply == TECHNICAL_ERROR_REPLY
+    assert nodes["generate"]["status"] == "error"
+    assert nodes["generate"]["ms"] is not None
+    assert nodes["generate"]["output"] is None
+    assert nodes["route"]["status"] != "error"
+
+
+@pytest.mark.parametrize("early_return", ("greeting", "clarification"))
+def test_answer_with_meta_marks_early_persistence_failure(monkeypatch, early_return):
+    _patch_preflight_ok(monkeypatch)
+    _patch_persistence_noop(monkeypatch)
+    analysis = _analysis(label="greeting_other")
+    if early_return == "clarification":
+        analysis = _analysis()
+        analysis["rewrite"].update({
+            "confident": False,
+            "clarification": "Bạn có thể mô tả rõ hơn không?",
+        })
+    monkeypatch.setattr(pipeline, "analyze_turn", lambda *args, **kwargs: analysis)
+    monkeypatch.setattr(
+        pipeline,
+        "save_session",
+        lambda session: (_ for _ in ()).throw(RuntimeError("persist failed")),
+    )
+
+    reply, meta = pipeline.answer_with_meta("Tôi bị ho", session_id="s")
+
+    nodes = {node["id"]: node for node in meta["graph_nodes"]}
+    assert reply == TECHNICAL_ERROR_REPLY
+    assert nodes["persist"]["status"] == "error"
+    assert nodes["persist"]["ms"] is not None
+
+
+def test_answer_with_meta_marks_mode_policy_failure_as_route_error(monkeypatch):
+    _patch_preflight_ok(monkeypatch)
+    _patch_persistence_noop(monkeypatch)
+    monkeypatch.setattr(pipeline, "analyze_turn", lambda *args, **kwargs: _analysis())
+    monkeypatch.setattr(
+        pipeline,
+        "apply_mode_policy",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("mode policy failed")
+        ),
+    )
+
+    reply, meta = pipeline.answer_with_meta("Tôi bị ho", session_id="s")
+
+    nodes = {node["id"]: node for node in meta["graph_nodes"]}
+    assert reply == TECHNICAL_ERROR_REPLY
+    assert nodes["route"]["status"] == "error"
+    assert nodes["route"]["ms"] is not None
+
+
+def test_answer_with_meta_marks_guardrail_persistence_failure(monkeypatch):
+    _patch_preflight_ok(monkeypatch)
+    _patch_persistence_noop(monkeypatch)
+    monkeypatch.setattr(
+        pipeline,
+        "analyze_turn",
+        lambda *args, **kwargs: _analysis(verdict="off_topic"),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "save_session",
+        lambda session: (_ for _ in ()).throw(RuntimeError("persist failed")),
+    )
+
+    reply, meta = pipeline.answer_with_meta("Viết code Python", session_id="s")
+
+    nodes = {node["id"]: node for node in meta["graph_nodes"]}
+    assert reply == TECHNICAL_ERROR_REPLY
+    assert nodes["persist"]["status"] == "error"
+    assert nodes["persist"]["ms"] is not None
+
+
+def test_answer_with_meta_marks_entity_ingest_failure(monkeypatch):
+    _patch_preflight_ok(monkeypatch)
+    _patch_persistence_noop(monkeypatch)
+    monkeypatch.setattr(pipeline, "analyze_turn", lambda *args, **kwargs: _analysis())
+    monkeypatch.setattr(
+        pipeline,
+        "_ingest_entities",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("entity ingest failed")
+        ),
+    )
+
+    reply, meta = pipeline.answer_with_meta("Tôi bị ho", session_id="s")
+
+    nodes = {node["id"]: node for node in meta["graph_nodes"]}
+    assert reply == TECHNICAL_ERROR_REPLY
+    assert nodes["entity_ingest"]["status"] == "error"
+    assert nodes["entity_ingest"]["ms"] is not None
+
+
+@pytest.mark.parametrize(
+    "failing_stage",
+    ("load_session", "preflight", "turn_analysis", "route"),
+)
+def test_answer_with_meta_marks_non_retrieval_failure_stage(
+    monkeypatch,
+    failing_stage,
+):
+    def fail(*args, **kwargs):
+        raise RuntimeError(f"{failing_stage} failed")
+
+    if failing_stage == "load_session":
+        _patch_preflight_ok(monkeypatch)
+        monkeypatch.setattr(pipeline, "load_session", fail)
+    elif failing_stage == "preflight":
+        _patch_persistence_noop(monkeypatch)
+        monkeypatch.setattr(pipeline, "preflight", fail)
+    elif failing_stage == "turn_analysis":
+        _patch_preflight_ok(monkeypatch)
+        _patch_persistence_noop(monkeypatch)
+        monkeypatch.setattr(pipeline, "analyze_turn", fail)
+    else:
+        _patch_preflight_ok(monkeypatch)
+        _patch_persistence_noop(monkeypatch)
+        monkeypatch.setattr(
+            pipeline,
+            "analyze_turn",
+            lambda *args, **kwargs: _analysis(),
+        )
+        monkeypatch.setattr(pipeline, "_route", fail)
+
+    reply, meta = pipeline.answer_with_meta("Tôi bị ho", session_id="s")
+
+    nodes = {node["id"]: node for node in meta["graph_nodes"]}
+    assert reply == TECHNICAL_ERROR_REPLY
+    assert nodes[failing_stage]["status"] == "error"
+    assert nodes[failing_stage]["status"] != "skipped"
+    assert nodes[failing_stage]["ms"] is not None
+    assert meta["outcome"] == "technical_error"
+    assert not any(key.startswith("_") for key in meta)
 
 
 def test_answer_with_meta_records_worker_retrieval_timings(monkeypatch):

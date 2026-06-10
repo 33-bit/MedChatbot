@@ -181,6 +181,34 @@ def _log_timing(trace_id: str, stage: str, start: float, **fields) -> None:
     log_trace_timing(log, "pipeline", trace_id, stage, start, **fields)
 
 
+def _mark_graph_error_stage(stage: str) -> None:
+    meta = _meta()
+    if meta is not None and meta.get("_collect_graph"):
+        stages = meta.setdefault("_graph_error_stages", [])
+        if stage not in stages:
+            stages.append(stage)
+        meta.setdefault("_graph_error_stage", stage)
+
+
+def _record_failed_elapsed_timing(
+    stage: str,
+    ms: float,
+    **fields,
+) -> None:
+    _mark_graph_error_stage(stage)
+    _record_timing(stage, ms, {"failed": True, **fields})
+
+
+def _log_failed_timing(
+    trace_id: str,
+    stage: str,
+    start: float,
+    **fields,
+) -> None:
+    _mark_graph_error_stage(stage)
+    _log_timing(trace_id, stage, start, failed=True, **fields)
+
+
 # ---------- Phase A: input validation ----------
 
 def _guardrail_reply(session_id: str, question: str, verdict: str) -> str:
@@ -510,8 +538,35 @@ def _load_hybrid_hits_with_debug(
 
 def _call_with_elapsed(fn: Any, *args: Any) -> tuple[Any, float]:
     stage_start = time.perf_counter()
-    result = fn(*args)
+    try:
+        result = fn(*args)
+    except Exception as exc:
+        exc.pipeline_elapsed_ms = elapsed_ms(stage_start)
+        raise
     return result, elapsed_ms(stage_start)
+
+
+def _retrieval_error_stage(exc: BaseException) -> str:
+    debug = getattr(exc, "debug", None)
+    if isinstance(debug, dict) and isinstance(debug.get("error_stage"), str):
+        return debug["error_stage"]
+    error_text = str(exc).casefold()
+    return next(
+        (
+            stage
+            for keyword, stage in (
+                ("sparse", "sparse_search"),
+                ("fusion", "fusion"),
+                ("rrf", "fusion"),
+                ("rerank", "rerank"),
+                ("dense", "dense_search"),
+                ("qdrant", "dense_search"),
+                ("embedding", "dense_search"),
+            )
+            if keyword in error_text
+        ),
+        "dense_search",
+    )
 
 
 # ---------- Phase C: route handlers ----------
@@ -675,36 +730,73 @@ def _handle_informational(
             _call_with_elapsed, hits_loader, search_question, trace_id,
         )
         done, pending = wait((kg_future, hits_future), return_when=FIRST_EXCEPTION)
+        failures: dict[Any, BaseException] = {}
         for future in done:
-            if future.exception() is not None:
-                meta = _meta()
-                if collect_debug and meta is not None:
-                    error_text = str(future.exception()).casefold()
-                    meta["_graph_error_stage"] = (
-                        "kg_search"
-                        if future is kg_future
-                        else next(
-                            (
-                                stage
-                                for keyword, stage in (
-                                    ("sparse", "sparse_search"),
-                                    ("fusion", "fusion"),
-                                    ("rrf", "fusion"),
-                                    ("rerank", "rerank"),
-                                    ("dense", "dense_search"),
-                                    ("qdrant", "dense_search"),
-                                    ("embedding", "dense_search"),
-                                )
-                                if keyword in error_text
-                            ),
-                            "dense_search",
-                        )
+            exc = future.exception()
+            if exc is not None:
+                failures[future] = exc
+        if failures:
+            for pending_future in pending:
+                pending_future.cancel()
+        else:
+            kg_result, kg_elapsed = kg_future.result()
+            hits_result, hits_elapsed = hits_future.result()
+    if failures:
+        if collect_debug:
+            meta = _meta()
+            if meta is not None:
+                for future in (kg_future, hits_future):
+                    if future.done() and not future.cancelled():
+                        exc = future.exception()
+                        if exc is not None:
+                            failures.setdefault(future, exc)
+                kg_exc = failures.get(kg_future)
+                if kg_exc is not None:
+                    _record_failed_elapsed_timing(
+                        "kg_search",
+                        float(getattr(
+                            kg_exc,
+                            "pipeline_elapsed_ms",
+                            elapsed_ms(stage_start),
+                        )),
                     )
-                for pending_future in pending:
-                    pending_future.cancel()
-                raise future.exception()
-        kg_result, kg_elapsed = kg_future.result()
-        hits_result, hits_elapsed = hits_future.result()
+                hits_exc = failures.get(hits_future)
+                if hits_exc is not None:
+                    debug = getattr(hits_exc, "debug", None)
+                    if isinstance(debug, dict):
+                        meta["retrieval_debug"] = debug
+                    _mark_graph_error_stage(_retrieval_error_stage(hits_exc))
+                if (
+                    kg_future.done()
+                    and not kg_future.cancelled()
+                    and kg_future.exception() is None
+                ):
+                    kg_result, kg_elapsed = kg_future.result()
+                    _kg_text, kg_context = kg_result
+                    meta["kg_context"] = kg_context
+                    _record_timing(
+                        "kg_search",
+                        kg_elapsed,
+                        {"kg_chars": len(_kg_text)},
+                    )
+                if (
+                    hits_future.done()
+                    and not hits_future.cancelled()
+                    and hits_future.exception() is None
+                ):
+                    hits_result, hits_elapsed = hits_future.result()
+                    _hits, retrieval_debug = hits_result
+                    meta["retrieval_debug"] = retrieval_debug
+                    _record_timing(
+                        "hybrid_search",
+                        hits_elapsed,
+                        {"hits": len(_hits)},
+                    )
+        raise (
+            failures.get(kg_future)
+            or failures.get(hits_future)
+            or next(iter(failures.values()))
+        )
     if collect_debug:
         kg_text, kg_context = kg_result
         hits, retrieval_debug = hits_result
@@ -724,15 +816,19 @@ def _handle_informational(
 
     patient_dict = asdict(session) if use_patient_context else None
     stage_start = time.perf_counter()
-    if _meta() is not None:
-        reply, gen_meta = generate(
-            question, hits, kg_text=kg_text, patient=patient_dict, return_meta=True,
-        )
-        _record_usage("generator", gen_meta.get("usage"), model=gen_meta.get("model"))
-        _meta()["doctor_offer"] = bool(gen_meta.get("doctor_handoff_recommended"))
-        _meta()["doctor_specialty"] = gen_meta.get("doctor_specialty")
-    else:
-        reply = generate(question, hits, kg_text=kg_text, patient=patient_dict)
+    try:
+        if _meta() is not None:
+            reply, gen_meta = generate(
+                question, hits, kg_text=kg_text, patient=patient_dict, return_meta=True,
+            )
+            _record_usage("generator", gen_meta.get("usage"), model=gen_meta.get("model"))
+            _meta()["doctor_offer"] = bool(gen_meta.get("doctor_handoff_recommended"))
+            _meta()["doctor_specialty"] = gen_meta.get("doctor_specialty")
+        else:
+            reply = generate(question, hits, kg_text=kg_text, patient=patient_dict)
+    except Exception:
+        _log_failed_timing(trace_id, "generate", stage_start)
+        raise
     _log_timing(trace_id, "generate", stage_start, chars=len(reply))
     _record_latency("generator", elapsed_ms(stage_start))
     return reply
@@ -834,35 +930,71 @@ def _answer_inner(
     mode = normalize_mode(mode)
 
     stage_start = time.perf_counter()
-    session = load_session(session_id)
+    try:
+        session = load_session(session_id)
+    except Exception:
+        _log_failed_timing(trace_id, "load_session", stage_start)
+        raise
     _log_timing(trace_id, "load_session", stage_start)
 
     is_clarification_choice = _is_pending_clarification_choice(session, question)
     regex_check_for_turn = (lambda text: None) if is_clarification_choice else regex_check
 
+    def guardrail_reply_with_timing(
+        guard_session_id: str,
+        guard_question: str,
+        verdict: str,
+    ) -> str:
+        persist_start = time.perf_counter()
+        try:
+            reply = _guardrail_reply(guard_session_id, guard_question, verdict)
+        except Exception:
+            _log_failed_timing(trace_id, "persist", persist_start)
+            raise
+        if verdict != "abuse":
+            _log_timing(trace_id, "persist", persist_start)
+        return reply
+
     stage_start = time.perf_counter()
-    short_circuit = preflight(
-        question,
-        session_id,
-        _guardrail_reply,
-        check_rate_limit,
-        regex_check_for_turn,
-        check_llm_quota,
-    )
+    try:
+        short_circuit = preflight(
+            question,
+            session_id,
+            guardrail_reply_with_timing,
+            check_rate_limit,
+            regex_check_for_turn,
+            check_llm_quota,
+        )
+    except Exception:
+        meta = _meta()
+        error_stages = (
+            meta.get("_graph_error_stages", [])
+            if isinstance(meta, dict)
+            else []
+        )
+        if "persist" in error_stages:
+            _log_timing(trace_id, "preflight", stage_start)
+        else:
+            _log_failed_timing(trace_id, "preflight", stage_start)
+        raise
     _log_timing(trace_id, "preflight", stage_start)
     if short_circuit is not None:
         _log_timing(trace_id, "total", request_start, outcome="short_circuit")
         return short_circuit
 
     stage_start = time.perf_counter()
-    if is_clarification_choice:
-        analysis = _clarification_choice_analysis(question)
-    else:
-        analysis = analyze_turn(
-            question,
-            last_bot_message=_last_bot_message(session),
-            history=session.conversation,
-        )
+    try:
+        if is_clarification_choice:
+            analysis = _clarification_choice_analysis(question)
+        else:
+            analysis = analyze_turn(
+                question,
+                last_bot_message=_last_bot_message(session),
+                history=session.conversation,
+            )
+    except Exception:
+        _log_failed_timing(trace_id, "turn_analysis", stage_start)
+        raise
     meta = _meta()
     if meta is not None and meta.get("_collect_graph"):
         meta["_graph_turn_analysis"] = analysis
@@ -887,8 +1019,16 @@ def _answer_inner(
                 mode=mode,
                 direct_answer=direct_answer_for_log)
     if guard["verdict"] != "allow":
+        stage_start = time.perf_counter()
+        try:
+            reply = _guardrail_reply(session_id, question, guard["verdict"])
+        except Exception:
+            _log_failed_timing(trace_id, "persist", stage_start)
+            raise
+        if guard["verdict"] != "abuse":
+            _log_timing(trace_id, "persist", stage_start)
         _log_timing(trace_id, "total", request_start, outcome="guardrail")
-        return _guardrail_reply(session_id, question, guard["verdict"])
+        return reply
 
     direct_answer_requested = turn["direct_answer_requested"]
     session.add_message("user", question)
@@ -896,7 +1036,11 @@ def _answer_inner(
     if label == "greeting_other":
         session.add_message("assistant", GREETING_REPLY)
         stage_start = time.perf_counter()
-        save_session(session)
+        try:
+            save_session(session)
+        except Exception:
+            _log_failed_timing(trace_id, "persist", stage_start)
+            raise
         _log_timing(trace_id, "persist", stage_start)
         _log_timing(trace_id, "total", request_start, outcome="greeting")
         return GREETING_REPLY
@@ -908,7 +1052,11 @@ def _answer_inner(
         if clarification:
             session.add_message("assistant", clarification)
             stage_start = time.perf_counter()
-            save_session(session)
+            try:
+                save_session(session)
+            except Exception:
+                _log_failed_timing(trace_id, "persist", stage_start)
+                raise
             _log_timing(trace_id, "persist", stage_start)
             _log_timing(trace_id, "total", request_start, outcome="clarify_question")
             return clarification
@@ -916,8 +1064,15 @@ def _answer_inner(
         rewritten = question
 
     active_flow = bool(session.answered_questions or session.clarification_queue)
-    decision = apply_mode_policy(mode, intent, active_flow=active_flow)
+    route_stage_start = time.perf_counter()
+    route_label = label
+    try:
+        decision = apply_mode_policy(mode, intent, active_flow=active_flow)
+    except Exception:
+        _log_failed_timing(trace_id, "route", route_stage_start, label=route_label)
+        raise
     _record_mode_decision(mode, intent, decision, question)
+    route_label = decision.route_label or label
     meta = _meta()
     if meta is not None and meta.get("_collect_graph"):
         meta["_graph_route"] = {
@@ -932,6 +1087,7 @@ def _answer_inner(
     if not decision.allow:
         reply = decision.reply or ""
         session.add_message("assistant", reply)
+        _log_timing(trace_id, "route", route_stage_start, label=route_label)
         _persist_final_turn(session, session_id, question, reply, trace_id)
         _log_timing(
             trace_id,
@@ -943,13 +1099,21 @@ def _answer_inner(
 
     if label in ("diagnostic", "informational", "clarification_answer"):
         stage_start = time.perf_counter()
-        _ingest_entities(analysis["entities"], session)
-        _log_timing(trace_id, "entity_ingest", stage_start,
-                    symptoms=len(analysis["entities"]["symptoms"]),
-                    medications=len(analysis["entities"]["medications"]))
+        try:
+            _ingest_entities(analysis["entities"], session)
+        except Exception:
+            _log_failed_timing(
+                trace_id, "entity_ingest", stage_start,
+                symptoms=len(analysis["entities"]["symptoms"]),
+                medications=len(analysis["entities"]["medications"]),
+            )
+            raise
+        _log_timing(
+            trace_id, "entity_ingest", stage_start,
+            symptoms=len(analysis["entities"]["symptoms"]),
+            medications=len(analysis["entities"]["medications"]),
+        )
 
-    stage_start = time.perf_counter()
-    route_label = decision.route_label or label
     force_answer = (
         decision.force_answer
         if decision.force_answer is not None
@@ -967,11 +1131,18 @@ def _answer_inner(
         )
     except Exception:
         log.exception("Pipeline route failed trace=%s session=%s", trace_id, session_id)
+        meta = _meta()
+        if meta is not None and meta.get("_graph_error_stage"):
+            _log_timing(trace_id, "route", route_stage_start, label=route_label)
+        else:
+            _log_failed_timing(trace_id, "route", route_stage_start, label=route_label)
+        if meta is not None:
+            meta["error"] = "technical_error"
         session.add_message("assistant", TECHNICAL_ERROR_REPLY)
         _persist_final_turn(session, session_id, question, TECHNICAL_ERROR_REPLY, trace_id)
         _log_timing(trace_id, "total", request_start, outcome="technical_error")
         return TECHNICAL_ERROR_REPLY
-    _log_timing(trace_id, "route", stage_start, label=route_label)
+    _log_timing(trace_id, "route", route_stage_start, label=route_label)
 
     session.add_message("assistant", reply)
     _persist_final_turn(session, session_id, question, reply, trace_id)
@@ -1038,10 +1209,34 @@ def _build_graph_nodes(
     analysis = meta.pop("_graph_turn_analysis", None)
     route_data = meta.pop("_graph_route", None)
     error_stage = meta.pop("_graph_error_stage", None)
+    error_stages = set()
+    raw_error_stages = meta.pop("_graph_error_stages", [])
+    if isinstance(raw_error_stages, list):
+        error_stages.update(
+            stage for stage in raw_error_stages if isinstance(stage, str)
+        )
+    if isinstance(error_stage, str):
+        error_stages.add(error_stage)
     meta.pop("_collect_graph", None)
     rewrite_query = meta.get("rewrite_query")
     kg_context = meta.get("kg_context")
     retrieval_debug = meta.get("retrieval_debug") or {}
+    retrieval_timings = (
+        retrieval_debug.get("timings_ms")
+        if (
+            isinstance(retrieval_debug, dict)
+            and isinstance(retrieval_debug.get("timings_ms"), dict)
+        )
+        else {}
+    )
+    if error_stage is None and isinstance(retrieval_debug, dict):
+        debug_error_stage = retrieval_debug.get("error_stage")
+        if isinstance(debug_error_stage, str):
+            error_stage = debug_error_stage
+    if isinstance(retrieval_debug, dict):
+        debug_error_stage = retrieval_debug.get("error_stage")
+        if isinstance(debug_error_stage, str):
+            error_stages.add(debug_error_stage)
     retrieval_query = (
         retrieval_debug.get("query")
         if isinstance(retrieval_debug, dict) else None
@@ -1065,7 +1260,7 @@ def _build_graph_nodes(
     ) -> None:
         timing = timings.get(timing_stage or "")
         failed = (
-            node_id == error_stage
+            node_id in error_stages
             or bool(timing and timing.get("fields", {}).get("failed"))
         )
         nodes.append({
@@ -1084,9 +1279,19 @@ def _build_graph_nodes(
         "mode": meta.get("mode", normalize_mode(mode)),
     }
     turn_output = analysis.get("turn") if isinstance(analysis, dict) else None
+    load_timing = timings.get("load_session")
     persist_timing = timings.get("persist")
     add_node("input", "Input", present=True, ms=0.0,
              input_data=request_data, raw_data=request_data)
+    add_node(
+        "load_session", "Load session", present=load_timing is not None,
+        timing_stage="load_session", input_data={"session_id": session_id},
+        output_data={
+            "loaded": bool(load_timing)
+            and not bool(load_timing.get("fields", {}).get("failed")),
+        },
+        raw_data=load_timing,
+    )
     add_node(
         "preflight", "Preflight", present="preflight" in timings,
         timing_stage="preflight",
@@ -1116,6 +1321,22 @@ def _build_graph_nodes(
         raw_data=route_data,
     )
     add_node(
+        "entity_ingest", "Entity ingest",
+        present="entity_ingest" in timings,
+        timing_stage="entity_ingest",
+        input_data=(
+            analysis.get("entities")
+            if isinstance(analysis, dict)
+            else None
+        ),
+        output_data=(
+            timings.get("entity_ingest", {}).get("fields")
+            if isinstance(timings.get("entity_ingest"), dict)
+            else None
+        ),
+        raw_data=timings.get("entity_ingest"),
+    )
+    add_node(
         "kg_search", "KG search", present="kg_context" in meta,
         timing_stage="kg_search", input_data={"query": retrieval_query},
         output_data=kg_context, raw_data=kg_context,
@@ -1127,12 +1348,22 @@ def _build_graph_nodes(
         ("rerank", "Rerank", "reranked_hits"),
     ):
         hits = retrieval_debug.get(key) if isinstance(retrieval_debug, dict) else None
+        stage_ms = retrieval_timings.get(node_id)
         add_node(
             node_id, label,
             present=isinstance(retrieval_debug, dict) and key in retrieval_debug,
             input_data={"query": retrieval_query},
             output_data=hits, raw_data=hits,
+            ms=float(stage_ms) if isinstance(stage_ms, (int, float)) else None,
         )
+    generate_timing = timings.get("generate")
+    generate_failed = (
+        "generate" in error_stages
+        or bool(
+            generate_timing
+            and generate_timing.get("fields", {}).get("failed")
+        )
+    )
     add_node(
         "generate", "Generate", present="generate" in timings,
         timing_stage="generate",
@@ -1144,7 +1375,7 @@ def _build_graph_nodes(
             "retrieved_count": len(meta.get("retrieved", [])),
             "has_kg_context": kg_context is not None,
         },
-        output_data={"reply": reply},
+        output_data=None if generate_failed else {"reply": reply},
         raw_data={"usage": meta.get("usage", [])},
     )
     add_node(

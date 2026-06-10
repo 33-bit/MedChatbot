@@ -80,6 +80,17 @@ def test_hybrid_search_with_debug_serializes_every_stage_candidate(
         ("reranked", "test query", 2),
     ]
     assert debug["query"] == "test query"
+    assert set(debug["timings_ms"]) == {
+        "dense_search",
+        "sparse_search",
+        "fusion",
+        "rerank",
+        "hybrid_total",
+    }
+    assert all(
+        isinstance(ms, float) and ms >= 0
+        for ms in debug["timings_ms"].values()
+    )
 
     expected_stages = [
         ("dense_hits", "dense", dense_hits),
@@ -133,15 +144,31 @@ def test_hybrid_search_with_debug_serializes_every_stage_candidate(
 
 
 def test_hybrid_search_with_debug_preserves_sparse_error_mapping(monkeypatch):
-    monkeypatch.setattr(dense, "dense_search", lambda *args, **kwargs: [_hit("dense", 1.0)])
+    dense_hits = [_hit("dense", 1.0)]
+    monkeypatch.setattr(dense, "dense_search", lambda *args, **kwargs: dense_hits)
 
     def fail_sparse(*args, **kwargs):
         raise RuntimeError("bm25 down")
 
     monkeypatch.setattr(service, "bm25_search", fail_sparse)
 
-    with pytest.raises(QdrantUnavailable, match="Sparse retrieval failed"):
+    with pytest.raises(QdrantUnavailable, match="Sparse retrieval failed") as exc_info:
         service.hybrid_search_with_debug("test query")
+
+    debug = exc_info.value.debug
+    assert debug["query"] == "test query"
+    assert debug["error_stage"] == "sparse_search"
+    assert debug["dense_hits"] == service._serialize_hits(dense_hits, "dense")
+    assert "sparse_hits" not in debug
+    assert set(debug["timings_ms"]) == {
+        "dense_search",
+        "sparse_search",
+        "hybrid_total",
+    }
+    assert all(
+        isinstance(ms, float) and ms >= 0
+        for ms in debug["timings_ms"].values()
+    )
 
 
 def test_retrieval_facade_exports_hybrid_search_with_debug():
