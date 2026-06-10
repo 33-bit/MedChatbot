@@ -208,6 +208,19 @@ def test_debug_chat_route_page_is_served(app_client):
     assert "function buildLegacyGraphNodes" in response.text
 
 
+def test_debug_chat_route_page_js_has_no_unterminated_string(app_client):
+    client, _ = app_client
+
+    response = client.get("/debug/chat-route")
+
+    # The inline JS uses .join("\n"). If the Python source writes a bare "\n",
+    # Python emits a real newline into the served string, producing an
+    # unterminated JS string literal that aborts the whole script (and breaks
+    # every event listener, including the Run button).
+    assert '.join("\\n")' in response.text
+    assert '.join("\n")' not in response.text
+
+
 def test_debug_chat_route_run_requires_api_key(app_client, monkeypatch):
     client, app_module = app_client
     monkeypatch.setattr(app_module, "CHAT_API_KEY", "secret")

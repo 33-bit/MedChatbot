@@ -398,7 +398,7 @@ DEBUG_CHAT_ROUTE_HTML = """<!doctype html>
           ["Relationships", kg.relationships],
         ];
         for (const [label, values] of groups) {
-          const formatted = asArray(values).map((value) => typeof value === "string" ? value : JSON.stringify(value)).join("\n");
+          const formatted = asArray(values).map((value) => typeof value === "string" ? value : JSON.stringify(value)).join("\\n");
           appendDetailRow(card, label, formatted || "Empty");
         }
       }
