@@ -42,6 +42,27 @@ const el = (id) => document.getElementById(id);
       ["generation", "persist"],
       ["persist", "total"],
     ];
+    const svgIcon = (body) => `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+    const NODE_ICONS = {
+      _default: svgIcon('<circle cx="12" cy="12" r="3"></circle>'),
+      input: svgIcon('<path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4z"></path>'),
+      load_session: svgIcon('<circle cx="12" cy="12" r="8"></circle><path d="M12 8v4l3 2"></path>'),
+      preflight: svgIcon('<path d="M12 3l7 3v5c0 4.4-3 7.5-7 9-4-1.5-7-4.6-7-9V6z"></path><path d="M9 12l2 2 4-4"></path>'),
+      turn_analysis: svgIcon('<rect x="6" y="6" width="12" height="12" rx="2"></rect><path d="M9 1.5v2M15 1.5v2M9 20.5v2M15 20.5v2M1.5 9h2M1.5 15h2M20.5 9h2M20.5 15h2"></path><circle cx="12" cy="12" r="2"></circle>'),
+      rewrite: svgIcon('<path d="M4 20h16"></path><path d="M14 4l6 6L9 21l-5 1 1-5z"></path>'),
+      route: svgIcon('<path d="M12 3v18"></path><path d="M12 7H6L4 5l2-2h6"></path><path d="M12 13h6l2 2-2 2h-6"></path>'),
+      entity_ingest: svgIcon('<path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0l-7-7A2 2 0 0 1 3 12.2V5a2 2 0 0 1 2-2h7.2a2 2 0 0 1 1.4.6l7 7a2 2 0 0 1 0 2.8z"></path><circle cx="7.5" cy="7.5" r="1.2"></circle>'),
+      kg_search: svgIcon('<circle cx="5" cy="6" r="2.4"></circle><circle cx="19" cy="7" r="2.4"></circle><circle cx="12" cy="18" r="2.4"></circle><path d="M7 7l3.6 9M16.8 8.6L13.4 16.6M7.2 6.4L16.4 6.8"></path>'),
+      dense_search: svgIcon('<circle cx="10.5" cy="10.5" r="6"></circle><path d="M20 20l-5.2-5.2"></path>'),
+      sparse_search: svgIcon('<circle cx="10.5" cy="10.5" r="6"></circle><path d="M20 20l-5.2-5.2"></path><path d="M8 10.5h5M10.5 8v5"></path>'),
+      fusion: svgIcon('<path d="M4 4c5 0 5 8 8 8M4 20c5 0 5-8 8-8"></path><path d="M12 12h8"></path><path d="M17 9l3 3-3 3"></path>'),
+      rerank: svgIcon('<path d="M5 18V7M5 7l-3 3M5 7l3 3"></path><path d="M11 6h9M11 11h6M11 16h3"></path>'),
+      generate: svgIcon('<rect x="5" y="8" width="14" height="11" rx="2"></rect><path d="M12 4v4M9 1.5h6"></path><circle cx="9.5" cy="13" r="1.1"></circle><circle cx="14.5" cy="13" r="1.1"></circle>'),
+      generation: svgIcon('<rect x="5" y="8" width="14" height="11" rx="2"></rect><path d="M12 4v4M9 1.5h6"></path><circle cx="9.5" cy="13" r="1.1"></circle><circle cx="14.5" cy="13" r="1.1"></circle>'),
+      persist: svgIcon('<ellipse cx="12" cy="6" rx="7" ry="3"></ellipse><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6"></path><path d="M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"></path>'),
+      total: svgIcon('<path d="M5 21V4"></path><path d="M5 4h11l-2 3 2 3H5"></path>'),
+    };
+
     let activeGraph = { nodes: new Map(), nodeElements: new Map(), meta: {}, trace: null };
 
     const STREAM_TO_NODE = {
@@ -148,7 +169,7 @@ const el = (id) => document.getElementById(id);
       marker.setAttribute("orient", "auto");
       const arrow = svgElement("path");
       arrow.setAttribute("d", "M 0 0 L 8 4 L 0 8 z");
-      arrow.setAttribute("fill", "#64748b");
+      arrow.setAttribute("fill", "#5b6b85");
       marker.appendChild(arrow);
       defs.appendChild(marker);
       svg.appendChild(defs);
@@ -168,6 +189,21 @@ const el = (id) => document.getElementById(id);
         svg.appendChild(path);
       }
       root.prepend(svg);
+    }
+
+    function drawRetrievalGroup(root) {
+      const box = document.createElement("div");
+      box.className = "graph-group";
+      box.setAttribute("aria-hidden", "true");
+      box.style.left = "956px";
+      box.style.top = "188px";
+      box.style.width = "504px";
+      box.style.height = "324px";
+      const tag = document.createElement("span");
+      tag.className = "graph-group-label";
+      tag.textContent = "retrieval";
+      box.appendChild(tag);
+      root.prepend(box);
     }
 
     function renderWorkflowGraph(trace) {
@@ -196,6 +232,7 @@ const el = (id) => document.getElementById(id);
         ? WORKFLOW_EDGES
         : nodes.slice(1).map((node, index) => [String(nodes[index].id), String(node.id)]);
       drawGraphEdges(root, edges);
+      drawRetrievalGroup(root);
       if (nodes.length) selectGraphNode(String(nodes[0].id));
     }
 
@@ -207,13 +244,19 @@ const el = (id) => document.getElementById(id);
       button.style.left = `${position[0]}px`;
       button.style.top = `${position[1]}px`;
       button.dataset.nodeId = node.id;
+      const head = document.createElement("span");
+      head.className = "node-head";
+      const icon = document.createElement("span");
+      icon.className = "node-icon";
+      icon.innerHTML = NODE_ICONS[node.id] || NODE_ICONS._default;
       const label = document.createElement("span");
       label.className = "node-label";
       label.textContent = node.label;
+      head.append(icon, label);
       const detail = document.createElement("span");
       detail.className = "node-detail";
       detail.textContent = `${node.status} | ${durationText(node.ms)}`;
-      button.append(label, detail);
+      button.append(head, detail);
       button.addEventListener("click", () => selectGraphNode(node.id));
       return button;
     }
@@ -238,6 +281,7 @@ const el = (id) => document.getElementById(id);
         root.appendChild(button);
       });
       drawGraphEdges(root, WORKFLOW_EDGES);
+      drawRetrievalGroup(root);
       if (SKELETON_NODE_IDS.length) selectGraphNode(SKELETON_NODE_IDS[0]);
     }
 
