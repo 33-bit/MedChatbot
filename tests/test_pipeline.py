@@ -2490,3 +2490,42 @@ def test_log_timing_emits_node_event_when_sink_installed():
     assert event["id"] == "generate"
     assert event["status"] == "ok"
     assert isinstance(event["ms"], float)
+
+
+def test_parallel_retrieval_emits_node_events_to_sink_across_executor(monkeypatch):
+    import queue as _queue
+    from src.chat import pipeline
+
+    # Patch the retrieval primitives (not the loaders) so the REAL
+    # _load_kg_context/_load_hybrid_hits run inside the worker threads and
+    # emit their kg_search/hybrid_search node events via _log_timing.
+    monkeypatch.setattr(pipeline, "kg_search", lambda question: KGContext())
+    monkeypatch.setattr(pipeline, "format_kg_context", lambda kg_result: "KG context")
+    monkeypatch.setattr(
+        pipeline, "hybrid_search",
+        lambda question, top_k=None: [
+            Hit(text="c", score=1.0, source_type="disease",
+                source_name="N", heading_path="", source_slug="n")
+        ],
+    )
+    monkeypatch.setattr(pipeline, "generate",
+                        lambda question, hits, kg_text="", patient=None: "answer")
+
+    sink: _queue.Queue = _queue.Queue()
+    pipeline._install_event_sink(sink)
+    try:
+        reply = pipeline._handle_informational(
+            PatientSession(session_id="s"), "Tôi bị ho", trace_id="trace",
+        )
+    finally:
+        pipeline._install_event_sink(None)
+
+    assert reply == "answer"
+    ids = []
+    while not sink.empty():
+        ids.append(sink.get_nowait()["id"])
+    # kg_search + hybrid_search are emitted from WORKER threads; parallel_retrieval
+    # + generate from the request thread. All must reach the sink.
+    assert "kg_search" in ids
+    assert "hybrid_search" in ids
+    assert "parallel_retrieval" in ids

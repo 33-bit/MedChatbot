@@ -752,13 +752,20 @@ def _handle_informational(
     hits_loader = (
         _load_hybrid_hits_with_debug if collect_debug else _load_hybrid_hits
     )
+    parent_sink = _event_sink()
+
+    def _with_sink(fn, *args):
+        if parent_sink is not None:
+            _install_event_sink(parent_sink)
+        try:
+            return _call_with_elapsed(fn, *args)
+        finally:
+            if parent_sink is not None:
+                _install_event_sink(None)
+
     with ThreadPoolExecutor(max_workers=2, thread_name_prefix="retrieval") as executor:
-        kg_future = executor.submit(
-            _call_with_elapsed, kg_loader, search_question, trace_id,
-        )
-        hits_future = executor.submit(
-            _call_with_elapsed, hits_loader, search_question, trace_id,
-        )
+        kg_future = executor.submit(_with_sink, kg_loader, search_question, trace_id)
+        hits_future = executor.submit(_with_sink, hits_loader, search_question, trace_id)
         done, pending = wait((kg_future, hits_future), return_when=FIRST_EXCEPTION)
         failures: dict[Any, BaseException] = {}
         for future in done:
