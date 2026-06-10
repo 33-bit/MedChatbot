@@ -1868,7 +1868,7 @@ def test_answer_with_meta_records_structured_graph_trace(monkeypatch):
     monkeypatch.setattr(
         pipeline,
         "hybrid_search_with_debug",
-        lambda question, top_k: (hits, retrieval_debug),
+        lambda question, top_k, on_stage=None: (hits, retrieval_debug),
         raising=False,
     )
     monkeypatch.setattr(
@@ -2412,7 +2412,7 @@ def test_answer_with_meta_records_worker_retrieval_timings(monkeypatch):
     monkeypatch.setattr(
         pipeline,
         "hybrid_search_with_debug",
-        lambda question, top_k: (
+        lambda question, top_k, on_stage=None: (
             [
                 Hit(
                     text="context",

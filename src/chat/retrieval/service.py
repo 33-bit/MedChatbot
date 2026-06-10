@@ -83,6 +83,7 @@ def _attach_debug(
 def _run_hybrid_search(
     query: str,
     top_k: int,
+    on_stage=None,
 ) -> tuple[list[Hit], _HybridSearchDebug]:
     import time
 
@@ -98,15 +99,21 @@ def _run_hybrid_search(
         _record_debug_failure(
             debug, "dense_search", stage_start, total_start,
         )
+        if on_stage is not None:
+            on_stage("dense", "error", debug.timings_ms["dense_search"])
         _attach_debug(exc, debug)
         raise
     except Exception as e:
         _record_debug_failure(
             debug, "dense_search", stage_start, total_start,
         )
+        if on_stage is not None:
+            on_stage("dense", "error", debug.timings_ms["dense_search"])
         raise _HybridSearchUnavailable("Dense retrieval failed", debug) from e
     debug.dense_hits = dense_hits
     dense_ms = _record_debug_timing(debug, "dense_search", stage_start)
+    if on_stage is not None:
+        on_stage("dense", "ok", dense_ms)
     log.info("retrieval timing stage=dense_total ms=%.1f hits=%d",
              dense_ms, len(dense_hits))
 
@@ -117,9 +124,13 @@ def _run_hybrid_search(
         _record_debug_failure(
             debug, "sparse_search", stage_start, total_start,
         )
+        if on_stage is not None:
+            on_stage("sparse", "error", debug.timings_ms["sparse_search"])
         raise _HybridSearchUnavailable("Sparse retrieval failed", debug) from e
     debug.sparse_hits = sparse_hits
     sparse_ms = _record_debug_timing(debug, "sparse_search", stage_start)
+    if on_stage is not None:
+        on_stage("sparse", "ok", sparse_ms)
     log.info("retrieval timing stage=sparse_total ms=%.1f hits=%d",
              sparse_ms, len(sparse_hits))
 
@@ -130,9 +141,13 @@ def _run_hybrid_search(
         _record_debug_failure(
             debug, "fusion", stage_start, total_start,
         )
+        if on_stage is not None:
+            on_stage("fusion", "error", debug.timings_ms["fusion"])
         raise _HybridSearchUnavailable("Fusion failed", debug) from e
     debug.fused_hits = fused
     fusion_ms = _record_debug_timing(debug, "fusion", stage_start)
+    if on_stage is not None:
+        on_stage("fusion", "ok", fusion_ms)
     log.info("retrieval timing stage=rrf_merge ms=%.1f hits=%d",
              fusion_ms, len(fused))
 
@@ -143,9 +158,13 @@ def _run_hybrid_search(
         _record_debug_failure(
             debug, "rerank", stage_start, total_start,
         )
+        if on_stage is not None:
+            on_stage("rerank", "error", debug.timings_ms["rerank"])
         raise _HybridSearchUnavailable("Rerank failed", debug) from e
     debug.reranked_hits = reranked
     rerank_ms = _record_debug_timing(debug, "rerank", stage_start)
+    if on_stage is not None:
+        on_stage("rerank", "ok", rerank_ms)
     log.info("retrieval timing stage=rerank_total ms=%.1f hits=%d",
              rerank_ms, len(reranked))
     hybrid_ms = elapsed_ms(total_start)
@@ -189,6 +208,7 @@ def hybrid_search(query: str, top_k: int = RERANK_TOP_K) -> list[Hit]:
 def hybrid_search_with_debug(
     query: str,
     top_k: int = RERANK_TOP_K,
+    on_stage=None,
 ) -> tuple[list[Hit], dict]:
-    hits, debug = _run_hybrid_search(query, top_k)
+    hits, debug = _run_hybrid_search(query, top_k, on_stage=on_stage)
     return hits, debug.as_dict()

@@ -171,5 +171,52 @@ def test_hybrid_search_with_debug_preserves_sparse_error_mapping(monkeypatch):
     )
 
 
+def test_hybrid_search_with_debug_invokes_substage_callback_in_order(monkeypatch):
+    monkeypatch.setattr(service, "HYBRID_CANDIDATE_K", 3)
+    monkeypatch.setattr(dense, "dense_search", lambda query, top_k: [_hit("d", 1.0)])
+    monkeypatch.setattr(service, "bm25_search", lambda query, top_k: [_hit("s", 1.0)])
+    monkeypatch.setattr(service, "rrf_merge", lambda d, s, top_k: [_hit("f", 1.0)])
+    monkeypatch.setattr(rerank_module, "rerank", lambda query, fused, top_k: [_hit("r", 1.0)])
+
+    calls: list[tuple[str, str]] = []
+    service.hybrid_search_with_debug(
+        "q", top_k=2, on_stage=lambda stage, status, ms: calls.append((stage, status)),
+    )
+    assert [c[0] for c in calls] == ["dense", "sparse", "fusion", "rerank"]
+    assert all(c[1] == "ok" for c in calls)
+
+
+def test_hybrid_search_with_debug_without_callback_unchanged(monkeypatch):
+    monkeypatch.setattr(service, "HYBRID_CANDIDATE_K", 3)
+    monkeypatch.setattr(dense, "dense_search", lambda query, top_k: [_hit("d", 1.0)])
+    monkeypatch.setattr(service, "bm25_search", lambda query, top_k: [_hit("s", 1.0)])
+    monkeypatch.setattr(service, "rrf_merge", lambda d, s, top_k: [_hit("f", 1.0)])
+    monkeypatch.setattr(rerank_module, "rerank", lambda query, fused, top_k: [_hit("r", 1.0)])
+
+    hits, debug = service.hybrid_search_with_debug("q", top_k=2)
+    assert "timings_ms" in debug
+    assert set(debug["timings_ms"]) >= {"dense_search", "sparse_search", "fusion", "rerank"}
+
+
+def test_hybrid_search_with_debug_emits_error_status_on_stage_failure(monkeypatch):
+    monkeypatch.setattr(service, "HYBRID_CANDIDATE_K", 3)
+    monkeypatch.setattr(dense, "dense_search", lambda query, top_k: [_hit("d", 1.0)])
+    monkeypatch.setattr(service, "bm25_search", lambda query, top_k: [_hit("s", 1.0)])
+    monkeypatch.setattr(service, "rrf_merge", lambda d, s, top_k: [_hit("f", 1.0)])
+
+    def fail_rerank(query, fused, top_k):
+        raise RuntimeError("rerank down")
+
+    monkeypatch.setattr(rerank_module, "rerank", fail_rerank)
+
+    calls: list[tuple[str, str]] = []
+    with pytest.raises(QdrantUnavailable):
+        service.hybrid_search_with_debug(
+            "q", top_k=2, on_stage=lambda stage, status, ms: calls.append((stage, status)),
+        )
+    assert calls[-1] == ("rerank", "error")
+    assert [c[0] for c in calls] == ["dense", "sparse", "fusion", "rerank"]
+
+
 def test_retrieval_facade_exports_hybrid_search_with_debug():
     assert retrieval.hybrid_search_with_debug is service.hybrid_search_with_debug

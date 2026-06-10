@@ -558,9 +558,14 @@ def _load_hybrid_hits_with_debug(
     trace_id: str,
 ) -> tuple[list[Hit], dict[str, Any]]:
     stage_start = time.perf_counter()
+
+    def _on_stage(stage, status, ms):
+        _emit_node_event(stage, status, ms)
+
     hits, retrieval_debug = hybrid_search_with_debug(
         question,
         top_k=RERANK_TOP_K,
+        on_stage=_on_stage,
     )
     _log_timing(trace_id, "hybrid_search", stage_start, hits=len(hits))
     return hits, retrieval_debug
