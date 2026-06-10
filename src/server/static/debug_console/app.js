@@ -191,14 +191,32 @@ const el = (id) => document.getElementById(id);
       root.prepend(svg);
     }
 
+    const RETRIEVAL_GROUP_IDS = ["dense_search", "sparse_search", "fusion", "rerank"];
+
     function drawRetrievalGroup(root) {
+      // Bounds the retrieval cluster; derived from GRAPH_LAYOUT so it tracks layout changes.
+      const PAD = 24;
+      const NODE_W = 136;
+      const NODE_H = 80;
+      const coords = RETRIEVAL_GROUP_IDS.map((id) => GRAPH_LAYOUT[id]);
+      if (coords.some((c) => !c)) return;
+      const xs = coords.map((c) => c[0]);
+      const ys = coords.map((c) => c[1]);
+      const minX = Math.min(...xs);
+      const maxX = Math.max(...xs);
+      const minY = Math.min(...ys);
+      const maxY = Math.max(...ys);
+      const left = minX - PAD;
+      const top = minY - PAD;
+      const width = maxX + NODE_W + PAD - left;
+      const height = maxY + NODE_H + PAD - top;
       const box = document.createElement("div");
       box.className = "graph-group";
       box.setAttribute("aria-hidden", "true");
-      box.style.left = "956px";
-      box.style.top = "188px";
-      box.style.width = "504px";
-      box.style.height = "324px";
+      box.style.left = `${left}px`;
+      box.style.top = `${top}px`;
+      box.style.width = `${width}px`;
+      box.style.height = `${height}px`;
       const tag = document.createElement("span");
       tag.className = "graph-group-label";
       tag.textContent = "retrieval";
