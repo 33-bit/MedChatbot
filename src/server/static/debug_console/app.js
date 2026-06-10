@@ -187,21 +187,7 @@ const el = (id) => document.getElementById(id);
           output: node.output,
           raw: node.raw,
         };
-        const button = document.createElement("button");
-        const position = graphPosition(normalized, index);
-        button.type = "button";
-        button.className = `graph-node ${normalized.status}`;
-        button.style.left = `${position[0]}px`;
-        button.style.top = `${position[1]}px`;
-        button.dataset.nodeId = normalized.id;
-        const label = document.createElement("span");
-        label.className = "node-label";
-        label.textContent = normalized.label;
-        const detail = document.createElement("span");
-        detail.className = "node-detail";
-        detail.textContent = `${normalized.status} | ${durationText(normalized.ms)}`;
-        button.append(label, detail);
-        button.addEventListener("click", () => selectGraphNode(normalized.id));
+        const button = buildGraphNodeButton(normalized, index);
         activeGraph.nodes.set(normalized.id, normalized);
         activeGraph.nodeElements.set(normalized.id, button);
         root.appendChild(button);
@@ -257,17 +243,17 @@ const el = (id) => document.getElementById(id);
 
     function markNodeStatus(streamId, status, ms) {
       const targets = STREAM_TO_NODE[streamId] || [streamId];
-      const cssStatus = status === "error" ? "error" : "success";
+      const displayStatus = status === "error" ? "error" : "success";
       const normalizedMs = typeof ms === "number" ? ms : null;
       for (const id of targets) {
         const button = activeGraph.nodeElements.get(id);
         if (!button) continue;
-        button.className = `graph-node ${cssStatus}${button.classList.contains("selected") ? " selected" : ""}`;
+        button.className = `graph-node ${displayStatus}${button.classList.contains("selected") ? " selected" : ""}`;
         const detail = button.querySelector(".node-detail");
-        if (detail) detail.textContent = `${status} | ${durationText(normalizedMs)}`;
+        if (detail) detail.textContent = `${displayStatus} | ${durationText(normalizedMs)}`;
         const node = activeGraph.nodes.get(id);
         if (node) {
-          node.status = cssStatus;
+          node.status = displayStatus;
           node.ms = normalizedMs;
         }
       }
