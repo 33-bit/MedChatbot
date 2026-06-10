@@ -2449,3 +2449,45 @@ def test_answer_with_meta_records_worker_retrieval_timings(monkeypatch):
     assert kg_timings[0]["fields"] == {"kg_chars": len("KG context")}
     assert len(hybrid_timings) == 1
     assert hybrid_timings[0]["fields"] == {"hits": 1}
+
+
+def test_emit_node_event_is_noop_without_sink():
+    from src.chat import pipeline
+
+    # No sink installed on this thread -> must not raise, must not store.
+    pipeline._META_LOCAL.current = None
+    pipeline._emit_node_event("route", "ok", 1.5)  # no exception = pass
+
+
+def test_emit_node_event_pushes_to_installed_sink():
+    import queue as _queue
+    from src.chat import pipeline
+
+    sink: _queue.Queue = _queue.Queue()
+    pipeline._install_event_sink(sink)
+    try:
+        pipeline._emit_node_event("kg_search", "ok", 12.0)
+    finally:
+        pipeline._install_event_sink(None)
+
+    event = sink.get_nowait()
+    assert event == {"type": "node", "id": "kg_search", "status": "ok", "ms": 12.0}
+
+
+def test_log_timing_emits_node_event_when_sink_installed():
+    import queue as _queue
+    import time
+    from src.chat import pipeline
+
+    sink: _queue.Queue = _queue.Queue()
+    pipeline._install_event_sink(sink)
+    try:
+        pipeline._log_timing("trace-x", "generate", time.perf_counter(), chars=10)
+    finally:
+        pipeline._install_event_sink(None)
+
+    event = sink.get_nowait()
+    assert event["type"] == "node"
+    assert event["id"] == "generate"
+    assert event["status"] == "ok"
+    assert isinstance(event["ms"], float)

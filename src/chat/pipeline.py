@@ -108,6 +108,33 @@ def _meta() -> dict | None:
     return getattr(_META_LOCAL, "current", None)
 
 
+def _event_sink():
+    """Return the active per-thread event sink, or None when not streaming."""
+    return getattr(_META_LOCAL, "event_sink", None)
+
+
+def _install_event_sink(sink) -> None:
+    """Install (or clear with None) the per-thread streaming event sink."""
+    _META_LOCAL.event_sink = sink
+
+
+def _emit_node_event(stage: str, status: str, ms: float | None) -> None:
+    """Push a compact node-progress event to the active sink, if one is installed.
+
+    No-op when no sink is present (every normal answer() call and every test),
+    so the public pipeline behavior is unchanged.
+    """
+    sink = _event_sink()
+    if sink is None:
+        return
+    sink.put({
+        "type": "node",
+        "id": stage,
+        "status": status,
+        "ms": round(float(ms), 2) if ms is not None else None,
+    })
+
+
 def _record_hits(hits: list[Hit]) -> None:
     meta = _meta()
     if meta is None:
@@ -177,8 +204,11 @@ def _record_mode_decision(
 
 
 def _log_timing(trace_id: str, stage: str, start: float, **fields) -> None:
-    _record_timing(stage, elapsed_ms(start), fields)
+    ms = elapsed_ms(start)
+    _record_timing(stage, ms, fields)
     log_trace_timing(log, "pipeline", trace_id, stage, start, **fields)
+    status = "error" if fields.get("failed") else "ok"
+    _emit_node_event(stage, status, ms)
 
 
 def _mark_graph_error_stage(stage: str) -> None:
