@@ -2454,8 +2454,7 @@ def test_answer_with_meta_records_worker_retrieval_timings(monkeypatch):
 def test_emit_node_event_is_noop_without_sink():
     from src.chat import pipeline
 
-    # No sink installed on this thread -> must not raise, must not store.
-    pipeline._META_LOCAL.current = None
+    pipeline._install_event_sink(None)  # ensure no sink on this thread
     pipeline._emit_node_event("route", "ok", 1.5)  # no exception = pass
 
 
