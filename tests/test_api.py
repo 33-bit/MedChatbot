@@ -199,6 +199,13 @@ def test_debug_chat_route_page_is_served(app_client):
     assert "Chat Route Debug Console" in response.text
     assert "/debug/chat-route/run" in response.text
     assert "/debug/chat-route/traces" in response.text
+    assert 'id="workflow-graph"' in response.text
+    assert 'id="node-inspector"' in response.text
+    assert "function renderWorkflowGraph" in response.text
+    assert "function selectGraphNode" in response.text
+    assert "function renderRetrievalTable" in response.text
+    assert "function renderKgDetails" in response.text
+    assert "function buildLegacyGraphNodes" in response.text
 
 
 def test_debug_chat_route_run_requires_api_key(app_client, monkeypatch):
