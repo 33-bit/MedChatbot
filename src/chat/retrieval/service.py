@@ -10,10 +10,13 @@ from src.chat.timing import elapsed_ms
 from src.config import HYBRID_CANDIDATE_K, RERANK_TOP_K
 
 log = logging.getLogger(__name__)
+_TEXT_PREVIEW_MAX_CHARS = 160
 
 
-def hybrid_search(query: str, top_k: int = RERANK_TOP_K) -> list[Hit]:
-    """Dense + BM25 → RRF fusion → Cross-Encoder re-rank."""
+def _run_hybrid_search(
+    query: str,
+    top_k: int,
+) -> tuple[list[Hit], list[Hit], list[Hit], list[Hit]]:
     import time
 
     from src.chat.retrieval.dense import dense_search
@@ -52,4 +55,52 @@ def hybrid_search(query: str, top_k: int = RERANK_TOP_K) -> list[Hit]:
              elapsed_ms(stage_start), len(reranked))
     log.info("retrieval timing stage=hybrid_total ms=%.1f hits=%d",
              elapsed_ms(total_start), len(reranked))
-    return reranked
+    return dense_hits, sparse_hits, fused, reranked
+
+
+def _text_preview(text: str) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= _TEXT_PREVIEW_MAX_CHARS:
+        return normalized
+    return normalized[:_TEXT_PREVIEW_MAX_CHARS - 3].rstrip() + "..."
+
+
+def _serialize_hits(hits: list[Hit], stage: str) -> list[dict]:
+    return [
+        {
+            "rank": rank,
+            "stage": stage,
+            "chunk_id": hit.chunk_id,
+            "source_type": hit.source_type,
+            "source_slug": hit.source_slug,
+            "source_name": hit.source_name,
+            "heading_path": hit.heading_path,
+            "score": float(hit.score),
+            "text_preview": _text_preview(hit.text),
+            "metadata": hit.metadata,
+        }
+        for rank, hit in enumerate(hits, start=1)
+    ]
+
+
+def hybrid_search(query: str, top_k: int = RERANK_TOP_K) -> list[Hit]:
+    """Dense + BM25 → RRF fusion → Cross-Encoder re-rank."""
+    return _run_hybrid_search(query, top_k)[-1]
+
+
+def hybrid_search_with_debug(
+    query: str,
+    top_k: int = RERANK_TOP_K,
+) -> tuple[list[Hit], dict]:
+    dense_hits, sparse_hits, fused_hits, reranked_hits = _run_hybrid_search(
+        query,
+        top_k,
+    )
+    debug = {
+        "query": query,
+        "dense_hits": _serialize_hits(dense_hits, "dense"),
+        "sparse_hits": _serialize_hits(sparse_hits, "sparse"),
+        "fused_hits": _serialize_hits(fused_hits, "fused"),
+        "reranked_hits": _serialize_hits(reranked_hits, "reranked"),
+    }
+    return reranked_hits, debug

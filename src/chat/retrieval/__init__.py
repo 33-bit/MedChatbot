@@ -9,7 +9,7 @@ from src.chat.retrieval.kg import (
     kg_search,
 )
 from src.chat.retrieval.rerank import rerank
-from src.chat.retrieval.service import hybrid_search
+from src.chat.retrieval.service import hybrid_search, hybrid_search_with_debug
 from src.chat.retrieval.sparse import bm25_search
 from src.chat.retrieval.types import Hit
 
@@ -21,6 +21,7 @@ __all__ = [
     "ensure_fulltext_indexes",
     "format_kg_context",
     "hybrid_search",
+    "hybrid_search_with_debug",
     "kg_search",
     "rerank",
     "rrf_merge",

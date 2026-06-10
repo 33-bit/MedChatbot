@@ -1,0 +1,148 @@
+from __future__ import annotations
+
+import importlib
+import logging
+
+import pytest
+
+from src.chat import retrieval
+from src.chat.errors import QdrantUnavailable
+from src.chat.retrieval import dense, service
+from src.chat.retrieval.types import Hit
+
+rerank_module = importlib.import_module("src.chat.retrieval.rerank")
+
+
+def _hit(label: str, score: float) -> Hit:
+    return Hit(
+        text=f"{label}\n" + "word " * 80,
+        score=score,
+        source_type="disease",
+        source_name=f"Source {label}",
+        heading_path=f"Section > {label}",
+        source_slug=f"source-{label}",
+        chunk_id=f"chunk-{label}",
+        metadata={"label": label},
+    )
+
+
+def test_hybrid_search_with_debug_serializes_every_stage_candidate(
+    monkeypatch,
+    caplog,
+):
+    dense_hits = [_hit(f"dense-{index}", 10.0 - index) for index in range(3)]
+    sparse_hits = [_hit(f"sparse-{index}", 20.0 - index) for index in range(2)]
+    fused_hits = [_hit(f"fused-{index}", 0.3 - index / 100) for index in range(3)]
+    reranked_hits = [_hit(f"reranked-{index}", 0.9 - index / 10) for index in range(2)]
+    calls: list[tuple[str, str, int]] = []
+
+    def fake_dense_search(query: str, top_k: int) -> list[Hit]:
+        calls.append(("dense", query, top_k))
+        return dense_hits
+
+    def fake_sparse_search(query: str, top_k: int) -> list[Hit]:
+        calls.append(("sparse", query, top_k))
+        return sparse_hits
+
+    def fake_rrf_merge(
+        actual_dense_hits: list[Hit],
+        actual_sparse_hits: list[Hit],
+        top_k: int,
+    ) -> list[Hit]:
+        assert actual_dense_hits is dense_hits
+        assert actual_sparse_hits is sparse_hits
+        calls.append(("fused", "", top_k))
+        return fused_hits
+
+    def fake_rerank(
+        query: str,
+        actual_fused_hits: list[Hit],
+        top_k: int,
+    ) -> list[Hit]:
+        assert actual_fused_hits is fused_hits
+        calls.append(("reranked", query, top_k))
+        return reranked_hits
+
+    monkeypatch.setattr(service, "HYBRID_CANDIDATE_K", 3)
+    monkeypatch.setattr(dense, "dense_search", fake_dense_search)
+    monkeypatch.setattr(service, "bm25_search", fake_sparse_search)
+    monkeypatch.setattr(service, "rrf_merge", fake_rrf_merge)
+    monkeypatch.setattr(rerank_module, "rerank", fake_rerank)
+
+    with caplog.at_level(logging.INFO, logger=service.__name__):
+        hits, debug = service.hybrid_search_with_debug("test query", top_k=2)
+
+    assert hits is reranked_hits
+    assert calls == [
+        ("dense", "test query", 3),
+        ("sparse", "test query", 3),
+        ("fused", "", 3),
+        ("reranked", "test query", 2),
+    ]
+    assert debug["query"] == "test query"
+
+    expected_stages = [
+        ("dense_hits", "dense", dense_hits),
+        ("sparse_hits", "sparse", sparse_hits),
+        ("fused_hits", "fused", fused_hits),
+        ("reranked_hits", "reranked", reranked_hits),
+    ]
+    expected_fields = {
+        "rank",
+        "stage",
+        "chunk_id",
+        "source_type",
+        "source_slug",
+        "source_name",
+        "heading_path",
+        "score",
+        "text_preview",
+        "metadata",
+    }
+    for key, stage, original_hits in expected_stages:
+        assert len(debug[key]) == len(original_hits)
+        for rank, (serialized, original) in enumerate(
+            zip(debug[key], original_hits),
+            start=1,
+        ):
+            normalized_text = " ".join(original.text.split())
+            assert set(serialized) == expected_fields
+            assert serialized == {
+                "rank": rank,
+                "stage": stage,
+                "chunk_id": original.chunk_id,
+                "source_type": original.source_type,
+                "source_slug": original.source_slug,
+                "source_name": original.source_name,
+                "heading_path": original.heading_path,
+                "score": original.score,
+                "text_preview": normalized_text[:157].rstrip() + "...",
+                "metadata": original.metadata,
+            }
+            assert "text" not in serialized
+
+    messages = "\n".join(caplog.messages)
+    for stage in (
+        "dense_total",
+        "sparse_total",
+        "rrf_merge",
+        "rerank_total",
+        "hybrid_total",
+    ):
+        assert f"stage={stage}" in messages
+
+
+def test_hybrid_search_with_debug_preserves_sparse_error_mapping(monkeypatch):
+    monkeypatch.setattr(dense, "dense_search", lambda *args, **kwargs: [_hit("dense", 1.0)])
+
+    def fail_sparse(*args, **kwargs):
+        raise RuntimeError("bm25 down")
+
+    monkeypatch.setattr(service, "bm25_search", fail_sparse)
+
+    with pytest.raises(QdrantUnavailable, match="Sparse retrieval failed"):
+        service.hybrid_search_with_debug("test query")
+
+
+def test_retrieval_facade_exports_hybrid_search_with_debug():
+    assert retrieval.hybrid_search_with_debug is service.hybrid_search_with_debug
