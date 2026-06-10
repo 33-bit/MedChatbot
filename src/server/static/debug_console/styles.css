@@ -95,8 +95,27 @@
         radial-gradient(circle at 1px 1px, rgba(255, 255, 255, .04) 1px, transparent 0) padding-box;
       background-size: auto, 22px 22px;
     }
-    .graph-panel { overflow: auto; min-height: 580px; }
-    #workflow-graph { position: relative; width: 1960px; height: 560px; }
+    .graph-panel { overflow: hidden; min-height: 580px; position: relative; cursor: grab; touch-action: none; }
+    .graph-panel.grabbing { cursor: grabbing; }
+    #workflow-graph { position: relative; width: 1960px; height: 560px; transform-origin: 0 0; will-change: transform; }
+    .graph-node { touch-action: none; }
+    .graph-reset {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      width: auto;
+      margin: 0;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      z-index: 5;
+      background: var(--surface-2);
+      border: 1px solid var(--border-strong);
+      box-shadow: none;
+      color: var(--text);
+      cursor: pointer;
+    }
+    .graph-reset:hover { border-color: var(--accent); filter: none; }
     .graph-edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
     .graph-edge { fill: none; stroke: var(--slate); stroke-width: 1.8; opacity: .85; }
 

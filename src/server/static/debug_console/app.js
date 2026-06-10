@@ -63,7 +63,32 @@ const el = (id) => document.getElementById(id);
       total: svgIcon('<path d="M5 21V4"></path><path d="M5 4h11l-2 3 2 3H5"></path>'),
     };
 
-    let activeGraph = { nodes: new Map(), nodeElements: new Map(), meta: {}, trace: null };
+    let activeGraph = { nodes: new Map(), nodeElements: new Map(), meta: {}, trace: null, edges: [] };
+
+    let viewState = { x: 16, y: 16, scale: 0.75 };
+    const clamp = (value, lo, hi) => Math.min(hi, Math.max(lo, value));
+
+    function applyViewTransform() {
+      const root = el("workflow-graph");
+      if (!root) return;
+      root.style.transform = `translate(${viewState.x}px, ${viewState.y}px) scale(${viewState.scale})`;
+    }
+
+    function resetView() {
+      viewState = { x: 16, y: 16, scale: 0.75 };
+      applyViewTransform();
+    }
+
+    function redrawEdges() {
+      const root = el("workflow-graph");
+      if (!root) return;
+      const existingEdges = root.querySelector(".graph-edges");
+      if (existingEdges) existingEdges.remove();
+      const existingGroup = root.querySelector(".graph-group");
+      if (existingGroup) existingGroup.remove();
+      drawGraphEdges(root, activeGraph.edges || []);
+      drawRetrievalGroup(root);
+    }
 
     const STREAM_TO_NODE = {
       dense: ["dense_search"],
@@ -230,7 +255,7 @@ const el = (id) => document.getElementById(id);
       const meta = isObject(trace && trace.meta) ? trace.meta : {};
       const suppliedNodes = asArray(meta.graph_nodes).filter(isObject);
       const nodes = suppliedNodes.length ? suppliedNodes : buildLegacyGraphNodes(meta, trace);
-      activeGraph = { nodes: new Map(), nodeElements: new Map(), meta, trace };
+      activeGraph = { nodes: new Map(), nodeElements: new Map(), meta, trace, edges: [] };
       nodes.forEach((node, index) => {
         const normalized = {
           id: String(node.id || `node_${index + 1}`),
@@ -249,9 +274,11 @@ const el = (id) => document.getElementById(id);
       const edges = suppliedNodes.length
         ? WORKFLOW_EDGES
         : nodes.slice(1).map((node, index) => [String(nodes[index].id), String(node.id)]);
+      activeGraph.edges = edges;
       drawGraphEdges(root, edges);
       drawRetrievalGroup(root);
       if (nodes.length) selectGraphNode(String(nodes[0].id));
+      resetView();
     }
 
     function buildGraphNodeButton(node, index) {
@@ -275,14 +302,51 @@ const el = (id) => document.getElementById(id);
       detail.className = "node-detail";
       detail.textContent = `${node.status} | ${durationText(node.ms)}`;
       button.append(head, detail);
-      button.addEventListener("click", () => selectGraphNode(node.id));
+      let dragging = false;
+      let moved = false;
+      let dragStartX = 0;
+      let dragStartY = 0;
+      let origLeft = 0;
+      let origTop = 0;
+      button.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        event.stopPropagation();
+        dragging = true;
+        moved = false;
+        dragStartX = event.clientX;
+        dragStartY = event.clientY;
+        origLeft = parseFloat(button.style.left) || 0;
+        origTop = parseFloat(button.style.top) || 0;
+        try { button.setPointerCapture(event.pointerId); } catch (e) {}
+      });
+      button.addEventListener("pointermove", (event) => {
+        if (!dragging) return;
+        const dxScreen = event.clientX - dragStartX;
+        const dyScreen = event.clientY - dragStartY;
+        if (!moved && Math.hypot(dxScreen, dyScreen) < 4) return;
+        moved = true;
+        const nextLeft = origLeft + dxScreen / viewState.scale;
+        const nextTop = origTop + dyScreen / viewState.scale;
+        button.style.left = `${nextLeft}px`;
+        button.style.top = `${nextTop}px`;
+        GRAPH_LAYOUT[node.id] = [nextLeft, nextTop];
+        redrawEdges();
+      });
+      const endNodeDrag = (event) => {
+        if (!dragging) return;
+        dragging = false;
+        try { button.releasePointerCapture(event.pointerId); } catch (e) {}
+        if (!moved) selectGraphNode(node.id);
+      };
+      button.addEventListener("pointerup", endNodeDrag);
+      button.addEventListener("pointercancel", endNodeDrag);
       return button;
     }
 
     function renderSkeletonGraph() {
       const root = el("workflow-graph");
       root.textContent = "";
-      activeGraph = { nodes: new Map(), nodeElements: new Map(), meta: {}, trace: null };
+      activeGraph = { nodes: new Map(), nodeElements: new Map(), meta: {}, trace: null, edges: [] };
       SKELETON_NODE_IDS.forEach((id, index) => {
         const node = {
           id,
@@ -298,9 +362,11 @@ const el = (id) => document.getElementById(id);
         activeGraph.nodeElements.set(id, button);
         root.appendChild(button);
       });
+      activeGraph.edges = WORKFLOW_EDGES;
       drawGraphEdges(root, WORKFLOW_EDGES);
       drawRetrievalGroup(root);
       if (SKELETON_NODE_IDS.length) selectGraphNode(SKELETON_NODE_IDS[0]);
+      resetView();
     }
 
     function markNodeStatus(streamId, status, ms) {
@@ -613,3 +679,63 @@ const el = (id) => document.getElementById(id);
       }
       renderList(data.traces);
     });
+
+
+    function setupCanvasInteraction() {
+      const panel = document.querySelector(".graph-panel");
+      if (!panel) return;
+      const resetButton = document.createElement("button");
+      resetButton.type = "button";
+      resetButton.className = "graph-reset";
+      resetButton.textContent = "Reset view";
+      resetButton.addEventListener("pointerdown", (event) => event.stopPropagation());
+      resetButton.addEventListener("click", () => resetView());
+      panel.appendChild(resetButton);
+
+      let panning = false;
+      let startX = 0;
+      let startY = 0;
+      let startPanX = 0;
+      let startPanY = 0;
+      panel.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        if (event.target.closest(".graph-node, .graph-reset")) return;
+        panning = true;
+        startX = event.clientX;
+        startY = event.clientY;
+        startPanX = viewState.x;
+        startPanY = viewState.y;
+        panel.classList.add("grabbing");
+        try { panel.setPointerCapture(event.pointerId); } catch (e) {}
+      });
+      panel.addEventListener("pointermove", (event) => {
+        if (!panning) return;
+        viewState.x = startPanX + (event.clientX - startX);
+        viewState.y = startPanY + (event.clientY - startY);
+        applyViewTransform();
+      });
+      const endPan = (event) => {
+        if (!panning) return;
+        panning = false;
+        panel.classList.remove("grabbing");
+        try { panel.releasePointerCapture(event.pointerId); } catch (e) {}
+      };
+      panel.addEventListener("pointerup", endPan);
+      panel.addEventListener("pointercancel", endPan);
+      panel.addEventListener("wheel", (event) => {
+        event.preventDefault();
+        const rect = panel.getBoundingClientRect();
+        const cx = event.clientX - rect.left;
+        const cy = event.clientY - rect.top;
+        const factor = event.deltaY < 0 ? 1.1 : 0.9;
+        const newScale = clamp(viewState.scale * factor, 0.3, 2.0);
+        const k = newScale / viewState.scale;
+        viewState.x = cx - k * (cx - viewState.x);
+        viewState.y = cy - k * (cy - viewState.y);
+        viewState.scale = newScale;
+        applyViewTransform();
+      }, { passive: false });
+    }
+
+    setupCanvasInteraction();
+    applyViewTransform();
