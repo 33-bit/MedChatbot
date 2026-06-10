@@ -44,6 +44,17 @@ const el = (id) => document.getElementById(id);
     ];
     let activeGraph = { nodes: new Map(), nodeElements: new Map(), meta: {}, trace: null };
 
+    const STREAM_TO_NODE = {
+      dense: ["dense_search"],
+      sparse: ["sparse_search"],
+      generate: ["generate", "generation"],
+    };
+    const SKELETON_NODE_IDS = [
+      "input", "load_session", "preflight", "turn_analysis", "rewrite", "route",
+      "entity_ingest", "kg_search", "dense_search", "sparse_search", "fusion",
+      "rerank", "generate", "persist", "total",
+    ];
+
     const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
     const asArray = (value) => Array.isArray(value) ? value : [];
     const isAvailable = (value) => value !== null && value !== undefined && value !== "";
@@ -200,6 +211,66 @@ const el = (id) => document.getElementById(id);
         : nodes.slice(1).map((node, index) => [String(nodes[index].id), String(node.id)]);
       drawGraphEdges(root, edges);
       if (nodes.length) selectGraphNode(String(nodes[0].id));
+    }
+
+    function buildGraphNodeButton(node, index) {
+      const button = document.createElement("button");
+      const position = graphPosition(node, index);
+      button.type = "button";
+      button.className = `graph-node ${node.status}`;
+      button.style.left = `${position[0]}px`;
+      button.style.top = `${position[1]}px`;
+      button.dataset.nodeId = node.id;
+      const label = document.createElement("span");
+      label.className = "node-label";
+      label.textContent = node.label;
+      const detail = document.createElement("span");
+      detail.className = "node-detail";
+      detail.textContent = `${node.status} | ${durationText(node.ms)}`;
+      button.append(label, detail);
+      button.addEventListener("click", () => selectGraphNode(node.id));
+      return button;
+    }
+
+    function renderSkeletonGraph() {
+      const root = el("workflow-graph");
+      root.textContent = "";
+      activeGraph = { nodes: new Map(), nodeElements: new Map(), meta: {}, trace: null };
+      SKELETON_NODE_IDS.forEach((id, index) => {
+        const node = {
+          id,
+          label: id.replaceAll("_", " "),
+          status: "skipped",
+          ms: null,
+          input: null,
+          output: null,
+          raw: null,
+        };
+        const button = buildGraphNodeButton(node, index);
+        activeGraph.nodes.set(id, node);
+        activeGraph.nodeElements.set(id, button);
+        root.appendChild(button);
+      });
+      drawGraphEdges(root, WORKFLOW_EDGES);
+      if (SKELETON_NODE_IDS.length) selectGraphNode(SKELETON_NODE_IDS[0]);
+    }
+
+    function markNodeStatus(streamId, status, ms) {
+      const targets = STREAM_TO_NODE[streamId] || [streamId];
+      const cssStatus = status === "error" ? "error" : "success";
+      const normalizedMs = typeof ms === "number" ? ms : null;
+      for (const id of targets) {
+        const button = activeGraph.nodeElements.get(id);
+        if (!button) continue;
+        button.className = `graph-node ${cssStatus}${button.classList.contains("selected") ? " selected" : ""}`;
+        const detail = button.querySelector(".node-detail");
+        if (detail) detail.textContent = `${status} | ${durationText(normalizedMs)}`;
+        const node = activeGraph.nodes.get(id);
+        if (node) {
+          node.status = cssStatus;
+          node.ms = normalizedMs;
+        }
+      }
     }
 
     function renderRewriteDetails(root, node, meta) {
@@ -398,7 +469,7 @@ const el = (id) => document.getElementById(id);
       renderTrace(data.trace);
     }
 
-    el("run-button").addEventListener("click", async () => {
+    async function runOnce() {
       el("run-status").textContent = "Running...";
       const response = await fetch("/debug/chat-route/run", {
         method: "POST",
@@ -416,7 +487,71 @@ const el = (id) => document.getElementById(id);
       }
       el("run-status").textContent = data.warning || "Run complete";
       renderTrace(data.trace, data.warning);
-    });
+    }
+
+    async function runStream() {
+      el("run-status").textContent = "Running...";
+      renderSkeletonGraph();
+      let response;
+      try {
+        response = await fetch("/debug/chat-route/stream", {
+          method: "POST",
+          headers: apiHeaders(),
+          body: JSON.stringify({
+            question: el("question").value,
+            session_id: el("session-id").value,
+            mode: el("mode").value,
+          }),
+        });
+      } catch (err) {
+        return runOnce();
+      }
+      if (!response.ok || !response.body || !window.ReadableStream) {
+        if (response.status === 401 || response.status === 503) {
+          let detail = "Run failed";
+          try { detail = (await response.json()).detail || detail; } catch (e) {}
+          el("run-status").textContent = detail;
+          return;
+        }
+        return runOnce();
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let doneTrace = null;
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let sep;
+          while ((sep = buffer.indexOf("\n\n")) !== -1) {
+            const frame = buffer.slice(0, sep);
+            buffer = buffer.slice(sep + 2);
+            const line = frame.split("\n").find((l) => l.startsWith("data:"));
+            if (!line) continue;
+            let evt;
+            try { evt = JSON.parse(line.slice(5).trim()); } catch (e) { continue; }
+            if (evt.type === "node") {
+              markNodeStatus(evt.id, evt.status, evt.ms);
+            } else if (evt.type === "done") {
+              doneTrace = evt.trace;
+            }
+          }
+        }
+      } catch (err) {
+        el("run-status").textContent = "Stream interrupted";
+        return;
+      }
+      if (doneTrace) {
+        el("run-status").textContent = "Run complete";
+        renderTrace(doneTrace);
+      } else {
+        el("run-status").textContent = "Run complete (no trace)";
+      }
+    }
+
+    el("run-button").addEventListener("click", () => { runStream(); });
 
     el("list-button").addEventListener("click", async () => {
       const params = new URLSearchParams();
