@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Chat Route Debug Console</title>
+  <link rel="stylesheet" href="/debug/chat-route/static/styles.css">
+</head>
+<body>
+  <main>
+    <h1>Chat Route Debug Console</h1>
+    <p class="meta">Live run endpoint: <code>/debug/chat-route/run</code> | Replay endpoint: <code>/debug/chat-route/traces</code></p>
+    <div class="grid">
+      <section>
+        <h2>Live Run</h2>
+        <label for="api-key">X-API-Key</label>
+        <input id="api-key" type="password" autocomplete="off">
+        <label for="session-id">Session ID</label>
+        <input id="session-id" value="debug-user">
+        <label for="mode">Mode</label>
+        <select id="mode">
+          <option value="auto">auto</option>
+          <option value="information">information</option>
+          <option value="diagnostic">diagnostic</option>
+        </select>
+        <label for="question">Question</label>
+        <textarea id="question" rows="4">Tôi bị ho</textarea>
+        <button id="run-button" type="button">Run</button>
+        <div id="run-status" class="meta"></div>
+      </section>
+      <section>
+        <h2>Replay</h2>
+        <label for="filter-session-id">Session ID Filter</label>
+        <input id="filter-session-id" value="debug-user">
+        <label for="filter-trace-id">Trace ID Filter</label>
+        <input id="filter-trace-id" placeholder="optional">
+        <button id="list-button" class="secondary" type="button">Load Traces</button>
+        <div id="trace-list"></div>
+      </section>
+    </div>
+    <section>
+      <h2>Trace Detail</h2>
+      <div id="trace-summary" class="meta">No trace loaded.</div>
+      <h3>Workflow</h3>
+      <div class="trace-area">
+        <div class="graph-panel" aria-label="Workflow graph canvas">
+          <div id="workflow-graph"></div>
+        </div>
+        <aside id="node-inspector" class="inspector-panel" aria-live="polite">
+          <h3>Node Inspector</h3>
+          <div class="empty-state">Select a workflow node to inspect it.</div>
+        </aside>
+      </div>
+      <h3>Timing List</h3>
+      <div id="timeline"></div>
+      <h3>Retrieved Hits</h3>
+      <div id="retrieved"></div>
+      <h3>Usage</h3>
+      <div id="usage"></div>
+      <h3>Answer</h3>
+      <pre id="answer"></pre>
+      <h3>Raw JSON</h3>
+      <pre id="raw-json"></pre>
+    </section>
+  </main>
+  <script src="/debug/chat-route/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,51 @@
+:root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
+    body { margin: 0; background: #111827; color: #e5e7eb; }
+    main { max-width: 1600px; margin: 0 auto; padding: 24px; }
+    h1, h2 { margin: 0 0 12px; }
+    h3, h4 { margin: 16px 0 10px; }
+    section { background: #1f2937; border: 1px solid #374151; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+    label { display: block; font-weight: 600; margin-bottom: 6px; }
+    input, textarea, select, button { width: 100%; box-sizing: border-box; margin-bottom: 12px; padding: 10px; border-radius: 8px; border: 1px solid #4b5563; background: #111827; color: inherit; }
+    button { cursor: pointer; background: #2563eb; border: 0; font-weight: 700; }
+    button.secondary { background: #374151; }
+    .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+    .timeline-item, .trace-item { border: 1px solid #4b5563; border-radius: 8px; padding: 12px; margin-bottom: 10px; background: #111827; }
+    .meta { color: #9ca3af; font-size: 14px; }
+    pre { white-space: pre-wrap; word-break: break-word; background: #0b1220; padding: 12px; border-radius: 8px; overflow: auto; }
+    .trace-area { display: grid; grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr); gap: 16px; align-items: stretch; }
+    .graph-panel, .inspector-panel { min-width: 0; border: 1px solid #374151; border-radius: 10px; background: #111827; }
+    .graph-panel { overflow: auto; min-height: 580px; }
+    #workflow-graph { position: relative; width: 1960px; height: 560px; }
+    .graph-edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+    .graph-edge { fill: none; stroke: #64748b; stroke-width: 2; }
+    .graph-node { position: absolute; width: 136px; min-height: 76px; margin: 0; padding: 10px; text-align: left; border: 2px solid #475569; background: #172033; box-shadow: 0 8px 18px rgba(0, 0, 0, .2); }
+    .graph-node:hover, .graph-node.selected { border-color: #60a5fa; outline: 2px solid rgba(96, 165, 250, .2); }
+    .graph-node.success { border-color: #16a34a; }
+    .graph-node.error { border-color: #dc2626; }
+    .graph-node.skipped { border-color: #64748b; opacity: .72; }
+    .node-label, .node-detail { display: block; }
+    .node-label { font-size: 13px; }
+    .node-detail { margin-top: 8px; color: #cbd5e1; font-size: 11px; font-weight: 500; }
+    .inspector-panel { padding: 16px; overflow: auto; max-height: 580px; }
+    .inspector-header { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .status-pill { display: inline-block; border-radius: 999px; padding: 3px 8px; background: #334155; font-size: 12px; font-weight: 700; }
+    .status-pill.success { background: #14532d; color: #bbf7d0; }
+    .status-pill.error { background: #7f1d1d; color: #fecaca; }
+    .status-pill.skipped { background: #334155; color: #cbd5e1; }
+    .detail-card { margin-top: 12px; padding: 12px; border: 1px solid #334155; border-radius: 8px; background: #0b1220; }
+    .detail-card h4 { margin-top: 0; }
+    .detail-row { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 10px; padding: 5px 0; border-bottom: 1px solid #1e293b; }
+    .detail-row:last-child { border-bottom: 0; }
+    .detail-label { color: #94a3b8; font-size: 12px; }
+    .detail-value { min-width: 0; white-space: pre-wrap; word-break: break-word; }
+    .empty-state { color: #94a3b8; font-style: italic; }
+    .table-wrap { overflow: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { padding: 7px; text-align: left; vertical-align: top; border-bottom: 1px solid #334155; }
+    th { color: #93c5fd; }
+    td.preview { min-width: 220px; white-space: normal; }
+    @media (max-width: 980px) {
+      main { padding: 14px; }
+      .trace-area { grid-template-columns: 1fr; }
+      .inspector-panel { max-height: none; }
+    }

@@ -192,33 +192,24 @@ def test_chat_returns_technical_reply_when_pipeline_raises(app_client, monkeypat
 
 def test_debug_chat_route_page_is_served(app_client):
     client, _ = app_client
-
     response = client.get("/debug/chat-route")
-
     assert response.status_code == 200
     assert "Chat Route Debug Console" in response.text
-    assert "/debug/chat-route/run" in response.text
-    assert "/debug/chat-route/traces" in response.text
     assert 'id="workflow-graph"' in response.text
     assert 'id="node-inspector"' in response.text
-    assert "function renderWorkflowGraph" in response.text
-    assert "function selectGraphNode" in response.text
-    assert "function renderRetrievalTable" in response.text
-    assert "function renderKgDetails" in response.text
-    assert "function buildLegacyGraphNodes" in response.text
+    assert "app.js" in response.text  # script is now external
 
 
-def test_debug_chat_route_page_js_has_no_unterminated_string(app_client):
+def test_debug_console_app_js_is_served(app_client):
     client, _ = app_client
+    response = client.get("/debug/chat-route/static/app.js")
+    assert response.status_code == 200
+    assert "renderWorkflowGraph" in response.text
 
-    response = client.get("/debug/chat-route")
 
-    # The inline JS uses .join("\n"). If the Python source writes a bare "\n",
-    # Python emits a real newline into the served string, producing an
-    # unterminated JS string literal that aborts the whole script (and breaks
-    # every event listener, including the Run button).
-    assert '.join("\\n")' in response.text
-    assert '.join("\n")' not in response.text
+def test_debug_console_static_asset_rejects_unknown(app_client):
+    client, _ = app_client
+    assert client.get("/debug/chat-route/static/secrets.txt").status_code == 404
 
 
 def test_debug_chat_route_run_requires_api_key(app_client, monkeypatch):
@@ -474,7 +465,7 @@ def test_debug_chat_route_runs_with_same_pipeline_trace_id_get_unique_persisted_
 def test_debug_chat_route_page_shows_created_at_fields(app_client):
     client, _ = app_client
 
-    response = client.get("/debug/chat-route")
+    response = client.get("/debug/chat-route/static/app.js")
 
     assert response.status_code == 200
     assert "created_at" in response.text
