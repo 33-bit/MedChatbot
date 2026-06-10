@@ -480,3 +480,85 @@ def test_debug_chat_route_page_shows_created_at_fields(app_client):
     assert "created_at" in response.text
     assert 'params.set("session_id"' in response.text
     assert "loadTrace(trace.trace_id)" in response.text
+
+
+def test_debug_chat_route_stream_requires_api_key(app_client, monkeypatch):
+    client, app_module = app_client
+    monkeypatch.setattr(app_module, "CHAT_API_KEY", "secret")
+    missing = client.post("/debug/chat-route/stream",
+                          json={"question": "Tôi bị ho", "session_id": "debug-user"})
+    wrong = client.post("/debug/chat-route/stream",
+                        headers={"X-API-Key": "wrong"},
+                        json={"question": "Tôi bị ho", "session_id": "debug-user"})
+    assert missing.status_code == 401
+    assert wrong.status_code == 401
+
+
+def test_debug_chat_route_stream_emits_nodes_then_done_and_persists(app_client, monkeypatch):
+    import json as _json
+    client, app_module = app_client
+    monkeypatch.setattr(app_module, "CHAT_API_KEY", "secret")
+
+    def fake_answer_with_meta(question, session_id="default", mode="auto"):
+        # Drive node events through the REAL sink installed by the endpoint.
+        from src.chat import pipeline
+        import time
+        pipeline._log_timing("t", "route", time.perf_counter(), label="informational")
+        pipeline._log_timing("t", "generate", time.perf_counter(), chars=5)
+        return "stream answer", {
+            "trace_id": "trace-stream",
+            "latency_ms_total": 9.0,
+            "timings": [{"stage": "total", "ms": 9.0, "fields": {}}],
+            "graph_nodes": [],
+        }
+
+    monkeypatch.setattr(app_module, "answer_with_meta", fake_answer_with_meta)
+
+    with client.stream("POST", "/debug/chat-route/stream",
+                       headers={"X-API-Key": "secret"},
+                       json={"question": "Tôi bị ho", "session_id": "debug-user",
+                             "mode": "information"}) as resp:
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/event-stream")
+        events = []
+        for line in resp.iter_lines():
+            if line.startswith("data:"):
+                events.append(_json.loads(line[len("data:"):].strip()))
+
+    node_ids = [e["id"] for e in events if e.get("type") == "node"]
+    done = [e for e in events if e.get("type") == "done"]
+    assert "route" in node_ids and "generate" in node_ids
+    assert len(done) == 1
+    saved_trace = done[0]["trace"]
+    assert saved_trace["answer"] == "stream answer"
+    assert saved_trace["trace_id"]
+
+    replay = client.get(
+        f"/debug/chat-route/traces/{saved_trace['trace_id']}?session_id=debug-user",
+        headers={"X-API-Key": "secret"},
+    )
+    assert replay.status_code == 200
+
+
+def test_debug_chat_route_stream_done_on_worker_exception(app_client, monkeypatch):
+    import json as _json
+    from src.chat.replies import TECHNICAL_ERROR_REPLY
+    client, app_module = app_client
+    monkeypatch.setattr(app_module, "CHAT_API_KEY", "secret")
+
+    def broken(question, session_id="default", mode="auto"):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(app_module, "answer_with_meta", broken)
+
+    with client.stream("POST", "/debug/chat-route/stream",
+                       headers={"X-API-Key": "secret"},
+                       json={"question": "x", "session_id": "debug-user"}) as resp:
+        events = []
+        for line in resp.iter_lines():
+            if line.startswith("data:"):
+                events.append(_json.loads(line[len("data:"):].strip()))
+
+    done = [e for e in events if e.get("type") == "done"]
+    assert len(done) == 1
+    assert done[0]["trace"]["answer"] == TECHNICAL_ERROR_REPLY

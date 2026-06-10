@@ -12,14 +12,17 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
+import queue
+import threading
 import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 
 from src.chat import answer, answer_with_meta
 from src.chat.mode_policy import normalize_mode
@@ -751,6 +754,74 @@ async def debug_chat_route_run(
         log.exception("Debug trace persistence failed")
         return {"trace": trace, "warning": "trace_persistence_failed"}
     return {"trace": saved}
+
+
+@app.post("/debug/chat-route/stream")
+async def debug_chat_route_stream(
+    body: dict,
+    x_api_key: str | None = Header(default=None),
+):
+    api_key = _require_chat_api_key(x_api_key)
+    payload = body or {}
+    question = payload.get("question", "")
+    mode = normalize_mode(payload.get("mode"))
+    client_session_id = _require_client_session_id(payload)
+    session_id = _scoped_api_session_id(api_key, client_session_id)
+
+    from src.chat import pipeline
+
+    events: "queue.Queue" = queue.Queue()
+    sentinel = object()
+    result: dict = {}
+
+    def _worker():
+        pipeline._install_event_sink(events)
+        try:
+            reply, meta = _run_answer_with_meta(question, session_id, mode)
+        except Exception:
+            log.exception("Debug chat route stream failed")
+            reply, meta = TECHNICAL_ERROR_REPLY, {"error": "technical_error"}
+        finally:
+            pipeline._install_event_sink(None)
+        result["reply"] = reply
+        result["meta"] = meta
+        events.put(sentinel)
+
+    def _stream():
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
+        while True:
+            item = events.get()
+            if item is sentinel:
+                break
+            yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+        thread.join()
+
+        trace = _build_debug_trace(
+            reply=result["reply"],
+            meta=result.get("meta"),
+            question=question,
+            session_id=client_session_id,
+            internal_session_id=session_id,
+            mode=mode,
+        )
+        try:
+            saved = save_chat_trace(
+                trace_id=trace["trace_id"],
+                session_id=client_session_id,
+                internal_session_id=session_id,
+                mode=mode,
+                question=question,
+                answer=result["reply"],
+                meta=trace["meta"],
+                created_at=trace["created_at"],
+            )
+        except Exception:
+            log.exception("Debug stream trace persistence failed")
+            saved = trace
+        yield f"data: {json.dumps({'type': 'done', 'trace': saved}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
 
 
 @app.get("/debug/chat-route/traces")
