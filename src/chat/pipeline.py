@@ -54,6 +54,7 @@ from src.chat.retrieval import (
     Hit,
     format_kg_context,
     hybrid_search,
+    hybrid_search_with_debug,
     kg_search,
 )
 from src.chat.storage.session import (
@@ -480,6 +481,33 @@ def _load_hybrid_hits(question: str, trace_id: str) -> list[Hit]:
     return hits
 
 
+def _load_kg_context_with_debug(
+    question: str,
+    trace_id: str,
+) -> tuple[str, dict[str, Any]]:
+    stage_start = time.perf_counter()
+    kg_result = kg_search(question)
+    kg_context = asdict(kg_result)
+    kg_text = format_kg_context(kg_result)
+    _log_timing(trace_id, "kg_search", stage_start,
+                matched=len(kg_result.matched_entities),
+                empty=kg_result.is_empty)
+    return kg_text, kg_context
+
+
+def _load_hybrid_hits_with_debug(
+    question: str,
+    trace_id: str,
+) -> tuple[list[Hit], dict[str, Any]]:
+    stage_start = time.perf_counter()
+    hits, retrieval_debug = hybrid_search_with_debug(
+        question,
+        top_k=RERANK_TOP_K,
+    )
+    _log_timing(trace_id, "hybrid_search", stage_start, hits=len(hits))
+    return hits, retrieval_debug
+
+
 def _call_with_elapsed(fn: Any, *args: Any) -> tuple[Any, float]:
     stage_start = time.perf_counter()
     result = fn(*args)
@@ -631,21 +659,62 @@ def _handle_informational(
 ) -> str:
     stage_start = time.perf_counter()
     search_question = retrieval_question or question
+    active_meta = _meta()
+    collect_debug = bool(
+        active_meta is not None and active_meta.get("_collect_graph")
+    )
+    kg_loader = _load_kg_context_with_debug if collect_debug else _load_kg_context
+    hits_loader = (
+        _load_hybrid_hits_with_debug if collect_debug else _load_hybrid_hits
+    )
     with ThreadPoolExecutor(max_workers=2, thread_name_prefix="retrieval") as executor:
         kg_future = executor.submit(
-            _call_with_elapsed, _load_kg_context, search_question, trace_id,
+            _call_with_elapsed, kg_loader, search_question, trace_id,
         )
         hits_future = executor.submit(
-            _call_with_elapsed, _load_hybrid_hits, search_question, trace_id,
+            _call_with_elapsed, hits_loader, search_question, trace_id,
         )
         done, pending = wait((kg_future, hits_future), return_when=FIRST_EXCEPTION)
         for future in done:
             if future.exception() is not None:
+                meta = _meta()
+                if collect_debug and meta is not None:
+                    error_text = str(future.exception()).casefold()
+                    meta["_graph_error_stage"] = (
+                        "kg_search"
+                        if future is kg_future
+                        else next(
+                            (
+                                stage
+                                for keyword, stage in (
+                                    ("sparse", "sparse_search"),
+                                    ("fusion", "fusion"),
+                                    ("rrf", "fusion"),
+                                    ("rerank", "rerank"),
+                                    ("dense", "dense_search"),
+                                    ("qdrant", "dense_search"),
+                                    ("embedding", "dense_search"),
+                                )
+                                if keyword in error_text
+                            ),
+                            "dense_search",
+                        )
+                    )
                 for pending_future in pending:
                     pending_future.cancel()
                 raise future.exception()
-        kg_text, kg_elapsed = kg_future.result()
-        hits, hits_elapsed = hits_future.result()
+        kg_result, kg_elapsed = kg_future.result()
+        hits_result, hits_elapsed = hits_future.result()
+    if collect_debug:
+        kg_text, kg_context = kg_result
+        hits, retrieval_debug = hits_result
+        meta = _meta()
+        if meta is not None:
+            meta["kg_context"] = kg_context
+            meta["retrieval_debug"] = retrieval_debug
+    else:
+        kg_text = kg_result
+        hits = hits_result
     _record_timing("kg_search", kg_elapsed, {"kg_chars": len(kg_text)})
     _record_timing("hybrid_search", hits_elapsed, {"hits": len(hits)})
     _log_timing(trace_id, "parallel_retrieval", stage_start,
@@ -794,6 +863,16 @@ def _answer_inner(
             last_bot_message=_last_bot_message(session),
             history=session.conversation,
         )
+    meta = _meta()
+    if meta is not None and meta.get("_collect_graph"):
+        meta["_graph_turn_analysis"] = analysis
+        rewrite_data = analysis.get("rewrite")
+        if isinstance(rewrite_data, dict):
+            meta["rewrite_query"] = {
+                "original": question,
+                "rewritten": rewrite_data.get("rewritten"),
+                "confident": rewrite_data.get("confident"),
+            }
     guard = analysis["guardrail"]
     turn = analysis["turn"]
     label = turn["label"]
@@ -839,6 +918,17 @@ def _answer_inner(
     active_flow = bool(session.answered_questions or session.clarification_queue)
     decision = apply_mode_policy(mode, intent, active_flow=active_flow)
     _record_mode_decision(mode, intent, decision, question)
+    meta = _meta()
+    if meta is not None and meta.get("_collect_graph"):
+        meta["_graph_route"] = {
+            "input": {
+                "label": label,
+                "intent": intent,
+                "mode": mode,
+                "active_flow": active_flow,
+            },
+            "decision": asdict(decision),
+        }
     if not decision.allow:
         reply = decision.reply or ""
         session.add_message("assistant", reply)
@@ -933,6 +1023,152 @@ def answer_with_choices(
     )
 
 
+def _build_graph_nodes(
+    meta: dict[str, Any],
+    question: str,
+    session_id: str,
+    mode: str,
+    reply: str,
+) -> list[dict[str, Any]]:
+    timings = {
+        entry["stage"]: entry
+        for entry in meta.get("timings", [])
+        if isinstance(entry, dict) and entry.get("stage")
+    }
+    analysis = meta.pop("_graph_turn_analysis", None)
+    route_data = meta.pop("_graph_route", None)
+    error_stage = meta.pop("_graph_error_stage", None)
+    meta.pop("_collect_graph", None)
+    rewrite_query = meta.get("rewrite_query")
+    kg_context = meta.get("kg_context")
+    retrieval_debug = meta.get("retrieval_debug") or {}
+    retrieval_query = (
+        retrieval_debug.get("query")
+        if isinstance(retrieval_debug, dict) else None
+    ) or (
+        rewrite_query.get("rewritten")
+        if isinstance(rewrite_query, dict)
+        else question
+    )
+    nodes: list[dict[str, Any]] = []
+
+    def add_node(
+        node_id: str,
+        label: str,
+        *,
+        present: bool,
+        timing_stage: str | None = None,
+        input_data: Any = None,
+        output_data: Any = None,
+        raw_data: Any = None,
+        ms: float | None = None,
+    ) -> None:
+        timing = timings.get(timing_stage or "")
+        failed = (
+            node_id == error_stage
+            or bool(timing and timing.get("fields", {}).get("failed"))
+        )
+        nodes.append({
+            "id": node_id,
+            "label": label,
+            "status": "error" if failed else ("success" if present else "skipped"),
+            "ms": timing.get("ms") if ms is None and timing else ms,
+            "input": input_data,
+            "output": output_data,
+            "raw": raw_data,
+        })
+
+    request_data = {
+        "question": question,
+        "session_id": session_id,
+        "mode": meta.get("mode", normalize_mode(mode)),
+    }
+    turn_output = analysis.get("turn") if isinstance(analysis, dict) else None
+    persist_timing = timings.get("persist")
+    add_node("input", "Input", present=True, ms=0.0,
+             input_data=request_data, raw_data=request_data)
+    add_node(
+        "preflight", "Preflight", present="preflight" in timings,
+        timing_stage="preflight",
+        input_data={"question": question, "session_id": session_id},
+        output_data={"short_circuit": meta.get("outcome") == "short_circuit"},
+        raw_data=timings.get("preflight"),
+    )
+    add_node(
+        "turn_analysis", "Turn analysis", present=analysis is not None,
+        timing_stage="turn_analysis", input_data={"question": question},
+        output_data=turn_output, raw_data=analysis,
+    )
+    add_node(
+        "rewrite", "Query rewrite", present=rewrite_query is not None,
+        input_data={"question": question},
+        output_data=rewrite_query, raw_data=rewrite_query,
+    )
+    add_node(
+        "route", "Route",
+        present=route_data is not None or "route_label" in meta,
+        timing_stage="route",
+        input_data=route_data.get("input") if route_data else None,
+        output_data={
+            "route_label": meta.get("route_label"),
+            "suggest_mode": meta.get("suggest_mode"),
+        },
+        raw_data=route_data,
+    )
+    add_node(
+        "kg_search", "KG search", present="kg_context" in meta,
+        timing_stage="kg_search", input_data={"query": retrieval_query},
+        output_data=kg_context, raw_data=kg_context,
+    )
+    for node_id, label, key in (
+        ("dense_search", "Dense search", "dense_hits"),
+        ("sparse_search", "Sparse search", "sparse_hits"),
+        ("fusion", "RRF fusion", "fused_hits"),
+        ("rerank", "Rerank", "reranked_hits"),
+    ):
+        hits = retrieval_debug.get(key) if isinstance(retrieval_debug, dict) else None
+        add_node(
+            node_id, label,
+            present=isinstance(retrieval_debug, dict) and key in retrieval_debug,
+            input_data={"query": retrieval_query},
+            output_data=hits, raw_data=hits,
+        )
+    add_node(
+        "generate", "Generate", present="generate" in timings,
+        timing_stage="generate",
+        input_data={
+            "question": (
+                rewrite_query.get("rewritten")
+                if isinstance(rewrite_query, dict) else question
+            ),
+            "retrieved_count": len(meta.get("retrieved", [])),
+            "has_kg_context": kg_context is not None,
+        },
+        output_data={"reply": reply},
+        raw_data={"usage": meta.get("usage", [])},
+    )
+    add_node(
+        "persist", "Persist", present=persist_timing is not None,
+        timing_stage="persist", input_data={"session_id": session_id},
+        output_data={
+            "saved": bool(persist_timing)
+            and not bool(persist_timing.get("fields", {}).get("failed")),
+        },
+        raw_data=persist_timing,
+    )
+    add_node(
+        "total", "Total",
+        present="total" in timings or "latency_ms_total" in meta,
+        timing_stage="total",
+        output_data={
+            "outcome": meta.get("outcome"),
+            "latency_ms_total": meta.get("latency_ms_total"),
+        },
+        raw_data={"outcome": meta.get("outcome"), "error": meta.get("error")},
+    )
+    return nodes
+
+
 def answer_with_meta(
     question: str,
     session_id: str = "default",
@@ -944,7 +1180,7 @@ def answer_with_meta(
     """
     trace_id = uuid.uuid4().hex[:8]
     request_start = time.perf_counter()
-    meta: dict[str, Any] = {"trace_id": trace_id}
+    meta: dict[str, Any] = {"trace_id": trace_id, "_collect_graph": True}
     _META_LOCAL.current = meta
     try:
         try:
@@ -955,6 +1191,13 @@ def answer_with_meta(
             reply = TECHNICAL_ERROR_REPLY
             meta["error"] = "technical_error"
         meta["latency_ms_total"] = round(elapsed_ms(request_start), 2)
+        meta["graph_nodes"] = _build_graph_nodes(
+            meta,
+            question,
+            session_id,
+            mode,
+            reply,
+        )
         return reply, meta
     finally:
         _META_LOCAL.current = None

@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import logging
 import threading
-from types import SimpleNamespace
 
 import pytest
 
 from src.chat import pipeline
 from src.chat.errors import Neo4jUnavailable, QdrantUnavailable
 from src.chat.replies import TECHNICAL_ERROR_REPLY
+from src.chat.retrieval.kg import KGContext
 from src.chat.retrieval.types import Hit
 from src.chat.storage.session import PatientSession
 
@@ -980,6 +980,38 @@ def test_answer_with_choices_includes_doctor_specialty(monkeypatch):
     assert reply.doctor_specialty == "Tiêu hóa"
 
 
+def test_answer_with_choices_keeps_standard_retrieval(monkeypatch):
+    _patch_preflight_ok(monkeypatch)
+    _patch_persistence_noop(monkeypatch)
+    monkeypatch.setattr(pipeline, "analyze_turn", lambda *args, **kwargs: _analysis())
+    monkeypatch.setattr(pipeline, "_load_kg_context", lambda question, trace_id: "")
+    monkeypatch.setattr(pipeline, "_load_hybrid_hits", lambda question, trace_id: [])
+    monkeypatch.setattr(
+        pipeline,
+        "_load_kg_context_with_debug",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("answer_with_choices should not collect graph metadata")
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_load_hybrid_hits_with_debug",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("answer_with_choices should not collect graph metadata")
+        ),
+    )
+
+    def fake_generate(question, hits, kg_text="", patient=None, return_meta=False):
+        assert return_meta is True
+        return "answer", {"usage": {}, "model": "test-model"}
+
+    monkeypatch.setattr(pipeline, "generate", fake_generate)
+
+    reply = pipeline.answer_with_choices("Tôi bị ho", session_id="s")
+
+    assert reply.text == "answer"
+
+
 def test_suggested_choices_for_fever_severity_question(monkeypatch):
     monkeypatch.setattr(pipeline, "symptom_catalog", lambda: {})
     assert pipeline.suggested_choices("Sốt cao đến mức nào?") == (
@@ -1743,8 +1775,25 @@ def test_answer_with_meta_records_timing_timeline(monkeypatch):
     _patch_preflight_ok(monkeypatch)
     _patch_persistence_noop(monkeypatch)
     monkeypatch.setattr(pipeline, "analyze_turn", lambda *args, **kwargs: _analysis())
-    monkeypatch.setattr(pipeline, "_load_kg_context", lambda question, trace_id: "")
-    monkeypatch.setattr(pipeline, "_load_hybrid_hits", lambda question, trace_id: [])
+    monkeypatch.setattr(
+        pipeline,
+        "_load_kg_context_with_debug",
+        lambda question, trace_id: ("", {}),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_load_hybrid_hits_with_debug",
+        lambda question, trace_id: (
+            [],
+            {
+                "query": question,
+                "dense_hits": [],
+                "sparse_hits": [],
+                "fused_hits": [],
+                "reranked_hits": [],
+            },
+        ),
+    )
 
     def fake_generate(question, hits, kg_text="", patient=None, return_meta=False):
         if return_meta:
@@ -1768,6 +1817,177 @@ def test_answer_with_meta_records_timing_timeline(monkeypatch):
     assert meta["usage"][0]["stage"] == "generator"
 
 
+def test_answer_with_meta_records_structured_graph_trace(monkeypatch):
+    _patch_preflight_ok(monkeypatch)
+    _patch_persistence_noop(monkeypatch)
+    analysis = _analysis(rewritten="Ho kéo dài")
+    monkeypatch.setattr(pipeline, "analyze_turn", lambda *args, **kwargs: analysis)
+
+    kg_context = KGContext(
+        matched_entities=[{"id": "symptom:COUGH", "type": "symptom", "name": "Ho"}],
+        related_diseases=[{"id": "disease:FLU", "name": "Cúm"}],
+        related_drugs=[{"id": "drug:DEXTROMETHORPHAN", "name": "Dextromethorphan"}],
+        related_symptoms=[{"id": "symptom:FEVER", "name": "Sốt"}],
+        related_adrs=[{"id": "symptom:DROWSINESS", "name": "Buồn ngủ"}],
+        relationships=["Ho là triệu chứng của Cúm"],
+    )
+    monkeypatch.setattr(pipeline, "kg_search", lambda question: kg_context)
+
+    def fake_format_kg_context(actual_context: KGContext) -> str:
+        assert actual_context is kg_context
+        return "KG prompt context"
+
+    monkeypatch.setattr(pipeline, "format_kg_context", fake_format_kg_context)
+    hits = [
+        Hit(
+            text="context",
+            score=0.9,
+            source_type="disease",
+            source_name="Cúm",
+            heading_path="Triệu chứng",
+            source_slug="cum",
+            chunk_id="disease:cum:trieu-chung",
+        )
+    ]
+    retrieval_debug = {
+        "query": "Ho kéo dài",
+        "dense_hits": [{"rank": 1, "stage": "dense", "chunk_id": "dense-1"}],
+        "sparse_hits": [{"rank": 1, "stage": "sparse", "chunk_id": "sparse-1"}],
+        "fused_hits": [{"rank": 1, "stage": "fused", "chunk_id": "fused-1"}],
+        "reranked_hits": [
+            {"rank": 1, "stage": "reranked", "chunk_id": "disease:cum:trieu-chung"}
+        ],
+    }
+    monkeypatch.setattr(
+        pipeline,
+        "hybrid_search_with_debug",
+        lambda question, top_k: (hits, retrieval_debug),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "hybrid_search",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("meta collection should use hybrid_search_with_debug")
+        ),
+    )
+
+    def fake_generate(question, actual_hits, kg_text="", patient=None, return_meta=False):
+        assert question == "Ho kéo dài"
+        assert actual_hits is hits
+        assert kg_text == "KG prompt context"
+        assert return_meta is True
+        return "answer", {
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+            "model": "test-model",
+        }
+
+    monkeypatch.setattr(pipeline, "generate", fake_generate)
+
+    reply, meta = pipeline.answer_with_meta("Tôi bị ho", session_id="s")
+
+    assert reply == "answer"
+    assert meta["rewrite_query"] == {
+        "original": "Tôi bị ho",
+        "rewritten": "Ho kéo dài",
+        "confident": True,
+    }
+    assert meta["kg_context"] == {
+        "matched_entities": kg_context.matched_entities,
+        "related_diseases": kg_context.related_diseases,
+        "related_drugs": kg_context.related_drugs,
+        "related_symptoms": kg_context.related_symptoms,
+        "related_adrs": kg_context.related_adrs,
+        "relationships": kg_context.relationships,
+    }
+    assert meta["retrieval_debug"] is retrieval_debug
+    assert [node["id"] for node in meta["graph_nodes"]] == [
+        "input",
+        "preflight",
+        "turn_analysis",
+        "rewrite",
+        "route",
+        "kg_search",
+        "dense_search",
+        "sparse_search",
+        "fusion",
+        "rerank",
+        "generate",
+        "persist",
+        "total",
+    ]
+    nodes = {node["id"]: node for node in meta["graph_nodes"]}
+    assert all(
+        set(node) == {"id", "label", "status", "ms", "input", "output", "raw"}
+        for node in meta["graph_nodes"]
+    )
+    assert all(node["status"] == "success" for node in meta["graph_nodes"])
+    assert nodes["input"]["input"] == {
+        "question": "Tôi bị ho",
+        "session_id": "s",
+        "mode": "auto",
+    }
+    assert nodes["turn_analysis"]["raw"] == analysis
+    assert nodes["rewrite"]["output"] == meta["rewrite_query"]
+    assert nodes["kg_search"]["output"] == meta["kg_context"]
+    assert nodes["dense_search"]["output"] == retrieval_debug["dense_hits"]
+    assert nodes["sparse_search"]["output"] == retrieval_debug["sparse_hits"]
+    assert nodes["fusion"]["output"] == retrieval_debug["fused_hits"]
+    assert nodes["rerank"]["output"] == retrieval_debug["reranked_hits"]
+    assert nodes["generate"]["output"] == {"reply": "answer"}
+    assert nodes["total"]["output"] == {
+        "outcome": "informational",
+        "latency_ms_total": meta["latency_ms_total"],
+    }
+    for field in (
+        "timings",
+        "retrieved",
+        "usage",
+        "route_label",
+        "outcome",
+        "latency_ms_total",
+    ):
+        assert field in meta
+
+
+def test_answer_with_meta_marks_failed_retrieval_node(monkeypatch):
+    _patch_preflight_ok(monkeypatch)
+    _patch_persistence_noop(monkeypatch)
+    monkeypatch.setattr(pipeline, "analyze_turn", lambda *args, **kwargs: _analysis())
+    monkeypatch.setattr(
+        pipeline,
+        "_load_kg_context_with_debug",
+        lambda question, trace_id: ("", {}),
+    )
+
+    def fail_dense_retrieval(question: str, trace_id: str):
+        raise QdrantUnavailable(
+            "Qdrant collection check failed for medical_guidelines"
+        )
+
+    monkeypatch.setattr(
+        pipeline,
+        "_load_hybrid_hits_with_debug",
+        fail_dense_retrieval,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "generate",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("generation should not run after retrieval failure")
+        ),
+    )
+
+    reply, meta = pipeline.answer_with_meta("Tôi bị ho", session_id="s")
+
+    nodes = {node["id"]: node for node in meta["graph_nodes"]}
+    assert reply == TECHNICAL_ERROR_REPLY
+    assert meta["outcome"] == "technical_error"
+    assert nodes["dense_search"]["status"] == "error"
+    assert nodes["generate"]["status"] == "skipped"
+    assert nodes["total"]["status"] == "success"
+
+
 def test_answer_with_meta_records_worker_retrieval_timings(monkeypatch):
     _patch_preflight_ok(monkeypatch)
     _patch_persistence_noop(monkeypatch)
@@ -1775,22 +1995,31 @@ def test_answer_with_meta_records_worker_retrieval_timings(monkeypatch):
     monkeypatch.setattr(
         pipeline,
         "kg_search",
-        lambda question: SimpleNamespace(matched_entities=[{"name": "Ho"}], is_empty=False),
+        lambda question: KGContext(matched_entities=[{"name": "Ho"}]),
     )
     monkeypatch.setattr(pipeline, "format_kg_context", lambda result: "KG context")
     monkeypatch.setattr(
         pipeline,
-        "hybrid_search",
-        lambda question, top_k: [
-            Hit(
-                text="context",
-                score=1.0,
-                source_type="disease",
-                source_name="Nguồn",
-                heading_path="",
-                source_slug="nguon",
-            )
-        ],
+        "hybrid_search_with_debug",
+        lambda question, top_k: (
+            [
+                Hit(
+                    text="context",
+                    score=1.0,
+                    source_type="disease",
+                    source_name="Nguồn",
+                    heading_path="",
+                    source_slug="nguon",
+                )
+            ],
+            {
+                "query": question,
+                "dense_hits": [],
+                "sparse_hits": [],
+                "fused_hits": [],
+                "reranked_hits": [],
+            },
+        ),
     )
 
     def fake_generate(question, hits, kg_text="", patient=None, return_meta=False):
