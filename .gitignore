@@ -14,6 +14,7 @@ OPS.md
 AGENTS.md
 codebase-analysis-docs/
 .gitnexus
+.worktrees/
 docs/
 .DS_Store
 TEST_PLAN.md
