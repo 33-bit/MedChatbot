@@ -20,6 +20,10 @@ const el = (id) => document.getElementById(id);
       generation: [1460, 220],
       persist: [1620, 220],
       total: [1780, 220],
+      diagnostic_general_triage: [980, 600],
+      diagnostic_rank: [1140, 600],
+      diagnostic_clarification: [1300, 600],
+      clarification_parse: [1460, 600],
     };
     const WORKFLOW_EDGES = [
       ["input", "load_session"],
@@ -41,6 +45,11 @@ const el = (id) => document.getElementById(id);
       ["generate", "persist"],
       ["generation", "persist"],
       ["persist", "total"],
+      ["route", "diagnostic_general_triage"],
+      ["diagnostic_general_triage", "diagnostic_rank"],
+      ["diagnostic_rank", "diagnostic_clarification"],
+      ["diagnostic_clarification", "clarification_parse"],
+      ["diagnostic_clarification", "generate"],
     ];
     const svgIcon = (body) => `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
     const NODE_ICONS = {
@@ -61,6 +70,10 @@ const el = (id) => document.getElementById(id);
       generation: svgIcon('<rect x="5" y="8" width="14" height="11" rx="2"></rect><path d="M12 4v4M9 1.5h6"></path><circle cx="9.5" cy="13" r="1.1"></circle><circle cx="14.5" cy="13" r="1.1"></circle>'),
       persist: svgIcon('<ellipse cx="12" cy="6" rx="7" ry="3"></ellipse><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6"></path><path d="M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"></path>'),
       total: svgIcon('<path d="M5 21V4"></path><path d="M5 4h11l-2 3 2 3H5"></path>'),
+      diagnostic_general_triage: svgIcon('<rect x="6" y="3" width="12" height="18" rx="2"></rect><path d="M9 1.5h6v3H9z"></path><path d="M9 9l1.5 1.5L13 8M9 15l1.5 1.5L13 14"></path>'),
+      diagnostic_rank: svgIcon('<path d="M5 20V11M11 20V5M17 20v-6"></path><path d="M3 20h18"></path>'),
+      diagnostic_clarification: svgIcon('<path d="M21 12a8 8 0 0 1-11.5 7.2L4 21l1.8-5.5A8 8 0 1 1 21 12z"></path><path d="M9.5 9.5a2.5 2.5 0 1 1 3.4 2.3c-.8.3-1.4 1-1.4 1.9M12 16h.01"></path>'),
+      clarification_parse: svgIcon('<path d="M8 4H7a3 3 0 0 0-3 3c0 2-1 2.5-1 2.5S4 10 4 12s-1 2.5-1 2.5S4 15 4 17a3 3 0 0 0 3 3h1"></path><path d="M16 4h1a3 3 0 0 1 3 3c0 2 1 2.5 1 2.5S20 10 20 12s1 2.5 1 2.5S20 15 20 17a3 3 0 0 1-3 3h-1"></path>'),
     };
 
     let activeGraph = { nodes: new Map(), nodeElements: new Map(), meta: {}, trace: null, edges: [] };
@@ -93,10 +106,9 @@ const el = (id) => document.getElementById(id);
       if (!root) return;
       const existingEdges = root.querySelector(".graph-edges");
       if (existingEdges) existingEdges.remove();
-      const existingGroup = root.querySelector(".graph-group");
-      if (existingGroup) existingGroup.remove();
+      root.querySelectorAll(".graph-group").forEach((g) => g.remove());
       drawGraphEdges(root, activeGraph.edges || []);
-      drawRetrievalGroup(root);
+      drawGraphGroups(root);
     }
 
     const STREAM_TO_NODE = {
@@ -108,6 +120,7 @@ const el = (id) => document.getElementById(id);
       "input", "load_session", "preflight", "turn_analysis", "rewrite", "route",
       "entity_ingest", "kg_search", "dense_search", "sparse_search", "fusion",
       "rerank", "generate", "persist", "total",
+      "diagnostic_general_triage", "diagnostic_rank", "diagnostic_clarification", "clarification_parse",
     ];
 
     const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -226,13 +239,14 @@ const el = (id) => document.getElementById(id);
     }
 
     const RETRIEVAL_GROUP_IDS = ["dense_search", "sparse_search", "fusion", "rerank"];
+    const DIAGNOSTIC_GROUP_IDS = ["diagnostic_general_triage", "diagnostic_rank", "diagnostic_clarification", "clarification_parse"];
 
-    function drawRetrievalGroup(root) {
-      // Bounds the retrieval cluster; derived from GRAPH_LAYOUT so it tracks layout changes.
+    function drawGroupBox(root, ids, label, className) {
+      // Bounds a cluster; derived from GRAPH_LAYOUT so it tracks layout changes.
       const PAD = 24;
       const NODE_W = 136;
       const NODE_H = 80;
-      const coords = RETRIEVAL_GROUP_IDS.map((id) => GRAPH_LAYOUT[id]);
+      const coords = ids.map((id) => GRAPH_LAYOUT[id]);
       if (coords.some((c) => !c)) return;
       const xs = coords.map((c) => c[0]);
       const ys = coords.map((c) => c[1]);
@@ -245,7 +259,7 @@ const el = (id) => document.getElementById(id);
       const width = maxX + NODE_W + PAD - left;
       const height = maxY + NODE_H + PAD - top;
       const box = document.createElement("div");
-      box.className = "graph-group";
+      box.className = className;
       box.setAttribute("aria-hidden", "true");
       box.style.left = `${left}px`;
       box.style.top = `${top}px`;
@@ -253,9 +267,14 @@ const el = (id) => document.getElementById(id);
       box.style.height = `${height}px`;
       const tag = document.createElement("span");
       tag.className = "graph-group-label";
-      tag.textContent = "retrieval";
+      tag.textContent = label;
       box.appendChild(tag);
       root.prepend(box);
+    }
+
+    function drawGraphGroups(root) {
+      drawGroupBox(root, RETRIEVAL_GROUP_IDS, "retrieval", "graph-group");
+      drawGroupBox(root, DIAGNOSTIC_GROUP_IDS, "diagnostic", "graph-group graph-group-diagnostic");
     }
 
     function renderWorkflowGraph(trace) {
@@ -285,7 +304,7 @@ const el = (id) => document.getElementById(id);
         : nodes.slice(1).map((node, index) => [String(nodes[index].id), String(node.id)]);
       activeGraph.edges = edges;
       drawGraphEdges(root, edges);
-      drawRetrievalGroup(root);
+      drawGraphGroups(root);
       if (nodes.length) selectGraphNode(String(nodes[0].id));
       resetView();
     }
@@ -373,7 +392,7 @@ const el = (id) => document.getElementById(id);
       });
       activeGraph.edges = WORKFLOW_EDGES;
       drawGraphEdges(root, WORKFLOW_EDGES);
-      drawRetrievalGroup(root);
+      drawGraphGroups(root);
       if (SKELETON_NODE_IDS.length) selectGraphNode(SKELETON_NODE_IDS[0]);
       resetView();
     }

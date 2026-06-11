@@ -97,7 +97,7 @@
     }
     .graph-panel { overflow: hidden; min-height: 580px; position: relative; cursor: grab; touch-action: none; }
     .graph-panel.grabbing { cursor: grabbing; }
-    #workflow-graph { position: relative; width: 1960px; height: 560px; transform-origin: 0 0; will-change: transform; }
+    #workflow-graph { position: relative; width: 1960px; height: 700px; transform-origin: 0 0; will-change: transform; }
     .graph-node { touch-action: none; }
     .graph-controls { position: absolute; top: 12px; right: 12px; display: flex; gap: 6px; align-items: center; z-index: 5; }
     .graph-zoom-btn {
@@ -141,6 +141,13 @@
       border-radius: 16px;
       pointer-events: none;
       z-index: 0;
+    }
+    .graph-group-diagnostic {
+      border-color: rgba(46, 160, 67, .4);
+      background: rgba(46, 160, 67, .06);
+    }
+    .graph-group-diagnostic .graph-group-label {
+      color: #7ee2a0;
     }
     .graph-group-label {
       position: absolute;
