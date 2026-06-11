@@ -761,6 +761,18 @@ const el = (id) => document.getElementById(id);
 
     el("run-button").addEventListener("click", () => { runStream(); });
 
+    el("new-session-button").addEventListener("click", () => {
+      const rand = (window.crypto && window.crypto.randomUUID)
+        ? window.crypto.randomUUID().slice(0, 8)
+        : Math.floor(Math.random() * 1e9).toString(36);
+      const sid = `debug-${rand}`;
+      el("session-id").value = sid;
+      el("filter-session-id").value = sid;
+      el("run-status").textContent = `New session: ${sid}`;
+      const strip = el("consultation-strip");
+      if (strip) strip.textContent = "";
+    });
+
     el("list-button").addEventListener("click", async () => {
       const params = new URLSearchParams();
       if (el("filter-session-id").value) params.set("session_id", el("filter-session-id").value);
