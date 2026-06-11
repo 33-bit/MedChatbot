@@ -970,6 +970,7 @@ def _answer_inner(
     if not question:
         return "Bạn hãy đặt câu hỏi cụ thể nhé."
     mode = normalize_mode(mode)
+    _emit_node_event("input", "ok", 0.0)
 
     stage_start = time.perf_counter()
     try:
@@ -1060,6 +1061,7 @@ def _answer_inner(
                 intent=intent,
                 mode=mode,
                 direct_answer=direct_answer_for_log)
+    _emit_node_event("rewrite", "ok", None)
     if guard["verdict"] != "allow":
         stage_start = time.perf_counter()
         try:
@@ -1139,6 +1141,7 @@ def _answer_inner(
         )
         return reply
 
+    _emit_node_event("route", "ok", None)
     if label in ("diagnostic", "informational", "clarification_answer"):
         stage_start = time.perf_counter()
         try:

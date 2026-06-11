@@ -1964,6 +1964,55 @@ def test_answer_with_meta_records_structured_graph_trace(monkeypatch):
         assert field in meta
 
 
+def test_answer_with_meta_streams_input_rewrite_route_node_events(monkeypatch):
+    import queue as _queue
+
+    _patch_preflight_ok(monkeypatch)
+    _patch_persistence_noop(monkeypatch)
+    analysis = _analysis(rewritten="Ho kéo dài")
+    monkeypatch.setattr(pipeline, "analyze_turn", lambda *args, **kwargs: analysis)
+    monkeypatch.setattr(pipeline, "kg_search", lambda question: KGContext())
+    monkeypatch.setattr(pipeline, "format_kg_context", lambda kg_result: "KG context")
+    hits = [
+        Hit(
+            text="c", score=1.0, source_type="disease",
+            source_name="N", heading_path="", source_slug="n",
+        )
+    ]
+    monkeypatch.setattr(
+        pipeline,
+        "hybrid_search_with_debug",
+        lambda question, top_k, on_stage=None: (hits, {"query": question}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "generate",
+        lambda question, actual_hits, kg_text="", patient=None, return_meta=False: (
+            ("answer", {}) if return_meta else "answer"
+        ),
+    )
+
+    sink: _queue.Queue = _queue.Queue()
+    pipeline._install_event_sink(sink)
+    try:
+        reply, meta = pipeline.answer_with_meta("Tôi bị ho", session_id="s")
+    finally:
+        pipeline._install_event_sink(None)
+
+    assert reply == "answer"
+    streamed_ids = []
+    while not sink.empty():
+        streamed_ids.append(sink.get_nowait()["id"])
+
+    # The three nodes that previously never lit up live.
+    assert {"input", "rewrite", "route"}.issubset(set(streamed_ids))
+    # Live emits must not corrupt the recorded timings / final render.
+    timing_stages = [entry["stage"] for entry in meta["timings"]]
+    assert "input" not in timing_stages
+    assert "rewrite" not in timing_stages
+
+
 def test_answer_with_meta_records_regex_guard_persistence(monkeypatch):
     _patch_persistence_noop(monkeypatch)
     monkeypatch.setattr(pipeline, "check_rate_limit", lambda session_id: True)
