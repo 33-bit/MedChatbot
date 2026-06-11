@@ -597,6 +597,71 @@ const el = (id) => document.getElementById(id);
       renderCollection("usage", meta.usage, (item) => JSON.stringify(item));
       el("answer").textContent = safeTrace.answer || "";
       el("raw-json").textContent = JSON.stringify({ trace: safeTrace, warning }, null, 2);
+      renderConsultationStrip(safeTrace);
+    }
+
+    async function renderConsultationStrip(currentTrace) {
+      const strip = el("consultation-strip");
+      try {
+        const sid = currentTrace && currentTrace.session_id;
+        if (!sid) {
+          strip.textContent = "";
+          return;
+        }
+        const params = new URLSearchParams();
+        params.set("session_id", sid);
+        const response = await fetch(`/debug/chat-route/traces?${params.toString()}`, { headers: apiHeaders() });
+        if (!response.ok) {
+          strip.textContent = "";
+          return;
+        }
+        const data = await response.json();
+        const turns = asArray(data && data.traces).filter(isObject).slice().reverse();
+        strip.textContent = "";
+        if (!turns.length) {
+          return;
+        }
+        turns.forEach((turn, index) => {
+          if (index > 0) {
+            const connector = document.createElement("span");
+            connector.className = "consultation-connector";
+            connector.setAttribute("aria-hidden", "true");
+            connector.textContent = "→";
+            strip.appendChild(connector);
+          }
+          const step = document.createElement("button");
+          step.type = "button";
+          step.className = "consultation-step";
+          const isCurrent = currentTrace && turn.trace_id === currentTrace.trace_id;
+          if (isCurrent) {
+            step.classList.add("current");
+            step.setAttribute("aria-current", "step");
+          }
+          const num = document.createElement("span");
+          num.className = "consultation-step-num";
+          num.textContent = `${index + 1}`;
+          const label = document.createElement("span");
+          label.className = "consultation-step-label";
+          const tag = turn.route || turn.mode || "turn";
+          const q = typeof turn.question === "string" ? turn.question : "";
+          const qShort = q.length > 24 ? q.slice(0, 24) + "…" : q;
+          label.textContent = qShort ? `${tag} · ${qShort}` : tag;
+          const lat = document.createElement("span");
+          lat.className = "consultation-step-latency";
+          lat.textContent = `${turn.latency_ms_total ?? "n/a"}ms`;
+          step.append(num, label, lat);
+          step.title = `Turn ${index + 1} · ${tag} · ${turn.created_at ?? "n/a"}\n${q}`;
+          if (!isCurrent) {
+            step.addEventListener("click", () => {
+              el("filter-session-id").value = sid;
+              loadTrace(turn.trace_id);
+            });
+          }
+          strip.appendChild(step);
+        });
+      } catch (err) {
+        strip.textContent = "";
+      }
     }
 
     async function loadTrace(traceId) {

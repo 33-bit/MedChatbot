@@ -97,7 +97,59 @@
     }
     .graph-panel { overflow: hidden; min-height: 580px; position: relative; cursor: grab; touch-action: none; }
     .graph-panel.grabbing { cursor: grabbing; }
-    #workflow-graph { position: relative; width: 1960px; height: 700px; transform-origin: 0 0; will-change: transform; }
+    #workflow-graph { position: relative; width: 1960px; height: 710px; transform-origin: 0 0; will-change: transform; }
+    .consultation-strip {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin: 10px 0 4px;
+      padding: 8px 10px;
+      background: var(--inset);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      overflow-x: auto;
+    }
+    .consultation-strip:empty { display: none; }
+    .consultation-step {
+      width: auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      margin-bottom: 0;
+      padding: 5px 10px;
+      border-radius: 8px;
+      background: var(--surface-2);
+      border: 1px solid var(--border-strong);
+      box-shadow: none;
+      color: var(--text);
+      font-weight: 600;
+      font-size: 12px;
+      max-width: 240px;
+    }
+    .consultation-step:hover { border-color: var(--accent); filter: none; }
+    .consultation-step.current {
+      background: var(--accent-soft);
+      border-color: var(--accent);
+      color: #a9c7ff;
+      cursor: default;
+    }
+    .consultation-step-num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: var(--slate);
+      color: var(--text);
+      font-size: 11px;
+      flex: 0 0 auto;
+    }
+    .consultation-step.current .consultation-step-num { background: var(--accent); color: #fff; }
+    .consultation-step-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .consultation-step-latency { color: var(--muted); font-weight: 500; flex: 0 0 auto; }
+    .consultation-connector { color: var(--muted); font-size: 14px; flex: 0 0 auto; }
     .graph-node { touch-action: none; }
     .graph-controls { position: absolute; top: 12px; right: 12px; display: flex; gap: 6px; align-items: center; z-index: 5; }
     .graph-zoom-btn {
