@@ -74,6 +74,15 @@ const el = (id) => document.getElementById(id);
       root.style.transform = `translate(${viewState.x}px, ${viewState.y}px) scale(${viewState.scale})`;
     }
 
+    function zoomByFactor(factor, anchorX, anchorY) {
+      const newScale = clamp(viewState.scale * factor, 0.3, 2.0);
+      const k = newScale / viewState.scale;
+      viewState.x = anchorX - k * (anchorX - viewState.x);
+      viewState.y = anchorY - k * (anchorY - viewState.y);
+      viewState.scale = newScale;
+      applyViewTransform();
+    }
+
     function resetView() {
       viewState = { x: 16, y: 16, scale: 0.75 };
       applyViewTransform();
@@ -690,7 +699,28 @@ const el = (id) => document.getElementById(id);
       resetButton.textContent = "Reset view";
       resetButton.addEventListener("pointerdown", (event) => event.stopPropagation());
       resetButton.addEventListener("click", () => resetView());
-      panel.appendChild(resetButton);
+
+      const controls = document.createElement("div");
+      controls.className = "graph-controls";
+      const zoomOut = document.createElement("button");
+      zoomOut.type = "button";
+      zoomOut.className = "graph-zoom-btn";
+      zoomOut.textContent = "−"; // minus sign
+      zoomOut.title = "Zoom out";
+      zoomOut.setAttribute("aria-label", "Zoom out");
+      const zoomIn = document.createElement("button");
+      zoomIn.type = "button";
+      zoomIn.className = "graph-zoom-btn";
+      zoomIn.textContent = "+";
+      zoomIn.title = "Zoom in";
+      zoomIn.setAttribute("aria-label", "Zoom in");
+      for (const btn of [zoomOut, zoomIn, resetButton]) {
+        btn.addEventListener("pointerdown", (event) => event.stopPropagation());
+      }
+      zoomOut.addEventListener("click", () => zoomByFactor(0.8, panel.clientWidth / 2, panel.clientHeight / 2));
+      zoomIn.addEventListener("click", () => zoomByFactor(1.25, panel.clientWidth / 2, panel.clientHeight / 2));
+      controls.append(zoomOut, zoomIn, resetButton);
+      panel.appendChild(controls);
 
       let panning = false;
       let startX = 0;
@@ -699,7 +729,7 @@ const el = (id) => document.getElementById(id);
       let startPanY = 0;
       panel.addEventListener("pointerdown", (event) => {
         if (event.button !== 0) return;
-        if (event.target.closest(".graph-node, .graph-reset")) return;
+        if (event.target.closest(".graph-node, .graph-controls")) return;
         panning = true;
         startX = event.clientX;
         startY = event.clientY;
@@ -727,13 +757,7 @@ const el = (id) => document.getElementById(id);
         const rect = panel.getBoundingClientRect();
         const cx = event.clientX - rect.left;
         const cy = event.clientY - rect.top;
-        const factor = event.deltaY < 0 ? 1.1 : 0.9;
-        const newScale = clamp(viewState.scale * factor, 0.3, 2.0);
-        const k = newScale / viewState.scale;
-        viewState.x = cx - k * (cx - viewState.x);
-        viewState.y = cy - k * (cy - viewState.y);
-        viewState.scale = newScale;
-        applyViewTransform();
+        zoomByFactor(event.deltaY < 0 ? 1.1 : 0.9, cx, cy);
       }, { passive: false });
     }
 
