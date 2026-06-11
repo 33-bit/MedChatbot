@@ -1915,6 +1915,10 @@ def test_answer_with_meta_records_structured_graph_trace(monkeypatch):
         "turn_analysis",
         "rewrite",
         "route",
+        "diagnostic_general_triage",
+        "diagnostic_rank",
+        "diagnostic_clarification",
+        "clarification_parse",
         "entity_ingest",
         "kg_search",
         "dense_search",
@@ -1930,7 +1934,23 @@ def test_answer_with_meta_records_structured_graph_trace(monkeypatch):
         set(node) == {"id", "label", "status", "ms", "input", "output", "raw"}
         for node in meta["graph_nodes"]
     )
-    assert all(node["status"] == "success" for node in meta["graph_nodes"])
+    # Diagnostic nodes never ran on this informational turn -> skipped (grey).
+    diagnostic_ids = {
+        "diagnostic_general_triage",
+        "diagnostic_rank",
+        "diagnostic_clarification",
+        "clarification_parse",
+    }
+    assert all(
+        node["status"] == "skipped"
+        for node in meta["graph_nodes"]
+        if node["id"] in diagnostic_ids
+    )
+    assert all(
+        node["status"] == "success"
+        for node in meta["graph_nodes"]
+        if node["id"] not in diagnostic_ids
+    )
     assert nodes["input"]["input"] == {
         "question": "Tôi bị ho",
         "session_id": "s",
@@ -2011,6 +2031,145 @@ def test_answer_with_meta_streams_input_rewrite_route_node_events(monkeypatch):
     timing_stages = [entry["stage"] for entry in meta["timings"]]
     assert "input" not in timing_stages
     assert "rewrite" not in timing_stages
+
+
+def test_diagnostic_turn_surfaces_diagnostic_nodes_and_snapshot(monkeypatch):
+    import queue as _queue
+
+    monkeypatch.setattr(pipeline, "symptom_catalog", lambda: {
+        "symptom:ABDOMINAL_PAIN": {"name_vi": "Đau bụng"},
+        "symptom:FEVER": {"name_vi": "Sốt"},
+    })
+    monkeypatch.setattr(pipeline, "rank_candidates", lambda symptom_ids: [
+        {"disease_id": "flu", "name": "Cúm", "overlap": 1},
+        {"disease_id": "covid", "name": "COVID-19", "overlap": 1},
+        {"disease_id": "cold", "name": "Cảm lạnh", "overlap": 1},
+    ])
+    monkeypatch.setattr(pipeline, "should_ask_clarification", lambda candidates: True)
+    monkeypatch.setattr(pipeline, "discriminative_symptoms", lambda *a, **k: ["symptom:FEVER"])
+    monkeypatch.setattr(pipeline, "build_clarification", lambda symptoms: "Bạn có bị Sốt không?")
+
+    session = PatientSession(
+        session_id="s",
+        symptoms=[{"symptom_id": "symptom:ABDOMINAL_PAIN", "name": "Đau bụng"}],
+        answered_questions=[pipeline.GENERAL_TRIAGE_MARKER],
+    )
+
+    meta = {"trace_id": "t", "_collect_graph": True}
+    sink: _queue.Queue = _queue.Queue()
+    pipeline._META_LOCAL.current = meta
+    pipeline._install_event_sink(sink)
+    try:
+        reply = pipeline._handle_diagnostic(session, "tôi bị đau bụng", trace_id="t")
+    finally:
+        pipeline._install_event_sink(None)
+        pipeline._META_LOCAL.current = None
+
+    assert reply == "Bạn có bị Sốt không?"
+
+    # Snapshot reflects post-rank / post-ask session state.
+    snap = meta["_graph_diagnostic"]
+    assert snap["candidate_diseases"][0]["disease_id"] == "flu"
+    assert "symptom:FEVER" in snap["answered_questions"]
+
+    # Diagnostic stages stream live to the sink.
+    streamed = []
+    while not sink.empty():
+        streamed.append(sink.get_nowait()["id"])
+    assert "diagnostic_rank" in streamed
+    assert "diagnostic_clarification" in streamed
+
+    nodes = {
+        node["id"]: node
+        for node in pipeline._build_graph_nodes(
+            meta, "tôi bị đau bụng", "s", "auto", reply
+        )
+    }
+    assert {
+        "diagnostic_general_triage",
+        "diagnostic_rank",
+        "diagnostic_clarification",
+        "clarification_parse",
+    }.issubset(nodes)
+    assert nodes["diagnostic_rank"]["status"] == "success"
+    assert nodes["diagnostic_clarification"]["status"] == "success"
+    # Stages that never ran on this turn stay grey.
+    assert nodes["diagnostic_general_triage"]["status"] == "skipped"
+    assert nodes["clarification_parse"]["status"] == "skipped"
+    assert nodes["diagnostic_rank"]["output"] == {
+        "candidate_diseases": snap["candidate_diseases"]
+    }
+    assert nodes["diagnostic_clarification"]["output"]["asked"] == "symptom:FEVER"
+
+
+def test_clarification_answer_turn_lights_parse_node(monkeypatch):
+    import queue as _queue
+
+    monkeypatch.setattr(pipeline, "symptom_catalog", lambda: {"symptom:FEVER": {"name_vi": "Sốt"}})
+    monkeypatch.setattr(pipeline, "_handle_diagnostic", lambda *a, **k: "next step")
+
+    session = PatientSession(
+        session_id="s",
+        symptoms=[{"symptom_id": "symptom:COUGH", "name": "Ho"}],
+        answered_questions=["symptom:FEVER"],
+    )
+
+    meta = {"trace_id": "t", "_collect_graph": True}
+    sink: _queue.Queue = _queue.Queue()
+    pipeline._META_LOCAL.current = meta
+    pipeline._install_event_sink(sink)
+    try:
+        reply = pipeline._handle_clarification_answer(session, "Có", trace_id="t")
+    finally:
+        pipeline._install_event_sink(None)
+        pipeline._META_LOCAL.current = None
+
+    assert reply == "next step"
+
+    snap = meta["_graph_diagnostic"]
+    assert snap["events"]["parsed_answers"] == [
+        {"symptom_id": "symptom:FEVER", "present": "yes"}
+    ]
+    assert snap["events"]["last_asked"] == "symptom:FEVER"
+
+    streamed = []
+    while not sink.empty():
+        streamed.append(sink.get_nowait()["id"])
+    assert "clarification_parse" in streamed
+
+    nodes = {
+        node["id"]: node
+        for node in pipeline._build_graph_nodes(meta, "Có", "s", "auto", reply)
+    }
+    assert nodes["clarification_parse"]["status"] == "success"
+    assert nodes["clarification_parse"]["output"]["parsed_answers"] == [
+        {"symptom_id": "symptom:FEVER", "present": "yes"}
+    ]
+
+
+def test_diagnostic_snapshot_is_noop_without_collect_graph(monkeypatch):
+    monkeypatch.setattr(pipeline, "symptom_catalog", lambda: {
+        "symptom:ABDOMINAL_PAIN": {"name_vi": "Đau bụng"},
+        "symptom:FEVER": {"name_vi": "Sốt"},
+    })
+    monkeypatch.setattr(pipeline, "rank_candidates", lambda symptom_ids: [
+        {"disease_id": "flu", "name": "Cúm", "overlap": 1},
+    ])
+    monkeypatch.setattr(pipeline, "should_ask_clarification", lambda candidates: True)
+    monkeypatch.setattr(pipeline, "discriminative_symptoms", lambda *a, **k: ["symptom:FEVER"])
+    monkeypatch.setattr(pipeline, "build_clarification", lambda symptoms: "Bạn có bị Sốt không?")
+
+    session = PatientSession(
+        session_id="s",
+        symptoms=[{"symptom_id": "symptom:ABDOMINAL_PAIN", "name": "Đau bụng"}],
+        answered_questions=[pipeline.GENERAL_TRIAGE_MARKER],
+    )
+
+    # No meta installed -> _meta() is None -> snapshot helper must be a no-op
+    # and must not raise or alter the reply.
+    assert pipeline._meta() is None
+    reply = pipeline._handle_diagnostic(session, "tôi bị đau bụng", trace_id="t")
+    assert reply == "Bạn có bị Sốt không?"
 
 
 def test_answer_with_meta_records_regex_guard_persistence(monkeypatch):

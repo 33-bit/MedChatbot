@@ -203,6 +203,28 @@ def _record_mode_decision(
         meta["retry_question"] = question
 
 
+def _record_diagnostic_snapshot(session, *, stage=None, extra=None) -> None:
+    """Snapshot current diagnostic session state into meta for the graph inspector.
+
+    No-op unless a graph is being collected, so normal answer() calls and channel
+    turns are unaffected. Only reads session state — never mutates it.
+    """
+    meta = _meta()
+    if meta is None or not meta.get("_collect_graph"):
+        return
+    snap = meta.setdefault("_graph_diagnostic", {})
+    snap["answered_questions"] = list(session.answered_questions)
+    snap["clarification_queue"] = list(session.clarification_queue)
+    snap["symptoms"] = [dict(s) for s in session.symptoms]
+    snap["candidate_diseases"] = [dict(c) for c in session.candidate_diseases[:8]]
+    snap["clarification_plan_started"] = session.clarification_plan_started
+    snap["clarification_parse_failures"] = session.clarification_parse_failures
+    if stage:
+        snap.setdefault("stages", []).append(stage)
+    if extra:
+        snap.setdefault("events", {}).update(extra)
+
+
 def _log_timing(trace_id: str, stage: str, start: float, **fields) -> None:
     ms = elapsed_ms(start)
     _record_timing(stage, ms, fields)
@@ -498,6 +520,11 @@ def _ask_next_queued_clarification(
                 queued=len(session.clarification_queue),
                 kind="detail",
             )
+            _record_diagnostic_snapshot(
+                session,
+                stage="diagnostic_clarification",
+                extra={"asked": next_symptom},
+            )
             return detail_question
         if next_symptom in session.answered_questions:
             continue
@@ -509,6 +536,11 @@ def _ask_next_queued_clarification(
             asked=1,
             queued=len(session.clarification_queue),
             kind="presence",
+        )
+        _record_diagnostic_snapshot(
+            session,
+            stage="diagnostic_clarification",
+            extra={"asked": next_symptom},
         )
         return build_clarification([next_symptom])
     return None
@@ -638,6 +670,7 @@ def _handle_diagnostic(
     session.candidate_diseases = candidates
     _log_timing(trace_id, "diagnostic_rank", stage_start,
                 symptoms=len(symptom_ids), candidates=len(candidates))
+    _record_diagnostic_snapshot(session, stage="diagnostic_rank")
 
     stage_start = time.perf_counter()
     if (
@@ -655,6 +688,7 @@ def _handle_diagnostic(
                 return queued_reply
     _log_timing(trace_id, "diagnostic_clarification", stage_start,
                 asked=0, force_answer=force_answer)
+    _record_diagnostic_snapshot(session, stage="diagnostic_clarification")
 
     if force_answer or session.clarification_plan_started:
         prompt, retrieval_query = direct_diagnostic_prompt(session, question)
@@ -737,6 +771,11 @@ def _handle_clarification_answer(
         session.upsert_symptom(entry)
         _prepend_detail_questions(session, sid, catalog)
 
+    _record_diagnostic_snapshot(
+        session,
+        stage="clarification_parse",
+        extra={"parsed_answers": parsed_answers, "last_asked": last_question},
+    )
     return _handle_diagnostic(session, user_answer, trace_id, force_answer=force_answer)
 
 
@@ -1253,6 +1292,7 @@ def _build_graph_nodes(
     }
     analysis = meta.pop("_graph_turn_analysis", None)
     route_data = meta.pop("_graph_route", None)
+    diagnostic_snap = meta.pop("_graph_diagnostic", None)
     error_stage = meta.pop("_graph_error_stage", None)
     error_stages = set()
     raw_error_stages = meta.pop("_graph_error_stages", [])
@@ -1364,6 +1404,44 @@ def _build_graph_nodes(
             "suggest_mode": meta.get("suggest_mode"),
         },
         raw_data=route_data,
+    )
+    add_node(
+        "diagnostic_general_triage", "Triage",
+        present="diagnostic_general_triage" in timings,
+        timing_stage="diagnostic_general_triage",
+        input_data={"question": question},
+        output_data=(diagnostic_snap or {}).get("events"),
+        raw_data=timings.get("diagnostic_general_triage"),
+    )
+    add_node(
+        "diagnostic_rank", "Diagnostic rank",
+        present="diagnostic_rank" in timings,
+        timing_stage="diagnostic_rank",
+        input_data={"symptoms": (diagnostic_snap or {}).get("symptoms")},
+        output_data={"candidate_diseases": (diagnostic_snap or {}).get("candidate_diseases")},
+        raw_data=timings.get("diagnostic_rank"),
+    )
+    add_node(
+        "diagnostic_clarification", "Clarification",
+        present="diagnostic_clarification" in timings,
+        timing_stage="diagnostic_clarification",
+        input_data={"clarification_queue": (diagnostic_snap or {}).get("clarification_queue")},
+        output_data={
+            "answered_questions": (diagnostic_snap or {}).get("answered_questions"),
+            "asked": (diagnostic_snap or {}).get("events", {}).get("asked"),
+        },
+        raw_data=timings.get("diagnostic_clarification"),
+    )
+    add_node(
+        "clarification_parse", "Parse answer",
+        present="clarification_parse" in timings,
+        timing_stage="clarification_parse",
+        input_data={"last_asked": (diagnostic_snap or {}).get("events", {}).get("last_asked")},
+        output_data={
+            "parsed_answers": (diagnostic_snap or {}).get("events", {}).get("parsed_answers"),
+            "symptoms": (diagnostic_snap or {}).get("symptoms"),
+        },
+        raw_data=timings.get("clarification_parse"),
     )
     add_node(
         "entity_ingest", "Entity ingest",
