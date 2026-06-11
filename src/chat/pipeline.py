@@ -203,7 +203,7 @@ def _record_mode_decision(
         meta["retry_question"] = question
 
 
-def _record_diagnostic_snapshot(session, *, stage=None, extra=None) -> None:
+def _record_diagnostic_snapshot(session, *, extra=None) -> None:
     """Snapshot current diagnostic session state into meta for the graph inspector.
 
     No-op unless a graph is being collected, so normal answer() calls and channel
@@ -219,8 +219,6 @@ def _record_diagnostic_snapshot(session, *, stage=None, extra=None) -> None:
     snap["candidate_diseases"] = [dict(c) for c in session.candidate_diseases[:8]]
     snap["clarification_plan_started"] = session.clarification_plan_started
     snap["clarification_parse_failures"] = session.clarification_parse_failures
-    if stage:
-        snap.setdefault("stages", []).append(stage)
     if extra:
         snap.setdefault("events", {}).update(extra)
 
@@ -522,7 +520,6 @@ def _ask_next_queued_clarification(
             )
             _record_diagnostic_snapshot(
                 session,
-                stage="diagnostic_clarification",
                 extra={"asked": next_symptom},
             )
             return detail_question
@@ -539,7 +536,6 @@ def _ask_next_queued_clarification(
         )
         _record_diagnostic_snapshot(
             session,
-            stage="diagnostic_clarification",
             extra={"asked": next_symptom},
         )
         return build_clarification([next_symptom])
@@ -670,7 +666,7 @@ def _handle_diagnostic(
     session.candidate_diseases = candidates
     _log_timing(trace_id, "diagnostic_rank", stage_start,
                 symptoms=len(symptom_ids), candidates=len(candidates))
-    _record_diagnostic_snapshot(session, stage="diagnostic_rank")
+    _record_diagnostic_snapshot(session)
 
     stage_start = time.perf_counter()
     if (
@@ -688,7 +684,7 @@ def _handle_diagnostic(
                 return queued_reply
     _log_timing(trace_id, "diagnostic_clarification", stage_start,
                 asked=0, force_answer=force_answer)
-    _record_diagnostic_snapshot(session, stage="diagnostic_clarification")
+    _record_diagnostic_snapshot(session)
 
     if force_answer or session.clarification_plan_started:
         prompt, retrieval_query = direct_diagnostic_prompt(session, question)
@@ -773,7 +769,6 @@ def _handle_clarification_answer(
 
     _record_diagnostic_snapshot(
         session,
-        stage="clarification_parse",
         extra={"parsed_answers": parsed_answers, "last_asked": last_question},
     )
     return _handle_diagnostic(session, user_answer, trace_id, force_answer=force_answer)
@@ -1429,6 +1424,8 @@ def _build_graph_nodes(
         output_data={
             "answered_questions": (diagnostic_snap or {}).get("answered_questions"),
             "asked": (diagnostic_snap or {}).get("events", {}).get("asked"),
+            "clarification_plan_started": (diagnostic_snap or {}).get("clarification_plan_started"),
+            "clarification_parse_failures": (diagnostic_snap or {}).get("clarification_parse_failures"),
         },
         raw_data=timings.get("diagnostic_clarification"),
     )

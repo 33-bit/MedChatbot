@@ -2100,6 +2100,10 @@ def test_diagnostic_turn_surfaces_diagnostic_nodes_and_snapshot(monkeypatch):
         "candidate_diseases": snap["candidate_diseases"]
     }
     assert nodes["diagnostic_clarification"]["output"]["asked"] == "symptom:FEVER"
+    assert (
+        nodes["diagnostic_clarification"]["output"]["clarification_plan_started"]
+        == snap["clarification_plan_started"]
+    )
 
 
 def test_clarification_answer_turn_lights_parse_node(monkeypatch):
