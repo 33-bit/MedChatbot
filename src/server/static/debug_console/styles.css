@@ -97,7 +97,7 @@
     }
     .graph-panel { overflow: hidden; min-height: 580px; position: relative; cursor: grab; touch-action: none; }
     .graph-panel.grabbing { cursor: grabbing; }
-    #workflow-graph { position: relative; width: 1960px; height: 710px; transform-origin: 0 0; will-change: transform; }
+    #workflow-graph { position: relative; width: 3000px; height: 800px; transform-origin: 0 0; will-change: transform; }
     .consultation-strip {
       display: flex;
       flex-wrap: wrap;
@@ -218,7 +218,7 @@
     .graph-node {
       position: absolute;
       width: 136px;
-      min-height: 76px;
+      height: 92px;
       margin: 0;
       padding: 0;
       text-align: left;

@@ -4,26 +4,26 @@ const el = (id) => document.getElementById(id);
       return apiKey ? { "Content-Type": "application/json", "X-API-Key": apiKey } : { "Content-Type": "application/json" };
     };
     const GRAPH_LAYOUT = {
-      input: [20, 240],
-      load_session: [180, 240],
-      preflight: [340, 240],
-      turn_analysis: [500, 240],
-      rewrite: [660, 240],
-      route: [820, 240],
-      entity_ingest: [980, 40],
-      kg_search: [1140, 40],
-      dense_search: [980, 220],
-      sparse_search: [980, 400],
-      fusion: [1140, 310],
-      rerank: [1300, 310],
-      generate: [1460, 220],
-      generation: [1460, 220],
-      persist: [1620, 220],
-      total: [1780, 220],
-      diagnostic_general_triage: [980, 600],
-      diagnostic_rank: [1140, 600],
-      diagnostic_clarification: [1300, 600],
-      clarification_parse: [1460, 600],
+      input: [40, 344],
+      load_session: [260, 344],
+      preflight: [480, 344],
+      turn_analysis: [700, 344],
+      rewrite: [920, 344],
+      route: [1140, 344],
+      entity_ingest: [1500, 64],
+      kg_search: [1720, 64],
+      dense_search: [1500, 204],
+      sparse_search: [1500, 484],
+      fusion: [1720, 344],
+      rerank: [1940, 344],
+      generate: [2380, 344],
+      generation: [2380, 344],
+      persist: [2600, 344],
+      total: [2820, 344],
+      diagnostic_general_triage: [1500, 650],
+      diagnostic_rank: [1720, 650],
+      diagnostic_clarification: [1940, 650],
+      clarification_parse: [2160, 650],
     };
     const WORKFLOW_EDGES = [
       ["input", "load_session"],
@@ -78,7 +78,7 @@ const el = (id) => document.getElementById(id);
 
     let activeGraph = { nodes: new Map(), nodeElements: new Map(), meta: {}, trace: null, edges: [] };
 
-    let viewState = { x: 16, y: 16, scale: 0.75 };
+    let viewState = { x: 16, y: 16, scale: 0.55 };
     const clamp = (value, lo, hi) => Math.min(hi, Math.max(lo, value));
 
     function applyViewTransform() {
@@ -97,7 +97,7 @@ const el = (id) => document.getElementById(id);
     }
 
     function resetView() {
-      viewState = { x: 16, y: 16, scale: 0.75 };
+      viewState = { x: 16, y: 16, scale: 0.55 };
       applyViewTransform();
     }
 
@@ -228,10 +228,11 @@ const el = (id) => document.getElementById(id);
         const y1 = from.offsetTop + from.offsetHeight / 2;
         const x2 = to.offsetLeft;
         const y2 = to.offsetTop + to.offsetHeight / 2;
-        const midpoint = x1 + Math.max(24, (x2 - x1) / 2);
+        const dx = x2 - x1;
+        const cp = Math.max(70, Math.abs(dx) * 0.5);
         const path = svgElement("path");
         path.classList.add("graph-edge");
-        path.setAttribute("d", `M ${x1} ${y1} C ${midpoint} ${y1}, ${midpoint} ${y2}, ${x2} ${y2}`);
+        path.setAttribute("d", `M ${x1} ${y1} C ${x1 + cp} ${y1}, ${x2 - cp} ${y2}, ${x2} ${y2}`);
         path.setAttribute("marker-end", "url(#graph-arrow)");
         svg.appendChild(path);
       }
@@ -245,7 +246,7 @@ const el = (id) => document.getElementById(id);
       // Bounds a cluster; derived from GRAPH_LAYOUT so it tracks layout changes.
       const PAD = 24;
       const NODE_W = 136;
-      const NODE_H = 80;
+      const NODE_H = 92;
       const coords = ids.map((id) => GRAPH_LAYOUT[id]);
       if (coords.some((c) => !c)) return;
       const xs = coords.map((c) => c[0]);
