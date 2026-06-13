@@ -319,9 +319,9 @@ Câu trả lời của chatbot:
 {answer}
 
 Đánh giá:
-- "correct": câu trả lời chatbot có cùng ý chính, không thiếu/sai sự kiện quan trọng, không thừa thông tin sai không? Diễn đạt khác từ ngữ là chấp nhận.
-- "score": 1.0 đúng đầy đủ, 0.5 đúng một phần (thiếu hoặc sai chi tiết phụ), 0.0 sai/thiếu trọng tâm.
-- "missing_or_wrong": tối đa 3 cụm thông tin còn thiếu hoặc sai.
+- "correct": câu trả lời chatbot có chứa ĐẦY ĐỦ các ý chính của câu trả lời chuẩn và KHÔNG mâu thuẫn với nó không? Thông tin ĐÚNG và LIÊN QUAN nằm NGOÀI câu trả lời chuẩn KHÔNG bị tính là lỗi.
+- "score": 1.0 nếu có đủ ý chính và không mâu thuẫn (kể cả khi dài/chi tiết hơn câu chuẩn), 0.5 nếu thiếu một ý phụ hoặc có sai sót nhỏ, 0.0 nếu thiếu hoặc mâu thuẫn ý trọng tâm.
+- "missing_or_wrong": tối đa 3 ý CÒN THIẾU so với câu chuẩn hoặc thông tin MÂU THUẪN/SAI. KHÔNG liệt kê thông tin thừa nhưng đúng.
 
 Trả về JSON: correct (bool), score (float), missing_or_wrong (list[str])."""
 
@@ -403,6 +403,7 @@ def judge(case: dict[str, Any], answer: str, *, client=None, model: str | None =
 
     question = case.get("question") or " | ".join(case.get("turns") or [])
     reference = case.get("reference_answer", "")
+    faith_reference = case.get("_retrieved_source_text") or reference
     result = JudgeResult()
 
     if not answer:
@@ -413,7 +414,7 @@ def judge(case: dict[str, Any], answer: str, *, client=None, model: str | None =
 
     try:
         faith = _ask_llm(client, model, FAITHFULNESS_PROMPT.format(
-            question=question, reference=reference, answer=answer,
+            question=question, reference=faith_reference, answer=answer,
         ))
         result.faithful = bool(faith.get("faithful"))
         result.faithful_score = _coerce_score(faith.get("score"))
@@ -508,6 +509,24 @@ def _retrieved_slugs_from_meta(meta: dict[str, Any]) -> list[str]:
 
 def _retrieved_chunks_from_meta(meta: dict[str, Any]) -> list[str]:
     return [r.get("chunk_id", "") for r in (meta or {}).get("retrieved", []) if r]
+
+
+def _retrieved_source_text_from_meta(meta: dict[str, Any]) -> str:
+    """Join the actual retrieved chunk text the bot saw, for faithfulness judging.
+
+    Dedupes identical chunk text and skips entries without text (e.g. when the
+    pipeline did not record source text). Returns "" when no text is available,
+    so the judge falls back to reference_answer.
+    """
+    blocks: list[str] = []
+    seen: set[str] = set()
+    for r in (meta or {}).get("retrieved", []):
+        text = (r or {}).get("text")
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        blocks.append(text)
+    return "\n\n---\n\n".join(blocks)
 
 
 # ---------------------------------------------------------------------------
@@ -738,6 +757,7 @@ def run_direct(args: argparse.Namespace) -> int:
             error = repr(exc)
             final_answer = ""
         latency_ms = round((time.perf_counter() - start) * 1000, 2)
+        case["_retrieved_source_text"] = _retrieved_source_text_from_meta(final_meta)
         scored = evaluate_answer(
             case,
             final_answer,
@@ -838,6 +858,7 @@ def run_api(args: argparse.Namespace) -> int:
                 error = repr(exc)
                 final_answer = final_answer or ""
             latency_ms = round((time.perf_counter() - start) * 1000, 2)
+            case["_retrieved_source_text"] = _retrieved_source_text_from_meta(final_meta)
             scored = evaluate_answer(
                 case,
                 final_answer,

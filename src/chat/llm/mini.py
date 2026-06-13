@@ -29,10 +29,10 @@ log = logging.getLogger(__name__)
 _JSON_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
 
-def chat_completion_extra_kwargs(base_url: str | None = None) -> dict:
+def chat_completion_extra_kwargs(base_url: str | None = None, model: str | None = None) -> dict:
     resolved_base_url = BASE_URL if base_url is None else base_url
     host = urlparse(resolved_base_url).hostname or ""
-    if "mistral.ai" in host:
+    if "mistral.ai" in host or (model or "").lower().startswith("mistral"):
         return {}
     return {"extra_body": {"thinking": {"type": "disabled"}}}
 
@@ -103,7 +103,7 @@ def call_mini(
             ],
             temperature=0,
             response_format={"type": "json_object"},
-            **chat_completion_extra_kwargs(),
+            **chat_completion_extra_kwargs(model=resolved_model),
         )
     except Exception as e:
         log.warning("Mini LLM call failed: %s", e)

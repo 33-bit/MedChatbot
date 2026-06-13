@@ -528,7 +528,7 @@ def test_pure_info_in_diagnostic_mode_suggests_information_mode(monkeypatch):
     ]
 
 
-def test_symptom_triage_in_information_mode_suggests_diagnostic_mode(monkeypatch):
+def test_symptom_triage_in_information_mode_answers_directly(monkeypatch):
     _patch_preflight_ok(monkeypatch)
     session = _patch_persistence_noop(monkeypatch, PatientSession(session_id="s"))
     monkeypatch.setattr(
@@ -541,13 +541,13 @@ def test_symptom_triage_in_information_mode_suggests_diagnostic_mode(monkeypatch
             entities={"symptoms": [{"name": "đau lưng lan xuống chân"}], "medications": []},
         ),
     )
-    monkeypatch.setattr(
-        pipeline,
-        "_handle_diagnostic",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("blocked symptom triage should not run diagnostic flow")
-        ),
-    )
+    captured: dict[str, object] = {}
+
+    def fake_diagnostic(saved_session, question, trace_id, force_answer=False):
+        captured["force_answer"] = force_answer
+        return "Nhận định sơ bộ về đau lưng lan xuống chân [1]"
+
+    monkeypatch.setattr(pipeline, "_handle_diagnostic", fake_diagnostic)
 
     reply = pipeline.answer(
         "Tôi đau lưng lan xuống chân là bệnh gì?",
@@ -555,10 +555,8 @@ def test_symptom_triage_in_information_mode_suggests_diagnostic_mode(monkeypatch
         mode="information",
     )
 
-    assert reply == (
-        "Câu hỏi này giống tư vấn triệu chứng hơn. "
-        "Bạn muốn trả lời ở chế độ Chẩn đoán không?"
-    )
+    assert reply == "Nhận định sơ bộ về đau lưng lan xuống chân [1]"
+    assert captured == {"force_answer": True}
     assert session.conversation == [
         {"role": "user", "content": "Tôi đau lưng lan xuống chân là bệnh gì?"},
         {"role": "assistant", "content": reply},
@@ -566,7 +564,7 @@ def test_symptom_triage_in_information_mode_suggests_diagnostic_mode(monkeypatch
     assert all("mode" not in turn for turn in session.conversation)
 
 
-def test_answer_with_choices_exposes_mode_suggestion_metadata(monkeypatch):
+def test_answer_with_choices_no_mode_suggestion_for_triage_in_information_mode(monkeypatch):
     _patch_preflight_ok(monkeypatch)
     _patch_persistence_noop(monkeypatch, PatientSession(session_id="s"))
     monkeypatch.setattr(
@@ -579,15 +577,17 @@ def test_answer_with_choices_exposes_mode_suggestion_metadata(monkeypatch):
             entities={"symptoms": [{"name": "đau lưng"}], "medications": []},
         ),
     )
+    monkeypatch.setattr(
+        pipeline,
+        "_handle_diagnostic",
+        lambda *args, **kwargs: "Nhận định sơ bộ về đau lưng [1]",
+    )
 
     reply = pipeline.answer_with_choices("Tôi đau lưng là bệnh gì?", session_id="s", mode="information")
 
-    assert reply.text == (
-        "Câu hỏi này giống tư vấn triệu chứng hơn. "
-        "Bạn muốn trả lời ở chế độ Chẩn đoán không?"
-    )
-    assert reply.suggest_mode == "diagnostic"
-    assert reply.retry_question == "Tôi đau lưng là bệnh gì?"
+    assert reply.text == "Nhận định sơ bộ về đau lưng [1]"
+    assert reply.suggest_mode is None
+    assert reply.retry_question is None
 
 
 def test_first_diagnostic_turn_gives_overview_before_questions(monkeypatch):

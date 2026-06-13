@@ -350,6 +350,21 @@ def test_call_mini_omits_thinking_for_mistral_base_url(monkeypatch):
     assert "extra_body" not in calls[0]
 
 
+def test_extra_kwargs_omits_thinking_for_mistral_model_behind_proxy():
+    # Mistral model routed through a non-Mistral host (e.g. local gateway):
+    # the param must still be dropped, since detection by host alone misses it.
+    assert mini.chat_completion_extra_kwargs(
+        "http://localhost:20128/v1", model="mistral/mistral-small-latest"
+    ) == {}
+
+
+def test_extra_kwargs_keeps_thinking_for_non_mistral_model():
+    kwargs = mini.chat_completion_extra_kwargs(
+        "http://localhost:20128/v1", model="gpt-4.1-mini"
+    )
+    assert kwargs == {"extra_body": {"thinking": {"type": "disabled"}}}
+
+
 def test_generator_returns_no_data_reply_without_retrieval_context():
     assert generator.generate("Bệnh hiếm XYZ điều trị thế nào?", []) == generator.NO_DATA_REPLY
 

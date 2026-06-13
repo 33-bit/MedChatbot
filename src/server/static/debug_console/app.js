@@ -786,6 +786,62 @@ const el = (id) => document.getElementById(id);
       renderList(data.traces);
     });
 
+    // ---------- Tabs ----------
+    function activateTab(which) {
+      const isVisual = which === "visual";
+      el("tab-visual").classList.toggle("is-active", isVisual);
+      el("tab-info").classList.toggle("is-active", !isVisual);
+      el("tab-visual").setAttribute("aria-selected", String(isVisual));
+      el("tab-info").setAttribute("aria-selected", String(!isVisual));
+      const visual = el("panel-visual");
+      const info = el("panel-info");
+      visual.classList.toggle("is-active", isVisual);
+      info.classList.toggle("is-active", !isVisual);
+      visual.hidden = !isVisual;
+      info.hidden = isVisual;
+    }
+    el("tab-visual").addEventListener("click", () => activateTab("visual"));
+    el("tab-info").addEventListener("click", () => activateTab("info"));
+
+    // ---------- Sidebar toggle ----------
+    el("sidebar-toggle").addEventListener("click", () => {
+      const shell = el("app-shell");
+      const collapsed = shell.getAttribute("data-collapsed") === "true";
+      shell.setAttribute("data-collapsed", String(!collapsed));
+      el("sidebar-toggle").setAttribute("aria-expanded", String(collapsed));
+    });
+
+    // ---------- Raw JSON copy / download ----------
+    el("copy-raw-json").addEventListener("click", async () => {
+      const text = el("raw-json").textContent || "";
+      const btn = el("copy-raw-json");
+      try {
+        await navigator.clipboard.writeText(text);
+        btn.textContent = "Copied!";
+      } catch (e) {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand("copy"); btn.textContent = "Copied!"; }
+        catch (e2) { btn.textContent = "Copy failed"; }
+        ta.remove();
+      }
+      setTimeout(() => { btn.textContent = "Copy"; }, 1400);
+    });
+    el("download-raw-json").addEventListener("click", () => {
+      const text = el("raw-json").textContent || "";
+      const blob = new Blob([text], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const traceId = (activeGraph.trace && activeGraph.trace.trace_id) || "trace";
+      link.href = url;
+      link.download = `${traceId}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    });
 
     function setupCanvasInteraction() {
       const panel = document.querySelector(".graph-panel");

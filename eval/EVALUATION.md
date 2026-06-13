@@ -257,7 +257,7 @@ Counts pipeline exceptions, HTTP failures, and timeouts. Distinct from `pass_rat
 
 Each category has its own executable file under `eval/categories/`. Edit that category file to add or remove metrics/checks for that category. Shared metric functions live in `eval/metrics.py`.
 
-Examples below use `disease_info.py`; replace it with `drug_info.py` or `symptom_triage.py` as needed.
+Examples below use `disease_info.py`; replace it with `drug_info.py` as needed.
 
 ### 4.1 Retrieval-only
 

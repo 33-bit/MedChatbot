@@ -347,49 +347,6 @@ def test_evaluate_answer_keeps_failed_citation_as_hard_requirement(monkeypatch):
     assert result["checks"][0]["passed"] is False
 
 
-def test_symptom_triage_category_adds_uncertainty_and_medication_checks():
-    runner = load_eval_runner()
-    case = {
-        "category": "symptom_triage",
-        "requires_citation": True,
-        "candidate_adr_drugs": ["Terbinafine"],
-    }
-
-    result = runner.evaluate_answer(
-        case,
-        "Chưa thể chẩn đoán chắc chắn qua chat. Cần xem có dùng thuốc gần đây không [1].",
-        pass_threshold=0.75,
-        use_judge=False,
-    )
-
-    assert [check["type"] for check in result["checks"]] == [
-        "requires_citation",
-        "symptom_triage_uncertainty",
-        "symptom_triage_medication_adr",
-    ]
-    assert result["passed"] is True
-
-
-def test_symptom_triage_medication_check_is_hard_when_adr_sources_exist():
-    runner = load_eval_runner()
-    case = {
-        "category": "symptom_triage",
-        "requires_citation": True,
-        "candidate_adr_drugs": ["Terbinafine"],
-    }
-
-    result = runner.evaluate_answer(
-        case,
-        "Chưa thể chẩn đoán chắc chắn qua chat. Nên đi khám sớm [1].",
-        pass_threshold=0.75,
-        use_judge=False,
-    )
-
-    assert result["checks"][-1]["type"] == "symptom_triage_medication_adr"
-    assert result["checks"][-1]["passed"] is False
-    assert result["passed"] is False
-
-
 def test_judge_handles_hallucination(monkeypatch):
     judge_mod = load_judge()
 
@@ -488,7 +445,7 @@ def test_iter_cases_can_include_only_one_category():
     cases = [
         {"id": "1", "category": "disease_info"},
         {"id": "2", "category": "drug_info"},
-        {"id": "3", "category": "symptom_triage"},
+        {"id": "3", "category": "diagnostic_flow"},
     ]
     keep = runner.iter_cases(
         cases,

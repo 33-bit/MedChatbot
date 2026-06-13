@@ -27,16 +27,6 @@ SUGGEST_INFORMATION_REPLY = (
     "Câu hỏi này phù hợp với chế độ Thông tin hơn. "
     "Bạn muốn trả lời ở chế độ Thông tin không?"
 )
-SUGGEST_DIAGNOSTIC_REPLY = (
-    "Câu hỏi này giống tư vấn triệu chứng hơn. "
-    "Bạn muốn trả lời ở chế độ Chẩn đoán không?"
-)
-SUGGEST_DIAGNOSTIC_WITH_RED_FLAGS_REPLY = (
-    "Câu hỏi này giống tư vấn triệu chứng hơn. "
-    "Bạn muốn trả lời ở chế độ Chẩn đoán không? Nếu có khó thở, đau ngực dữ dội, "
-    "lơ mơ, yếu liệt, co giật hoặc chảy máu nhiều, hãy gọi cấp cứu 115 hoặc đến "
-    "cơ sở y tế gần nhất ngay."
-)
 OFF_SCOPE_REPLY = "Tôi chỉ hỗ trợ các câu hỏi về sức khỏe, bệnh lý và thuốc."
 
 
@@ -101,18 +91,8 @@ def apply_mode_policy(mode: str, intent: str, active_flow: bool = False) -> Mode
     if mode == "information":
         if intent in INFO_INTENTS:
             return ModeDecision(True, route_label="informational")
-        if intent == "care_seeking_advice":
-            return ModeDecision(
-                False,
-                suggest_mode="diagnostic",
-                reply=SUGGEST_DIAGNOSTIC_WITH_RED_FLAGS_REPLY,
-            )
         if intent in DIAGNOSTIC_INTENTS:
-            return ModeDecision(
-                False,
-                suggest_mode="diagnostic",
-                reply=SUGGEST_DIAGNOSTIC_REPLY,
-            )
+            return ModeDecision(True, route_label="diagnostic", force_answer=True)
         if active_flow:
             return ModeDecision(True, route_label="clarification_answer")
         return ModeDecision(True)

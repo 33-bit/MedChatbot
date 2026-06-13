@@ -258,7 +258,7 @@ def generate(
                 {"role": "user", "content": prompt_user},
             ],
             # reasoning_effort="high",
-            **chat_completion_extra_kwargs(BASE_URL),
+            **chat_completion_extra_kwargs(BASE_URL, model=MODEL),
         )
     except Exception as e:
         log.warning("Generator LLM call failed: %s", e)

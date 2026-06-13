@@ -2,68 +2,122 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Chat Route Debug Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Sora:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/debug/chat-route/static/styles.css">
 </head>
 <body>
-  <main>
-    <h1>Chat Route Debug Console</h1>
-    <p class="meta">Live run endpoint: <code>/debug/chat-route/run</code> | Replay endpoint: <code>/debug/chat-route/traces</code></p>
-    <div class="grid">
-      <section>
-        <h2>Live Run</h2>
-        <label for="api-key">X-API-Key</label>
-        <input id="api-key" type="password" autocomplete="off">
-        <label for="session-id">Session ID</label>
-        <input id="session-id" value="debug-user">
-        <button id="new-session-button" class="secondary" type="button">New session</button>
-        <label for="mode">Mode</label>
-        <select id="mode">
-          <option value="auto">auto</option>
-          <option value="information">information</option>
-          <option value="diagnostic">diagnostic</option>
-        </select>
-        <label for="question">Question</label>
-        <textarea id="question" rows="4">Tôi bị ho</textarea>
-        <button id="run-button" type="button">Run</button>
-        <div id="run-status" class="meta"></div>
-      </section>
-      <section>
-        <h2>Replay</h2>
-        <label for="filter-session-id">Session ID Filter</label>
-        <input id="filter-session-id" value="debug-user">
-        <label for="filter-trace-id">Trace ID Filter</label>
-        <input id="filter-trace-id" placeholder="optional">
-        <button id="list-button" class="secondary" type="button">Load Traces</button>
-        <div id="trace-list"></div>
-      </section>
-    </div>
-    <section>
-      <h2>Trace Detail</h2>
-      <div id="trace-summary" class="meta">No trace loaded.</div>
-      <div id="consultation-strip" class="consultation-strip" aria-label="Consultation turns"></div>
-      <h3>Workflow</h3>
-      <div class="trace-area">
-        <div class="graph-panel" aria-label="Workflow graph canvas">
-          <div id="workflow-graph"></div>
+  <div class="app-shell" id="app-shell" data-collapsed="false">
+    <!-- Collapsible sidebar: controls live here -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-head">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-text">Chat Route Debug Console</span>
         </div>
-        <aside id="node-inspector" class="inspector-panel" aria-live="polite">
-          <h3>Node Inspector</h3>
-          <div class="empty-state">Select a workflow node to inspect it.</div>
-        </aside>
       </div>
-      <h3>Timing List</h3>
-      <div id="timeline"></div>
-      <h3>Retrieved Hits</h3>
-      <div id="retrieved"></div>
-      <h3>Usage</h3>
-      <div id="usage"></div>
-      <h3>Answer</h3>
-      <pre id="answer"></pre>
-      <h3>Raw JSON</h3>
-      <pre id="raw-json"></pre>
-    </section>
-  </main>
+
+      <div class="sidebar-scroll">
+        <section class="panel">
+          <h2>Live Run</h2>
+          <label for="api-key">X-API-Key</label>
+          <input id="api-key" type="password" autocomplete="off" placeholder="paste key">
+          <label for="session-id">Session ID</label>
+          <div class="field-row">
+            <input id="session-id" value="debug-user">
+            <button id="new-session-button" class="ghost" type="button" title="Start a fresh consultation">New</button>
+          </div>
+          <label for="mode">Mode</label>
+          <select id="mode">
+            <option value="auto">auto</option>
+            <option value="information">information</option>
+            <option value="diagnostic">diagnostic</option>
+          </select>
+          <label for="question">Question</label>
+          <textarea id="question" rows="4">Tôi bị ho</textarea>
+          <button id="run-button" type="button">Run</button>
+          <div id="run-status" class="run-status"></div>
+        </section>
+
+        <section class="panel">
+          <h2>Replay</h2>
+          <label for="filter-session-id">Session ID Filter</label>
+          <input id="filter-session-id" value="debug-user">
+          <label for="filter-trace-id">Trace ID Filter</label>
+          <input id="filter-trace-id" placeholder="optional">
+          <button id="list-button" class="ghost" type="button">Load Traces</button>
+          <div id="trace-list" class="trace-list"></div>
+        </section>
+      </div>
+    </aside>
+
+    <!-- Main area: the star of the show -->
+    <main class="workspace">
+      <header class="workspace-bar">
+        <button id="sidebar-toggle" class="icon-button" type="button" aria-label="Toggle sidebar" aria-expanded="true">
+          <span class="hamburger" aria-hidden="true"></span>
+        </button>
+        <div class="trace-headline">
+          <span class="trace-title">Trace Detail</span>
+          <span id="trace-summary" class="trace-summary">No trace loaded.</span>
+        </div>
+        <nav class="tabs" role="tablist">
+          <button class="tab is-active" id="tab-visual" role="tab" aria-selected="true" type="button">Visualization</button>
+          <button class="tab" id="tab-info" role="tab" aria-selected="false" type="button">Details</button>
+        </nav>
+      </header>
+
+      <div id="consultation-strip" class="consultation-strip" aria-label="Consultation turns"></div>
+
+      <!-- Tab 1: the node graph + inspector -->
+      <section class="tab-panel is-active" id="panel-visual" role="tabpanel" aria-labelledby="tab-visual">
+        <div class="trace-area">
+          <div class="graph-panel" aria-label="Workflow graph canvas">
+            <div id="workflow-graph"></div>
+          </div>
+          <aside id="node-inspector" class="inspector-panel" aria-live="polite">
+            <h3>Node Inspector</h3>
+            <div class="empty-state">Select a workflow node to inspect it.</div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- Tab 2: the textual info -->
+      <section class="tab-panel" id="panel-info" role="tabpanel" aria-labelledby="tab-info" hidden>
+        <div class="info-grid">
+          <div class="info-card">
+            <h3>Answer</h3>
+            <pre id="answer"></pre>
+          </div>
+          <div class="info-card">
+            <h3>Timing List</h3>
+            <div id="timeline"></div>
+          </div>
+          <div class="info-card">
+            <h3>Retrieved Hits</h3>
+            <div id="retrieved"></div>
+          </div>
+          <div class="info-card">
+            <h3>Usage</h3>
+            <div id="usage"></div>
+          </div>
+          <div class="info-card info-card--wide">
+            <div class="info-card-head">
+              <h3>Raw JSON</h3>
+              <div class="raw-actions">
+                <button id="copy-raw-json" class="ghost" type="button">Copy</button>
+                <button id="download-raw-json" class="ghost" type="button">Download</button>
+              </div>
+            </div>
+            <pre id="raw-json"></pre>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
   <script src="/debug/chat-route/static/app.js"></script>
 </body>
 </html>

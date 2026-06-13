@@ -19,3 +19,7 @@ docs/
 .DS_Store
 TEST_PLAN.md
 test.py
+.superpowers
+appendonlydir
+report
+snapshots

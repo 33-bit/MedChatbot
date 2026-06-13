@@ -139,6 +139,7 @@ def _record_hits(hits: list[Hit]) -> None:
     meta = _meta()
     if meta is None:
         return
+    include_text = bool(meta.get("_collect_graph"))
     meta.setdefault("retrieved", []).extend(
         {
             "source_type": h.source_type,
@@ -147,6 +148,7 @@ def _record_hits(hits: list[Hit]) -> None:
             "heading_path": h.heading_path,
             "chunk_id": h.chunk_id,
             "score": h.score,
+            **({"text": h.text} if include_text else {}),
         }
         for h in hits
     )

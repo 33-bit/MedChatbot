@@ -6,22 +6,7 @@ these helpers instead of duplicating scoring logic.
 
 from __future__ import annotations
 
-import re
-import unicodedata
 from typing import Any
-
-
-def normalize(text: str) -> str:
-    text = (text or "").casefold().replace("đ", "d")
-    text = unicodedata.normalize("NFD", text)
-    text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
-
-
-def contains_any_normalized(text: str, terms: list[str]) -> bool:
-    haystack = normalize(text)
-    return any(normalize(term) in haystack for term in terms)
 
 
 def coerce_score(value: Any) -> float | None:
@@ -59,50 +44,6 @@ def apply_judge_score(
     scored["passed"] = scored["score"] >= pass_threshold and required_checks_passed
     scored["scoring_mode"] = "judge"
     return scored
-
-
-def uncertainty_check(answer: str) -> dict[str, Any]:
-    terms = [
-        "chưa thể chẩn đoán",
-        "không thể chẩn đoán",
-        "chưa thể kết luận",
-        "không thể kết luận",
-        "không thể xác định chắc chắn",
-    ]
-    return {
-        "type": "symptom_triage_uncertainty",
-        "target": "state diagnostic uncertainty",
-        "passed": contains_any_normalized(answer, terms),
-        "weight": 1.0,
-    }
-
-
-def medication_adr_check(answer: str) -> dict[str, Any]:
-    terms = [
-        "thuốc",
-        "tác dụng phụ",
-        "tác dụng không mong muốn",
-        "thực phẩm chức năng",
-        "thuốc nam",
-        "vỏ thuốc",
-        "danh sách thuốc",
-    ]
-    return {
-        "type": "symptom_triage_medication_adr",
-        "target": "mention recent medication/ADR review",
-        "passed": contains_any_normalized(answer, terms),
-        "weight": 1.0,
-    }
-
-
-def uncertainty_answer_check(case: dict[str, Any], answer: str) -> dict[str, Any] | None:
-    return uncertainty_check(answer)
-
-
-def medication_adr_answer_check(case: dict[str, Any], answer: str) -> dict[str, Any] | None:
-    if not case.get("candidate_adr_drugs"):
-        return None
-    return medication_adr_check(answer)
 
 
 def apply_answer_checks(
