@@ -23,3 +23,6 @@ test.py
 appendonlydir
 report
 snapshots
+docs/superpowers/
+pytest.ini
+medical_chatbot_qa_templates.md
