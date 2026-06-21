@@ -12,7 +12,7 @@ from src.chat.storage.reminders import (
     complete_delivery, release_claim, count_active_reminders,
     check_duplicate_active_or_pending, delete_reminder_draft
 )
-from src.chat.storage.reminder_parser import parse_reminder_natural_language, check_reminder_prefilter
+from src.chat.storage.reminder_parser import parse_reminder_natural_language, check_reminder_prefilter, parse_multi_turn_reminder
 from src.server.channels.telegram import run_reminder_tick, send_checked_reminder_message
 
 def test_recurrence_one_time():
@@ -267,4 +267,56 @@ def test_pending_conversation_lifecycle():
     )
     delete_pending_conversation(chat_id, user_id)
     assert get_pending_conversation(chat_id, user_id) is None
+
+
+@patch("src.chat.storage.reminder_parser.call_mini")
+def test_parse_multi_turn_reminder(mock_call):
+    tz = ZoneInfo("Asia/Ho_Chi_Minh")
+    now = datetime.datetime(2026, 6, 21, 10, 0, tzinfo=tz)
+    
+    # Turn 1: Incomplete request
+    mock_call.return_value = {
+        "is_relevant_followup": True,
+        "is_canceled": False,
+        "is_direct_request": True,
+        "is_ordinary_mention": False,
+        "merged_fields": {"medical_type": "medication", "reminder_text": "Uống Panadol", "schedule": None, "end_date": None},
+        "missing_fields": ["schedule"],
+        "is_complete": False,
+        "is_ambiguous": False,
+        "is_past": False,
+        "clarification_prompt": "Bạn muốn uống thuốc vào lúc mấy giờ?"
+    }
+    
+    res1 = parse_multi_turn_reminder("Đặt lịch uống Panadol cho tôi", now, None)
+    assert res1["is_complete"] is False
+    assert "schedule" in res1["missing_fields"]
+    
+    # Turn 2: Follow-up completing it
+    prior = {
+        "original_request": "Đặt lịch uống Panadol cho tôi",
+        "partial_fields": {"medical_type": "medication", "reminder_text": "Uống Panadol", "schedule": None, "end_date": None},
+        "turns": ["Đặt lịch uống Panadol cho tôi", "Bạn muốn uống thuốc vào lúc mấy giờ?"],
+        "missing_fields": ["schedule"]
+    }
+    
+    mock_call.return_value = {
+        "is_relevant_followup": True,
+        "is_canceled": False,
+        "merged_fields": {
+            "medical_type": "medication",
+            "reminder_text": "Uống Panadol",
+            "schedule": {"type": "daily", "times": ["11:00"]},
+            "end_date": None
+        },
+        "missing_fields": [],
+        "is_complete": True,
+        "is_ambiguous": False,
+        "is_past": False,
+        "clarification_prompt": None
+    }
+    
+    res2 = parse_multi_turn_reminder("11h trưa hàng ngày", now, prior)
+    assert res2["is_complete"] is True
+    assert res2["merged_fields"]["schedule"]["times"] == ["11:00"]
 

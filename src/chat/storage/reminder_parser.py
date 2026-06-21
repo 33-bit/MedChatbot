@@ -63,3 +63,79 @@ Return ONLY a valid JSON object.
     except Exception as e:
         log.warning("Failed parsing natural language reminder: %s", e)
         return None
+
+
+def parse_multi_turn_reminder(
+    text: str,
+    current_time_context: datetime.datetime,
+    prior_context: dict | None = None
+) -> dict | None:
+    current_time_str = current_time_context.astimezone(TZ).strftime("%Y-%m-%d %H:%M")
+    weekday_str = current_time_context.astimezone(TZ).strftime("%A")
+    
+    prior_context_str = ""
+    if prior_context:
+        prior_context_str = f"""
+Here is the context of the active pending reminder conversation so far:
+- Original Request: {prior_context.get('original_request')}
+- Extracted Fields So Far: {json.dumps(prior_context.get('partial_fields'))}
+- Conversation Turns History: {json.dumps(prior_context.get('turns'))}
+- Missing Fields from last turn: {json.dumps(prior_context.get('missing_fields'))}
+"""
+    
+    system_prompt = f"""You are an expert medical assistant parsing Telegram messages to extract or complete medical reminders (medication or clinic visits).
+Current time context: {current_time_str} (Asia/Ho_Chi_Minh timezone, weekday: {weekday_str}).
+{prior_context_str}
+
+Your task is to parse the user's latest input: "{text}" and return a JSON object.
+
+If prior context is provided, determine if this new message is a relevant follow-up to complete or correct the pending reminder:
+1. "is_relevant_followup": bool. True if the user is answering a question about the reminder, providing time, schedule, drug name, or correcting it. If the user asks a completely unrelated medical/health question (e.g. "Tôi bị ho", "Tôi bị đau đầu"), says general greetings, or changes the topic, set this to false.
+2. "is_canceled": bool. True if the user explicitly asks to cancel (e.g., "thôi", "hủy đi", "cancel", "không cần nữa").
+3. "corrected": bool. True if the user is correcting previously provided information (e.g., "không, lúc 9h tối", "sửa lại là thứ 2").
+4. "merged_fields": dict containing the merged reminder data:
+   - "medical_type": "medication" | "clinic" | null
+   - "reminder_text": str | null
+   - "schedule": dict | null
+   - "end_date": "YYYY-MM-DD" | null
+   Merges the new details with any fields already extracted in prior context. If the user corrects a field, overwrite it.
+5. "missing_fields": list of strings of fields still needed. We need:
+   - "medical_type" (if missing)
+   - "reminder_text" (if missing. NOTE: Generic text like "uống thuốc" is valid without a specific drug name, but a schedule remains mandatory).
+   - "schedule" (if missing, incomplete, or ambiguous).
+6. "is_complete": bool. True if we now have a valid "medical_type", "reminder_text", and a valid, non-ambiguous, non-past "schedule" (i.e. "missing_fields" is empty).
+7. "is_ambiguous": bool. True if a schedule is mentioned but lacks specific time details (e.g. "uống thuốc hàng ngày" without time).
+8. "is_past": bool. True if the scheduled time is in the past relative to current_time.
+9. "clarification_prompt": str | null. If is_complete is false and is_relevant_followup is true, provide a friendly, natural Vietnamese or English question (matching the user's language) to ask for the missing fields. Do not infer dosage or timing.
+
+If NO prior context is provided:
+1. "is_relevant_followup": bool (always true).
+2. "is_canceled": bool. True if the user starts with a cancel request.
+3. "is_direct_request": bool. True if the user explicitly asks to set a reminder/alarm (e.g. "nhắc tôi...", "set reminder...", "/remind add...").
+4. "is_ordinary_mention": bool. True if the user is not directly asking for a reminder, but mentions a concrete schedule/appointment (e.g. "Tôi có lịch khám lúc 9h sáng mai").
+5. "merged_fields": dict of extracted reminder data (medical_type, reminder_text, schedule, end_date).
+6. "missing_fields": list of strings of fields still needed.
+7. "is_complete": bool (same as above).
+8. "is_ambiguous": bool (same as above).
+9. "is_past": bool (same as above).
+10. "clarification_prompt": str | null (same as above).
+
+Rules:
+- Never infer medication dosage or timing that the user has not provided.
+- The user must explicitly state the schedule.
+- Standard schedule formats in JSON:
+  - One-time: {{"type": "one_time", "datetime": "YYYY-MM-DD HH:MM"}}
+  - Daily: {{"type": "daily", "times": ["HH:MM", "HH:MM", ...]}}
+  - Weekdays: {{"type": "weekdays", "days": [0, 1, ...], "times": ["HH:MM", ...]}} (0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun)
+  - Interval: {{"type": "interval", "unit": "hours" | "days", "value": N, "start_datetime": "YYYY-MM-DD HH:MM"}}
+
+Return ONLY a valid JSON object.
+"""
+    try:
+        res = call_mini(system_prompt, text, stage="reminder_parser")
+        if not isinstance(res, dict):
+            return None
+        return res
+    except Exception as e:
+        log.warning("Failed parsing multi turn natural language reminder: %s", e)
+        return None
