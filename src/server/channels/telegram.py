@@ -888,11 +888,25 @@ async def _answer_and_send(
     is_ordinary_remind = False
 
     if chat_type == "private" and user_id is not None:
-        from src.chat.storage.reminders import init_reminders_db
+        from src.chat.storage.reminders import init_reminders_db, get_pending_conversation
         init_reminders_db()
-        from src.chat.storage.reminder_parser import parse_reminder_natural_language, check_reminder_prefilter
         from src.chat.storage.recurrence import TZ
         
+        pending = get_pending_conversation(int(chat_id), int(user_id))
+        if pending:
+            stop_typing = asyncio.Event()
+            typing_task = asyncio.create_task(_keep_typing(chat_id, stop_typing))
+            try:
+                intercepted = await _process_reminder_followup(int(chat_id), int(user_id), text, pending)
+                if intercepted:
+                    return
+            finally:
+                stop_typing.set()
+                typing_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await typing_task
+
+        from src.chat.storage.reminder_parser import parse_reminder_natural_language, check_reminder_prefilter
         if check_reminder_prefilter(text):
             parsed = parse_reminder_natural_language(text, datetime.datetime.now(TZ))
             if parsed:
@@ -1408,28 +1422,39 @@ async def _handle_command(
         )
         await _start_topup_payment(chat_id, status["payoff_amount"])
         return True
+    if cmd == "/cancel":
+        if chat_type != "private":
+            await send_text(chat_id, "Tính năng này chỉ dùng được trong cuộc trò chuyện riêng tư.")
+            return True
+        from src.chat.storage.reminders import get_pending_conversation, delete_pending_conversation
+        if user_id is not None:
+            pending = get_pending_conversation(chat_id, user_id)
+            if pending:
+                delete_pending_conversation(chat_id, user_id)
+                await send_text(chat_id, "❌ Đã hủy thiết lập nhắc nhở.")
+                return True
+        await send_text(chat_id, "Không có thiết lập nhắc nhở nào đang chờ.")
+        return True
     if cmd == "/remind":
         if chat_type != "private":
             await send_text(chat_id, "Tính năng nhắc nhở chỉ dùng được trong cuộc trò chuyện riêng tư với bot.")
+            return True
+        parts = text.strip().split(maxsplit=2)
+        if len(parts) >= 2 and parts[1].lower() == "add":
+            content = parts[2].strip() if len(parts) > 2 else ""
+            if not content:
+                await send_text(
+                    chat_id,
+                    "Cách dùng: `/remind add <nội dung nhắc nhở>` (ví dụ: `/remind add uống thuốc lúc 8h sáng hàng ngày`)."
+                )
+                return True
+            await _process_reminder_input_flow(chat_id, user_id, content, is_direct=True)
             return True
         await send_text(
             chat_id,
             "🔔 **Quản lý nhắc nhở y tế**\n\nBạn có thể thêm nhắc nhở bằng cách gửi tin nhắn bằng tiếng Việt hoặc tiếng Anh (ví dụ: 'Nhắc tôi uống thuốc Panadol lúc 8h sáng hàng ngày') hoặc quản lý danh sách hiện có.",
             inline_keyboard=_remind_menu_keyboard()
         )
-        return True
-    if cmd.startswith("/remind add"):
-        if chat_type != "private":
-            await send_text(chat_id, "Tính năng nhắc nhở chỉ dùng được trong cuộc trò chuyện riêng tư với bot.")
-            return True
-        content = text[len("/remind add"):].strip()
-        if not content:
-            await send_text(
-                chat_id,
-                "Cách dùng: `/remind add <nội dung nhắc nhở>` (ví dụ: `/remind add uống thuốc lúc 8h sáng hàng ngày`)."
-            )
-            return True
-        await _process_reminder_input_flow(chat_id, user_id, content, is_direct=True)
         return True
     if cmd == "/doctor":
         return await telegram_doctor.handle_doctor_command(chat_id)
@@ -1584,6 +1609,14 @@ async def telegram_webhook(
                             await _edit_message_text(chat_id, message_id, "❌ Thiết lập nhắc nhở thất bại hoặc đã hết hạn hoặc đạt giới hạn 20 nhắc nhở hoạt động.")
                     return {"ok": True}
 
+                if data == "remind:cancel_conv":
+                    from src.chat.storage.reminders import delete_pending_conversation
+                    delete_pending_conversation(chat_id, user_id)
+                    await _answer_callback_query(cb_id, "Đã hủy thiết lập.")
+                    if message_id:
+                        await _edit_message_text(chat_id, message_id, "❌ Đã hủy thiết lập nhắc nhở.")
+                    return {"ok": True}
+
                 if data.startswith(REMIND_PREFIX_CANCEL):
                     draft_id = int(data[len(REMIND_PREFIX_CANCEL):])
                     from src.chat.storage.reminders import delete_reminder_draft
@@ -1732,18 +1765,127 @@ async def _show_remove_confirmation(chat_id: int, user_id: int, reminder_id: int
     )
     await _edit_message_text(chat_id, message_id, text, inline_keyboard=_remind_remove_keyboard(reminder_id))
 
+async def _process_reminder_followup(chat_id: int, user_id: int, text: str, pending: dict) -> bool:
+    import datetime
+    from src.chat.storage.reminder_parser import parse_multi_turn_reminder
+    from src.chat.storage.reminders import delete_pending_conversation, upsert_pending_conversation, create_reminder_draft, count_active_reminders, check_duplicate_active_or_pending
+    from src.chat.storage.recurrence import TZ, format_schedule_vietnamese, next_occurrence
+    import json
+    
+    now_vietnam = datetime.datetime.now(TZ)
+    parsed = parse_multi_turn_reminder(text, now_vietnam, pending)
+    if not parsed:
+        return False
+        
+    if not parsed.get("is_relevant_followup", False):
+        return False
+        
+    if parsed.get("is_canceled", False):
+        delete_pending_conversation(chat_id, user_id)
+        await send_text(chat_id, "❌ Đã hủy thiết lập nhắc nhở.")
+        return True
+        
+    turns = pending.get("turns", [])
+    turns.append(text)
+    if parsed.get("clarification_prompt"):
+        turns.append(parsed.get("clarification_prompt"))
+        
+    if parsed.get("is_complete", False):
+        delete_pending_conversation(chat_id, user_id)
+        
+        merged_fields = parsed.get("merged_fields", {})
+        mtype = merged_fields.get("medical_type")
+        reminder_text = merged_fields.get("reminder_text")
+        sched = merged_fields.get("schedule")
+        end_date = merged_fields.get("end_date")
+        
+        if not mtype or not reminder_text or not sched:
+            await send_text(chat_id, "Thông tin chưa đầy đủ để thiết lập nhắc nhở.")
+            return True
+            
+        first_fire = next_occurrence(sched, now_vietnam)
+        if not first_fire:
+            await send_text(chat_id, "Lịch nhắc nhở không hợp lệ hoặc đã qua ngày kết thúc.")
+            return True
+            
+        if count_active_reminders(chat_id, user_id) >= 20:
+            await send_text(chat_id, "Bạn đã đạt giới hạn tối đa 20 nhắc nhở hoạt động. Vui lòng xóa bớt nhắc nhở trước khi thêm mới.")
+            return True
+            
+        schedule_str = json.dumps(sched)
+        if check_duplicate_active_or_pending(chat_id, user_id, mtype, reminder_text, schedule_str):
+            await send_text(chat_id, "Nhắc nhở này đã tồn tại hoặc đang chờ xác nhận.")
+            return True
+            
+        draft_id = create_reminder_draft(
+            chat_id=chat_id,
+            user_id=user_id,
+            medical_type=mtype,
+            reminder_text=reminder_text,
+            schedule=sched,
+            next_fire_at=int(first_fire.timestamp()),
+            end_date=end_date,
+            source="direct"
+        )
+        
+        mtype_vn = "Uống thuốc" if mtype == "medication" else "Khám bệnh"
+        sched_desc = format_schedule_vietnamese(sched)
+        end_date_desc = end_date or "Không có"
+        
+        confirm_msg = (
+            f"🔔 **Đề xuất tạo nhắc nhở y tế:**\n\n"
+            f"- Loại: {mtype_vn}\n"
+            f"- Nội dung: {reminder_text}\n"
+            f"- Lịch nhắc: {sched_desc}\n"
+            f"- Múi giờ: Asia/Ho_Chi_Minh\n"
+            f"- Ngày kết thúc: {end_date_desc}\n\n"
+            f"Bạn có muốn thiết lập nhắc nhở này không?"
+        )
+        
+        await send_text(chat_id, confirm_msg, inline_keyboard=_remind_draft_keyboard(draft_id))
+        return True
+        
+    if parsed.get("is_ambiguous", False):
+        await send_text(
+            chat_id,
+            "Tôi chưa rõ thời gian cụ thể bạn muốn nhắc nhở (ví dụ: 'sáng mai' lúc mấy giờ?). Bạn vui lòng cung cấp thời gian chính xác nhé."
+        )
+        return True
+        
+    if parsed.get("is_past", False):
+        await send_text(chat_id, "Thời gian nhắc nhở không thể ở trong quá khứ.")
+        return True
+        
+    prompt = parsed.get("clarification_prompt") or "Bạn vui lòng cung cấp thêm thông tin cho nhắc nhở."
+    upsert_pending_conversation(
+        chat_id=chat_id,
+        user_id=user_id,
+        original_request=pending.get("original_request"),
+        partial_fields=parsed.get("merged_fields", {}),
+        turns=turns,
+        missing_fields=parsed.get("missing_fields", []),
+        expires_at=pending.get("expires_at")
+    )
+    
+    keyboard = {"inline_keyboard": [[{"text": "❌ Hủy", "callback_data": "remind:cancel_conv"}]]}
+    await send_text(chat_id, prompt, inline_keyboard=keyboard)
+    return True
+
 async def _process_reminder_input_flow(chat_id: int, user_id: int, text: str, is_direct: bool = False) -> bool:
     import json
     import datetime
-    from src.chat.storage.reminder_parser import parse_reminder_natural_language, check_reminder_prefilter
-    from src.chat.storage.reminders import create_reminder_draft, count_active_reminders, check_duplicate_active_or_pending
+    from src.chat.storage.reminder_parser import parse_multi_turn_reminder, check_reminder_prefilter
+    from src.chat.storage.reminders import (
+        create_reminder_draft, count_active_reminders, check_duplicate_active_or_pending,
+        upsert_pending_conversation, delete_pending_conversation
+    )
     from src.chat.storage.recurrence import format_schedule_vietnamese, next_occurrence, TZ
     
     if not check_reminder_prefilter(text):
         return False
         
     now_vietnam = datetime.datetime.now(TZ)
-    parsed = parse_reminder_natural_language(text, now_vietnam)
+    parsed = parse_multi_turn_reminder(text, now_vietnam, prior_context=None)
     if not parsed:
         return False
         
@@ -1753,77 +1895,113 @@ async def _process_reminder_input_flow(chat_id: int, user_id: int, text: str, is
     if not (is_direct_req or is_ordinary_mention):
         return False
         
-    if parsed.get("is_ambiguous", False):
+    if parsed.get("is_canceled", False):
         if is_direct_req:
-            await send_text(
-                chat_id,
-                "Tôi chưa rõ thời gian cụ thể bạn muốn nhắc nhở (ví dụ: 'sáng mai' lúc mấy giờ?). Bạn vui lòng cung cấp thời gian chính xác nhé."
+            delete_pending_conversation(chat_id, user_id)
+            await send_text(chat_id, "❌ Đã hủy thiết lập nhắc nhở.")
+            return True
+        return False
+        
+    if parsed.get("is_complete", False):
+        if parsed.get("is_ambiguous", False):
+            if is_direct_req:
+                await send_text(
+                    chat_id,
+                    "Tôi chưa rõ thời gian cụ thể bạn muốn nhắc nhở (ví dụ: 'sáng mai' lúc mấy giờ?). Bạn vui lòng cung cấp thời gian chính xác nhé."
+                )
+                return True
+            return False
+            
+        if parsed.get("is_past", False):
+            if is_direct_req:
+                await send_text(chat_id, "Thời gian nhắc nhở không thể ở trong quá khứ.")
+                return True
+            return False
+            
+        sched = parsed.get("merged_fields", {}).get("schedule")
+        if not sched:
+            return False
+            
+        first_fire = next_occurrence(sched, now_vietnam)
+        if not first_fire:
+            if is_direct_req:
+                await send_text(chat_id, "Lịch nhắc nhở không hợp lệ hoặc đã qua ngày kết thúc.")
+                return True
+            return False
+            
+        mtype = parsed.get("merged_fields", {}).get("medical_type")
+        reminder_text = parsed.get("merged_fields", {}).get("reminder_text")
+        if not mtype or not reminder_text:
+            return False
+            
+        if count_active_reminders(chat_id, user_id) >= 20:
+            if is_direct_req:
+                await send_text(chat_id, "Bạn đã đạt giới hạn tối đa 20 nhắc nhở hoạt động. Vui lòng xóa bớt nhắc nhở trước khi thêm mới.")
+                return True
+            return False
+            
+        schedule_str = json.dumps(sched)
+        if check_duplicate_active_or_pending(chat_id, user_id, mtype, reminder_text, schedule_str):
+            if is_direct_req:
+                await send_text(chat_id, "Nhắc nhở này đã tồn tại hoặc đang chờ xác nhận.")
+                return True
+            return False
+            
+        draft_id = create_reminder_draft(
+            chat_id=chat_id,
+            user_id=user_id,
+            medical_type=mtype,
+            reminder_text=reminder_text,
+            schedule=sched,
+            next_fire_at=int(first_fire.timestamp()),
+            end_date=parsed.get("merged_fields", {}).get("end_date"),
+            source="direct" if is_direct_req else "ordinary"
+        )
+        
+        mtype_vn = "Uống thuốc" if mtype == "medication" else "Khám bệnh"
+        sched_desc = format_schedule_vietnamese(sched)
+        end_date_desc = parsed.get("merged_fields", {}).get("end_date") or "Không có"
+        
+        confirm_msg = (
+            f"🔔 **Đề xuất tạo nhắc nhở y tế:**\n\n"
+            f"- Loại: {mtype_vn}\n"
+            f"- Nội dung: {reminder_text}\n"
+            f"- Lịch nhắc: {sched_desc}\n"
+            f"- Múi giờ: Asia/Ho_Chi_Minh\n"
+            f"- Ngày kết thúc: {end_date_desc}\n\n"
+            f"Bạn có muốn thiết lập nhắc nhở này không?"
+        )
+        
+        await send_text(chat_id, confirm_msg, inline_keyboard=_remind_draft_keyboard(draft_id))
+        return True
+        
+    else:
+        if is_direct_req:
+            if parsed.get("is_ambiguous", False):
+                await send_text(
+                    chat_id,
+                    "Tôi chưa rõ thời gian cụ thể bạn muốn nhắc nhở (ví dụ: 'sáng mai' lúc mấy giờ?). Bạn vui lòng cung cấp thời gian chính xác nhé."
+                )
+                return True
+            if parsed.get("is_past", False):
+                await send_text(chat_id, "Thời gian nhắc nhở không thể ở trong quá khứ.")
+                return True
+                
+            prompt = parsed.get("clarification_prompt") or "Bạn vui lòng cung cấp thêm thông tin cho nhắc nhở."
+            upsert_pending_conversation(
+                chat_id=chat_id,
+                user_id=user_id,
+                original_request=text,
+                partial_fields=parsed.get("merged_fields", {}),
+                turns=[text, prompt],
+                missing_fields=parsed.get("missing_fields", [])
             )
+            
+            keyboard = {"inline_keyboard": [[{"text": "❌ Hủy", "callback_data": "remind:cancel_conv"}]]}
+            await send_text(chat_id, prompt, inline_keyboard=keyboard)
             return True
+            
         return False
-        
-    if parsed.get("is_past", False):
-        if is_direct_req:
-            await send_text(chat_id, "Thời gian nhắc nhở không thể ở trong quá khứ.")
-            return True
-        return False
-        
-    sched = parsed.get("schedule")
-    if not sched:
-        return False
-        
-    first_fire = next_occurrence(sched, now_vietnam)
-    if not first_fire:
-        if is_direct_req:
-            await send_text(chat_id, "Lịch nhắc nhở không hợp lệ hoặc đã qua ngày kết thúc.")
-            return True
-        return False
-        
-    mtype = parsed.get("medical_type")
-    reminder_text = parsed.get("reminder_text")
-    if not mtype or not reminder_text:
-        return False
-        
-    if count_active_reminders(chat_id, user_id) >= 20:
-        if is_direct_req:
-            await send_text(chat_id, "Bạn đã đạt giới hạn tối đa 20 nhắc nhở hoạt động. Vui lòng xóa bớt nhắc nhở trước khi thêm mới.")
-            return True
-        return False
-        
-    schedule_str = json.dumps(sched)
-    if check_duplicate_active_or_pending(chat_id, user_id, mtype, reminder_text, schedule_str):
-        if is_direct_req:
-            await send_text(chat_id, "Nhắc nhở này đã tồn tại hoặc đang chờ xác nhận.")
-            return True
-        return False
-        
-    draft_id = create_reminder_draft(
-        chat_id=chat_id,
-        user_id=user_id,
-        medical_type=mtype,
-        reminder_text=reminder_text,
-        schedule=sched,
-        next_fire_at=int(first_fire.timestamp()),
-        end_date=parsed.get("end_date"),
-        source="direct" if is_direct_req else "ordinary"
-    )
-    
-    mtype_vn = "Uống thuốc" if mtype == "medication" else "Khám bệnh"
-    sched_desc = format_schedule_vietnamese(sched)
-    end_date_desc = parsed.get("end_date") or "Không có"
-    
-    confirm_msg = (
-        f"🔔 **Đề xuất tạo nhắc nhở y tế:**\n\n"
-        f"- Loại: {mtype_vn}\n"
-        f"- Nội dung: {reminder_text}\n"
-        f"- Lịch nhắc: {sched_desc}\n"
-        f"- Múi giờ: Asia/Ho_Chi_Minh\n"
-        f"- Ngày kết thúc: {end_date_desc}\n\n"
-        f"Bạn có muốn thiết lập nhắc nhở này không?"
-    )
-    
-    await send_text(chat_id, confirm_msg, inline_keyboard=_remind_draft_keyboard(draft_id))
-    return True
 
 
 async def send_checked_reminder_message(chat_id: int, text: str) -> None:

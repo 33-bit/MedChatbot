@@ -320,3 +320,88 @@ def test_parse_multi_turn_reminder(mock_call):
     assert res2["is_complete"] is True
     assert res2["merged_fields"]["schedule"]["times"] == ["11:00"]
 
+
+@pytest.mark.anyio
+async def test_telegram_multi_turn_reminders(monkeypatch):
+    from src.chat.storage.reminders import init_reminders_db, get_pending_conversation, delete_pending_conversation
+    from src.server.channels import telegram
+    
+    init_reminders_db()
+    chat_id = 99999
+    user_id = 88888
+    
+    # Clean any pending
+    delete_pending_conversation(chat_id, user_id)
+    
+    # Mock send_text and call_mini
+    sent_messages = []
+    async def mock_send_text(c_id, text, choices=None, selection_mode=None, inline_keyboard=None):
+        sent_messages.append({"text": text, "keyboard": inline_keyboard})
+        return 123
+        
+    monkeypatch.setattr(telegram, "send_text", mock_send_text)
+    
+    # Turn 1: Incomplete direct request
+    # Mock LLM for turn 1
+    mock_responses = [
+        # Response 1
+        {
+            "is_relevant_followup": True,
+            "is_canceled": False,
+            "is_direct_request": True,
+            "is_ordinary_mention": False,
+            "merged_fields": {"medical_type": "medication", "reminder_text": "uống thuốc", "schedule": None, "end_date": None},
+            "missing_fields": ["schedule"],
+            "is_complete": False,
+            "is_ambiguous": False,
+            "is_past": False,
+            "clarification_prompt": "Bạn muốn uống thuốc vào lúc mấy giờ?"
+        },
+        # Response 2
+        {
+            "is_relevant_followup": True,
+            "is_canceled": False,
+            "merged_fields": {
+                "medical_type": "medication",
+                "reminder_text": "uống thuốc",
+                "schedule": {"type": "one_time", "datetime": "2026-06-22 11:00"},
+                "end_date": None
+            },
+            "missing_fields": [],
+            "is_complete": True,
+            "is_ambiguous": False,
+            "is_past": False,
+            "clarification_prompt": None
+        }
+    ]
+    
+    def mock_call_mini(prompt, text, stage):
+        return mock_responses.pop(0)
+        
+    monkeypatch.setattr("src.chat.storage.reminder_parser.call_mini", mock_call_mini)
+    
+    # Process turn 1
+    res1 = await telegram._process_reminder_input_flow(chat_id, user_id, "Đặt lịch uống thuốc cho tôi", is_direct=True)
+    assert res1 is True
+    assert len(sent_messages) == 1
+    assert "Bạn muốn uống thuốc vào lúc mấy giờ?" in sent_messages[-1]["text"]
+    assert sent_messages[-1]["keyboard"] == {"inline_keyboard": [[{"text": "❌ Hủy", "callback_data": "remind:cancel_conv"}]]}
+    
+    # Pending conversation should exist
+    pending = get_pending_conversation(chat_id, user_id)
+    assert pending is not None
+    assert pending["original_request"] == "Đặt lịch uống thuốc cho tôi"
+    
+    # Turn 2: Follow-up completing the request
+    # Since there is a pending conversation, we intercept in _answer_and_send
+    await telegram._answer_and_send(chat_id, "Sáng mai 11h", user_id=user_id, chat_type="private")
+    
+    # Conversation should be deleted
+    assert get_pending_conversation(chat_id, user_id) is None
+    
+    # Confirmation draft should have been proposed
+    assert len(sent_messages) == 2
+    assert "Đề xuất tạo nhắc nhở y tế" in sent_messages[-1]["text"]
+    assert "Một lần vào 2026-06-22 11:00" in sent_messages[-1]["text"]
+
+
