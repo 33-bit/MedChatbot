@@ -42,9 +42,115 @@ def test_telegram_static_commands_are_distinct(monkeypatch):
         assert "Auto" in text
         assert "Thông tin" in text
         assert "Chẩn đoán" in text
-    assert "Menu các lệnh" in texts[2]
+    assert "Menu các lệnh hỗ trợ" in texts[2]
     assert "/start" not in texts[2]
     assert "/menu" not in texts[2]
+
+
+def test_telegram_menu_interaction(app_client, monkeypatch):
+    client, _ = app_client
+    sent_texts = []
+    callback_answers = []
+    deleted_messages = []
+    edited_messages = []
+
+    async def fake_send_text(chat_id, text, choices=(), selection_mode="single", inline_keyboard=None):
+        sent_texts.append((chat_id, text, inline_keyboard))
+
+    async def fake_answer_callback_query(callback_query_id, text):
+        callback_answers.append((callback_query_id, text))
+
+    async def fake_delete_message(chat_id, message_id):
+        deleted_messages.append((chat_id, message_id))
+
+    async def fake_edit_message_text(chat_id, message_id, text, inline_keyboard=None):
+        edited_messages.append((chat_id, message_id, text, inline_keyboard))
+
+    monkeypatch.setattr(telegram, "send_text", fake_send_text)
+    monkeypatch.setattr(telegram, "_answer_callback_query", fake_answer_callback_query)
+    monkeypatch.setattr(telegram, "_delete_message", fake_delete_message)
+    monkeypatch.setattr(telegram, "_edit_message_text", fake_edit_message_text)
+    monkeypatch.setattr(telegram, "TELEGRAM_WEBHOOK_SECRET", "")
+    monkeypatch.setattr(telegram, "reserve_webhook_update", lambda channel, update_id: True)
+
+    # Test /menu rendering
+    assert asyncio.run(telegram._handle_command(123, "/menu"))
+    assert len(sent_texts) == 1
+    assert "Menu các lệnh hỗ trợ" in sent_texts[0][1]
+    assert sent_texts[0][2] == telegram._menu_keyboard()
+
+    # Reset sent_texts
+    sent_texts.clear()
+
+    # 1. Test cmd:close callback
+    response = client.post(
+        "/webhook/telegram",
+        json={
+            "update_id": 200,
+            "callback_query": {
+                "id": "cb-close",
+                "data": "cmd:close",
+                "message": {"message_id": 456, "chat": {"id": 123}},
+            },
+        },
+    )
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert ("cb-close", "Đã đóng menu") in callback_answers
+    assert (123, 456) in deleted_messages
+
+    # 2. Test cmd:/help callback
+    response = client.post(
+        "/webhook/telegram",
+        json={
+            "update_id": 201,
+            "callback_query": {
+                "id": "cb-help",
+                "data": "cmd:/help",
+                "message": {"message_id": 456, "chat": {"id": 123}},
+            },
+        },
+    )
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert ("cb-help", "Đang thực hiện /help") in callback_answers
+    # Verify it triggered the /help command (which sends help text via fake_send_text)
+    assert len(sent_texts) == 1
+    assert "Cách sử dụng" in sent_texts[0][1]
+
+    # 3. Test menu:memory callback
+    response = client.post(
+        "/webhook/telegram",
+        json={
+            "update_id": 202,
+            "callback_query": {
+                "id": "cb-memory",
+                "data": "menu:memory",
+                "message": {"message_id": 456, "chat": {"id": 123}},
+            },
+        },
+    )
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert ("cb-memory", "") in callback_answers
+    assert (123, 456, "🧠 **Quản lý bộ nhớ:**", telegram._menu_memory_keyboard()) in edited_messages
+
+    # 4. Test menu:main callback
+    response = client.post(
+        "/webhook/telegram",
+        json={
+            "update_id": 203,
+            "callback_query": {
+                "id": "cb-main",
+                "data": "menu:main",
+                "message": {"message_id": 456, "chat": {"id": 123}},
+            },
+        },
+    )
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert ("cb-main", "") in callback_answers
+    assert (123, 456, "📋 **Menu các lệnh hỗ trợ:**", telegram._menu_keyboard()) in edited_messages
 
 
 def test_telegram_bot_command_menu_hides_start_and_menu_with_icons():
@@ -57,6 +163,11 @@ def test_telegram_bot_command_menu_hides_start_and_menu_with_icons():
         {"command": "balance", "description": "💳 Xem số dư"},
         {"command": "paydebt", "description": "🧾 Thanh toán công nợ"},
         {"command": "new", "description": "🔄 Xóa ngữ cảnh và bắt đầu lượt mới"},
+        {"command": "memory", "description": "🧠 Xem trạng thái bộ nhớ"},
+        {"command": "memoryon", "description": "✅ Cho phép bộ nhớ dài hạn"},
+        {"command": "memoryoff", "description": "⛔ Tắt bộ nhớ dài hạn"},
+        {"command": "forget", "description": "🗑 Quên chủ thể hiện tại"},
+        {"command": "forgetall", "description": "🗑 Xóa toàn bộ bộ nhớ"},
     ]
 
 
@@ -69,12 +180,13 @@ def test_telegram_new_command_clears_redis_session(monkeypatch):
 
     monkeypatch.setattr(telegram, "send_text", fake_send_text)
     monkeypatch.setattr(telegram, "clear_session", lambda session_id: cleared.append(session_id))
+    monkeypatch.setattr(telegram, "clear_memory_context", lambda session_id: None)
     telegram._CHAT_MODE_DEFAULTS.clear()
     telegram._CHAT_MODE_DEFAULTS["456"] = "information"
 
     assert asyncio.run(telegram._handle_command(456, "/new"))
 
-    assert cleared == ["tg:456"]
+    assert cleared == [telegram._request_identity(456, None, "private").session_key]
     assert "456" not in telegram._CHAT_MODE_DEFAULTS
     assert "xóa ngữ cảnh" in sent[0]
 
@@ -178,7 +290,7 @@ def test_telegram_answer_uses_chat_mode_default(monkeypatch):
 
     assert seen == {
         "question": "Tôi bị đau lưng",
-        "session_id": "tg:123",
+        "session_id": telegram._request_identity(123, None, "private").session_key,
         "mode": "diagnostic",
     }
     assert sent == [(123, "diagnostic reply")]
@@ -326,7 +438,7 @@ def test_telegram_answer_sends_rating_prompt_after_reply(monkeypatch):
 
     def fake_answer_with_choices(question: str, session_id: str = "default"):
         assert question == "Tôi bị ho"
-        assert session_id == "tg:123"
+        assert session_id == telegram._request_identity(123, None, "private").session_key
         return telegram.ChatReply("Bạn nên nghỉ ngơi.", ())
 
     async def fake_send_text(chat_id: int | str, text: str, choices=None, selection_mode="single") -> None:
@@ -363,9 +475,9 @@ def test_telegram_answer_sends_rating_prompt_after_reply(monkeypatch):
     assert sent == [(123, "Bạn nên nghỉ ngơi.")]
     assert feedback_requests == [
         {
-            "session_id": "tg:123",
+            "session_id": telegram._request_identity(123, None, "private").session_key,
             "channel": "telegram",
-            "recipient_id": "123",
+                "recipient_id": telegram._request_identity(123, None, "private").session_key,
             "question": "Tôi bị ho",
             "answer": "Bạn nên nghỉ ngơi.",
         }
@@ -379,7 +491,7 @@ def test_telegram_answer_sends_reply_keyboard_for_choices(monkeypatch):
 
     def fake_answer_with_choices(question: str, session_id: str = "default"):
         assert question == "Tôi bị đau bụng"
-        assert session_id == "tg:123"
+        assert session_id == telegram._request_identity(123, None, "private").session_key
         return telegram.ChatReply("Bạn cho tôi biết thêm nhé.", ("Đau nhẹ/vừa", "Đau dữ dội"))
 
     async def fake_send_text(chat_id: int | str, text: str, choices=None, selection_mode="single") -> None:
@@ -407,7 +519,7 @@ def test_telegram_answer_now_removes_reply_keyboard_before_generating(monkeypatc
 
     def fake_answer_with_choices(question: str, session_id: str = "default"):
         assert question == telegram.ANSWER_NOW_CHOICE
-        assert session_id == "tg:123"
+        assert session_id == telegram._request_identity(123, None, "private").session_key
         return telegram.ChatReply("Câu trả lời cuối.", ())
 
     async def fake_send_text(chat_id: int | str, text: str, choices=None, selection_mode="single") -> None:
@@ -1537,33 +1649,3 @@ def test_banned_user_can_still_use_paydebt_command(monkeypatch):
     assert asyncio.run(telegram._handle_command(778, "/paydebt", chat_type="private", user_id=778))
     # Payoff = 10,000 + 10% = 11,000.
     assert any("11,000" in t for t in sent)
-
-
-def test_telegram_menu_interaction(monkeypatch):
-    sent_texts = []
-    callback_answers = []
-    deleted_messages = []
-    edited_messages = []
-
-    async def fake_send_text(chat_id, text, choices=(), selection_mode="single", inline_keyboard=None):
-        sent_texts.append((chat_id, text, inline_keyboard))
-
-    async def fake_answer_callback_query(callback_query_id, text):
-        callback_answers.append((callback_query_id, text))
-
-    async def fake_delete_message(chat_id, message_id):
-        deleted_messages.append((chat_id, message_id))
-
-    async def fake_edit_message_text(chat_id, message_id, text, inline_keyboard=None):
-        edited_messages.append((chat_id, message_id, text, inline_keyboard))
-
-    monkeypatch.setattr(telegram, "send_text", fake_send_text)
-    monkeypatch.setattr(telegram, "_answer_callback_query", fake_answer_callback_query)
-    monkeypatch.setattr(telegram, "_delete_message", fake_delete_message)
-    monkeypatch.setattr(telegram, "_edit_message_text", fake_edit_message_text)
-
-    # Test /menu rendering
-    assert asyncio.run(telegram._handle_command(123, "/menu"))
-    assert len(sent_texts) == 1
-    assert "Menu các lệnh hỗ trợ" in sent_texts[0][1]
-    assert sent_texts[0][2] == telegram._menu_keyboard()

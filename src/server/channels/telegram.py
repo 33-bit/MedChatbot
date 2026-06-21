@@ -26,8 +26,18 @@ from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 from src.chat import answer_with_choices
 from src.chat.mode_policy import mode_label, normalize_mode
 from src.chat.replies import ChatReply, TECHNICAL_ERROR_REPLY
+from src.chat.security.identity import derive_previous_owner_keys, derive_request_identity
+from src.chat.storage.durable_memory import (
+    delete_all_memory,
+    delete_subject_memory,
+    list_memory_facts,
+    list_subjects,
+    migrate_owner_key,
+    set_memory_preference,
+)
 from src.chat.storage.feedback import create_feedback_request, record_feedback_rating
 from src.chat.storage.session import clear_session, reserve_webhook_update
+from src.chat.storage.redis_memory import clear_memory_context, load_memory_context
 from src.chat.storage.wallet import (
     apply_payment,
     create_order,
@@ -63,6 +73,11 @@ BOT_COMMANDS = [
     {"command": "balance", "description": "💳 Xem số dư"},
     {"command": "paydebt", "description": "🧾 Thanh toán công nợ"},
     {"command": "new", "description": "🔄 Xóa ngữ cảnh và bắt đầu lượt mới"},
+    {"command": "memory", "description": "🧠 Xem trạng thái bộ nhớ"},
+    {"command": "memoryon", "description": "✅ Cho phép bộ nhớ dài hạn"},
+    {"command": "memoryoff", "description": "⛔ Tắt bộ nhớ dài hạn"},
+    {"command": "forget", "description": "🗑 Quên chủ thể hiện tại"},
+    {"command": "forgetall", "description": "🗑 Xóa toàn bộ bộ nhớ"},
 ]
 START_TEXT = """Xin chào! Tôi là trợ lý y tế.
 
@@ -170,7 +185,7 @@ async def setup_bot_menu() -> None:
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(_api_url("setMyCommands"), json={"commands": BOT_COMMANDS})
     if r.status_code >= 400:
-        logger.warning("Telegram setMyCommands failed → %s %s", r.status_code, r.text[:300])
+        logger.warning("Telegram setMyCommands failed status=%s", r.status_code)
     else:
         logger.info("Telegram command menu configured.")
 
@@ -185,7 +200,7 @@ async def _send_typing_action(chat_id: int | str) -> None:
     }
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(_api_url("sendChatAction"), json=payload)
-    logger.info("Telegram typing action → %s %s", r.status_code, r.text[:200])
+    logger.info("Telegram typing action status=%s", r.status_code)
 
 
 async def _keep_typing(chat_id: int | str, stop: asyncio.Event) -> None:
@@ -422,7 +437,7 @@ async def send_text(
             r = await client.post(_send_url(), json=payload)
             if multi_token and r.status_code < 400:
                 _MULTI_SELECTS[multi_token] = MultiSelectState(tuple(choices))
-            logger.info("Telegram send → %s %s", r.status_code, r.text[:200])
+            logger.info("Telegram send status=%s", r.status_code)
             logger.info("Telegram timing stage=send_chunk chunk=%d/%d ms=%.1f status=%s chars=%d",
                         idx, len(chunks), _elapsed_ms(chunk_start), r.status_code, len(chunk))
             if r.status_code >= 400:
@@ -444,7 +459,7 @@ async def _send_answer_now_ack(chat_id: int | str) -> int | None:
     }
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(_send_url(), json=payload)
-    logger.info("Telegram answer-now ack → %s %s", r.status_code, r.text[:200])
+    logger.info("Telegram answer-now ack status=%s", r.status_code)
     if r.status_code >= 400:
         return None
     try:
@@ -463,7 +478,7 @@ async def send_photo(chat_id: int | str, photo_file_id: str, caption: str = "") 
         payload["parse_mode"] = "HTML"
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(_api_url("sendPhoto"), json=payload)
-    logger.info("Telegram sendPhoto(file_id) → %s %s", r.status_code, r.text[:200])
+    logger.info("Telegram sendPhoto(file_id) status=%s", r.status_code)
 
 
 async def send_voice(chat_id: int | str, voice_file_id: str) -> None:
@@ -473,7 +488,7 @@ async def send_voice(chat_id: int | str, voice_file_id: str) -> None:
     payload = {"chat_id": chat_id, "voice": voice_file_id}
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(_api_url("sendVoice"), json=payload)
-    logger.info("Telegram sendVoice → %s %s", r.status_code, r.text[:200])
+    logger.info("Telegram sendVoice status=%s", r.status_code)
 
 
 async def copy_message(chat_id: int | str, from_chat_id: int | str, message_id: int | str) -> None:
@@ -487,7 +502,7 @@ async def copy_message(chat_id: int | str, from_chat_id: int | str, message_id: 
     }
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(_api_url("copyMessage"), json=payload)
-    logger.info("Telegram copyMessage → %s %s", r.status_code, r.text[:200])
+    logger.info("Telegram copyMessage status=%s", r.status_code)
     if r.status_code >= 400:
         raise RuntimeError(f"Telegram copyMessage failed: {r.status_code}")
 
@@ -527,7 +542,7 @@ async def _send_rating_prompt(chat_id: int | str, token: str) -> None:
     }
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(_send_url(), json=payload)
-    logger.info("Telegram rating prompt → %s %s", r.status_code, r.text[:200])
+    logger.info("Telegram rating prompt status=%s", r.status_code)
 
 
 async def _answer_callback_query(callback_query_id: str, text: str) -> None:
@@ -542,7 +557,7 @@ async def _answer_callback_query(callback_query_id: str, text: str) -> None:
     }
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(_api_url("answerCallbackQuery"), json=payload)
-    logger.info("Telegram callback answer → %s %s", r.status_code, r.text[:200])
+    logger.info("Telegram callback answer status=%s", r.status_code)
 
 
 async def _edit_message_reply_markup(
@@ -560,7 +575,7 @@ async def _edit_message_reply_markup(
     }
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(_api_url("editMessageReplyMarkup"), json=payload)
-    logger.info("Telegram edit reply_markup → %s %s", r.status_code, r.text[:200])
+    logger.info("Telegram edit reply_markup status=%s", r.status_code)
 
 
 async def _edit_message_text(
@@ -582,7 +597,7 @@ async def _edit_message_text(
         payload["reply_markup"] = inline_keyboard
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(_api_url("editMessageText"), json=payload)
-    logger.info("Telegram edit text → %s %s", r.status_code, r.text[:200])
+    logger.info("Telegram edit text status=%s", r.status_code)
 
 
 def _parse_multi_select_callback(data: str) -> tuple[str, str] | None:
@@ -645,7 +660,19 @@ async def _handle_mode_retry_callback(
     if callback_query_id:
         await _answer_callback_query(str(callback_query_id), f"Đang trả lời ở chế độ {label}.")
     await send_text(chat_id, f"Trả lời ở chế độ {label}: {state.question}")
-    background_tasks.add_task(_answer_and_send, chat_id, state.question, state.mode)
+    callback_user_id = (callback_query.get("from") or {}).get("id")
+    chat_type = (message.get("chat") or {}).get("type", "private")
+    if callback_user_id is None and chat_type == "private":
+        background_tasks.add_task(_answer_and_send, chat_id, state.question, state.mode)
+    else:
+        background_tasks.add_task(
+            _answer_and_send,
+            chat_id,
+            state.question,
+            state.mode,
+            callback_user_id,
+            chat_type,
+        )
     return True
 
 
@@ -685,7 +712,19 @@ async def _handle_multi_select_callback(
         if callback_query_id:
             await _answer_callback_query(str(callback_query_id), "Đã chọn.")
         await send_text(chat_id, _selection_confirmation_text(selected_text))
-        background_tasks.add_task(_answer_and_send, chat_id, selected_text)
+        callback_user_id = (callback_query.get("from") or {}).get("id")
+        chat_type = (message.get("chat") or {}).get("type", "private")
+        if callback_user_id is None and chat_type == "private":
+            background_tasks.add_task(_answer_and_send, chat_id, selected_text)
+        else:
+            background_tasks.add_task(
+                _answer_and_send,
+                chat_id,
+                selected_text,
+                None,
+                callback_user_id,
+                chat_type,
+            )
         return True
 
     try:
@@ -702,7 +741,19 @@ async def _handle_multi_select_callback(
         if callback_query_id:
             await _answer_callback_query(str(callback_query_id), "Đã chọn.")
         await send_text(chat_id, _selection_confirmation_text(choice))
-        background_tasks.add_task(_answer_and_send, chat_id, choice)
+        callback_user_id = (callback_query.get("from") or {}).get("id")
+        chat_type = (message.get("chat") or {}).get("type", "private")
+        if callback_user_id is None and chat_type == "private":
+            background_tasks.add_task(_answer_and_send, chat_id, choice)
+        else:
+            background_tasks.add_task(
+                _answer_and_send,
+                chat_id,
+                choice,
+                None,
+                callback_user_id,
+                chat_type,
+            )
         return True
 
     if index in state.selected:
@@ -729,7 +780,7 @@ async def _delete_rating_message(chat_id: int | str, message_id: int) -> None:
     }
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(_api_url("deleteMessage"), json=payload)
-    logger.info("Telegram rating message deletion → %s %s", r.status_code, r.text[:200])
+    logger.info("Telegram rating message deletion status=%s", r.status_code)
 
 
 async def _handle_rating_callback(callback_query: dict) -> bool:
@@ -750,9 +801,41 @@ async def _handle_rating_callback(callback_query: dict) -> bool:
     return True
 
 
-async def _answer_and_send(chat_id: int | str, text: str, mode: str | None = None) -> None:
+def _request_identity(
+    chat_id: int | str,
+    user_id: int | str | None,
+    chat_type: str,
+):
+    external_session_id = (
+        f"{chat_id}:{user_id}" if chat_type != "private" else str(chat_id)
+    )
+    identity = derive_request_identity(
+        "telegram",
+        user_id,
+        external_session_id,
+    )
+    if identity.owner_key and user_id is not None:
+        try:
+            migrate_owner_key(
+                identity.owner_key,
+                derive_previous_owner_keys("telegram", user_id),
+            )
+        except Exception:
+            logger.exception("Telegram owner-key rotation failed")
+            return type(identity)("", identity.session_key, False)
+    return identity
+
+
+async def _answer_and_send(
+    chat_id: int | str,
+    text: str,
+    mode: str | None = None,
+    user_id: int | str | None = None,
+    chat_type: str = "private",
+) -> None:
     total_start = time.perf_counter()
-    session_id = f"tg:{chat_id}"
+    identity = _request_identity(chat_id, user_id, chat_type)
+    session_id = identity.session_key
     answer_mode = normalize_mode(mode or _CHAT_MODE_DEFAULTS.get(str(chat_id)))
     stop_typing = asyncio.Event()
     typing_task = asyncio.create_task(_keep_typing(chat_id, stop_typing))
@@ -763,14 +846,21 @@ async def _answer_and_send(chat_id: int | str, text: str, mode: str | None = Non
                 answer_now_ack_message_id = await _send_answer_now_ack(chat_id)
             except Exception:
                 logger.exception("Telegram answer-now keyboard removal failed")
+        answer_kwargs = {"session_id": session_id}
+        if identity.owner_key:
+            answer_kwargs["owner_id"] = identity.owner_key
         if answer_mode == "auto":
-            reply = await asyncio.to_thread(answer_with_choices, text, session_id=session_id)
+            reply = await asyncio.to_thread(
+                answer_with_choices,
+                text,
+                **answer_kwargs,
+            )
         else:
             reply = await asyncio.to_thread(
                 answer_with_choices,
                 text,
-                session_id=session_id,
                 mode=answer_mode,
+                **answer_kwargs,
             )
     except Exception:
         logger.exception("Telegram answer failed")
@@ -819,7 +909,13 @@ async def _answer_and_send(chat_id: int | str, text: str, mode: str | None = Non
                 logger.exception("Telegram answer-now ack deletion failed")
         if not reply.choices and not reply.suggest_mode:
             try:
-                token = create_feedback_request(session_id, "telegram", str(chat_id), text, reply.text)
+                token = create_feedback_request(
+                    session_id,
+                    "telegram",
+                    session_id,
+                    text,
+                    reply.text,
+                )
                 await _send_rating_prompt(chat_id, token)
             except Exception:
                 logger.exception("Telegram rating prompt failed")
@@ -892,7 +988,7 @@ async def _delete_message(chat_id: int | str, message_id: int) -> None:
     payload = {"chat_id": chat_id, "message_id": message_id}
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(_api_url("deleteMessage"), json=payload)
-    logger.info("Telegram deleteMessage → %s %s", r.status_code, r.text[:200])
+    logger.info("Telegram deleteMessage status=%s", r.status_code)
 
 
 async def _delete_order_qr(order: dict) -> None:
@@ -932,7 +1028,7 @@ async def _send_topup_qr(
         payload["reply_markup"] = inline_keyboard
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(_api_url("sendPhoto"), json=payload)
-    logger.info("Telegram sendPhoto → %s %s", r.status_code, r.text[:200])
+    logger.info("Telegram sendPhoto status=%s", r.status_code)
     try:
         return r.json().get("result", {}).get("message_id")
     except Exception:
@@ -1172,6 +1268,7 @@ async def _handle_command(
     user_id: int | None = None,
 ) -> bool:
     cmd = _command(text)
+    identity = _request_identity(chat_id, user_id, chat_type)
     if cmd == "/start":
         await send_text(chat_id, START_TEXT)
         return True
@@ -1239,9 +1336,51 @@ async def _handle_command(
         await send_text(chat_id, "Bạn không có phiên tư vấn bác sĩ đang hoạt động.")
         return True
     if cmd == "/new":
-        clear_session(f"tg:{chat_id}")
+        clear_session(identity.session_key)
+        clear_memory_context(identity.session_key)
         _CHAT_MODE_DEFAULTS.pop(str(chat_id), None)
         await send_text(chat_id, "Tôi đã xóa ngữ cảnh hội thoại hiện tại. Bạn có thể bắt đầu câu hỏi mới.")
+        return True
+    if cmd == "/memory":
+        if not identity.owner_key:
+            await send_text(chat_id, "Bộ nhớ dài hạn không khả dụng vì chưa xác định được danh tính an toàn.")
+            return True
+        subjects = list_subjects(identity.owner_key)
+        facts = list_memory_facts(identity.owner_key)
+        await send_text(
+            chat_id,
+            f"Bộ nhớ dài hạn hiện có {len(facts)} thông tin cho {len(subjects)} chủ thể.",
+        )
+        return True
+    if cmd == "/memoryon":
+        if not identity.owner_key:
+            await send_text(chat_id, "Không thể bật bộ nhớ dài hạn cho cuộc trò chuyện này.")
+            return True
+        set_memory_preference(identity.owner_key, True)
+        await send_text(chat_id, "Đã bật bộ nhớ dài hạn. Thông tin y tế vẫn là dữ liệu nhạy cảm.")
+        return True
+    if cmd == "/memoryoff":
+        if identity.owner_key:
+            set_memory_preference(identity.owner_key, False)
+        await send_text(chat_id, "Đã tắt đọc và ghi bộ nhớ dài hạn. Dữ liệu cũ chưa bị xóa.")
+        return True
+    if cmd == "/forget":
+        if not identity.owner_key:
+            await send_text(chat_id, "Không có bộ nhớ dài hạn để xóa.")
+            return True
+        state, _, _ = load_memory_context(identity.session_key, identity.owner_key)
+        if not state.active_subject_id:
+            await send_text(chat_id, "Chưa có chủ thể y tế hiện tại để quên.")
+            return True
+        delete_subject_memory(identity.owner_key, state.active_subject_id)
+        await send_text(chat_id, "Đã xóa bộ nhớ dài hạn của chủ thể hiện tại.")
+        return True
+    if cmd == "/forgetall":
+        if identity.owner_key:
+            delete_all_memory(identity.owner_key)
+        clear_session(identity.session_key)
+        clear_memory_context(identity.session_key)
+        await send_text(chat_id, "Đã xóa toàn bộ bộ nhớ dài hạn và ngữ cảnh hội thoại.")
         return True
     return False
 
@@ -1258,7 +1397,7 @@ async def telegram_webhook(
     update = await request.json()
     update_id = update.get("update_id")
     if update_id is not None and not reserve_webhook_update("telegram", update_id):
-        logger.info("Duplicate Telegram update ignored: %s", update_id)
+        logger.info("Duplicate Telegram update ignored")
         return {"ok": True}
 
     callback_query = update.get("callback_query") or {}
@@ -1268,37 +1407,40 @@ async def telegram_webhook(
         chat_id = (message.get("chat") or {}).get("id")
         message_id = message.get("message_id")
         user_id = (callback_query.get("from") or {}).get("id")
+        cb_id = callback_query.get("id")
 
-        if data == "cmd:close" and chat_id and message_id:
-            await _answer_callback_query(callback_query["id"], "Đã đóng menu")
-            await _delete_message(chat_id, message_id)
-            return {"ok": True}
+        if cb_id:
+            if data == "cmd:close":
+                await _answer_callback_query(cb_id, "Đã đóng menu")
+                if chat_id and message_id:
+                    await _delete_message(chat_id, message_id)
+                return {"ok": True}
 
-        if data.startswith("cmd:") and chat_id:
-            cmd_text = data[len("cmd:"):]
-            await _answer_callback_query(callback_query["id"], f"Đang thực hiện {cmd_text}")
-            await _handle_command(chat_id, cmd_text, "private", user_id)
-            return {"ok": True}
+            if data.startswith("cmd:") and chat_id:
+                cmd_text = data[len("cmd:"):]
+                await _answer_callback_query(cb_id, f"Đang thực hiện {cmd_text}")
+                await _handle_command(chat_id, cmd_text, "private", user_id)
+                return {"ok": True}
 
-        if data == "menu:memory" and chat_id and message_id:
-            await _answer_callback_query(callback_query["id"], "")
-            await _edit_message_text(
-                chat_id,
-                message_id,
-                "🧠 **Quản lý bộ nhớ:**",
-                inline_keyboard=_menu_memory_keyboard(),
-            )
-            return {"ok": True}
+            if data == "menu:memory" and chat_id and message_id:
+                await _answer_callback_query(cb_id, "")
+                await _edit_message_text(
+                    chat_id,
+                    message_id,
+                    "🧠 **Quản lý bộ nhớ:**",
+                    inline_keyboard=_menu_memory_keyboard(),
+                )
+                return {"ok": True}
 
-        if data == "menu:main" and chat_id and message_id:
-            await _answer_callback_query(callback_query["id"], "")
-            await _edit_message_text(
-                chat_id,
-                message_id,
-                "📋 **Menu các lệnh hỗ trợ:**",
-                inline_keyboard=_menu_keyboard(),
-            )
-            return {"ok": True}
+            if data == "menu:main" and chat_id and message_id:
+                await _answer_callback_query(cb_id, "")
+                await _edit_message_text(
+                    chat_id,
+                    message_id,
+                    "📋 **Menu các lệnh hỗ trợ:**",
+                    inline_keyboard=_menu_keyboard(),
+                )
+                return {"ok": True}
 
         if await _handle_mode_retry_callback(callback_query, background_tasks):
             return {"ok": True}
@@ -1351,5 +1493,15 @@ async def telegram_webhook(
         background_tasks.add_task(_handle_pending_topup_amount, chat_id, text)
         return {"ok": True}
 
-    background_tasks.add_task(_answer_and_send, chat_id, _strip_choice_icon(text))
+    if user_id is None and chat_type == "private":
+        background_tasks.add_task(_answer_and_send, chat_id, _strip_choice_icon(text))
+    else:
+        background_tasks.add_task(
+            _answer_and_send,
+            chat_id,
+            _strip_choice_icon(text),
+            None,
+            user_id,
+            chat_type,
+        )
     return {"ok": True}
