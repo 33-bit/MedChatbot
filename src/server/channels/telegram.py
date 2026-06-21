@@ -1263,6 +1263,43 @@ async def telegram_webhook(
 
     callback_query = update.get("callback_query") or {}
     if callback_query:
+        data = callback_query.get("data") or ""
+        message = callback_query.get("message") or {}
+        chat_id = (message.get("chat") or {}).get("id")
+        message_id = message.get("message_id")
+        user_id = (callback_query.get("from") or {}).get("id")
+
+        if data == "cmd:close" and chat_id and message_id:
+            await _answer_callback_query(callback_query["id"], "Đã đóng menu")
+            await _delete_message(chat_id, message_id)
+            return {"ok": True}
+
+        if data.startswith("cmd:") and chat_id:
+            cmd_text = data[len("cmd:"):]
+            await _answer_callback_query(callback_query["id"], f"Đang thực hiện {cmd_text}")
+            await _handle_command(chat_id, cmd_text, "private", user_id)
+            return {"ok": True}
+
+        if data == "menu:memory" and chat_id and message_id:
+            await _answer_callback_query(callback_query["id"], "")
+            await _edit_message_text(
+                chat_id,
+                message_id,
+                "🧠 **Quản lý bộ nhớ:**",
+                inline_keyboard=_menu_memory_keyboard(),
+            )
+            return {"ok": True}
+
+        if data == "menu:main" and chat_id and message_id:
+            await _answer_callback_query(callback_query["id"], "")
+            await _edit_message_text(
+                chat_id,
+                message_id,
+                "📋 **Menu các lệnh hỗ trợ:**",
+                inline_keyboard=_menu_keyboard(),
+            )
+            return {"ok": True}
+
         if await _handle_mode_retry_callback(callback_query, background_tasks):
             return {"ok": True}
         if await _handle_mode_callback(callback_query):
