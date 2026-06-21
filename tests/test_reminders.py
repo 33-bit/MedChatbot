@@ -2,7 +2,7 @@ import datetime
 from zoneinfo import ZoneInfo
 import time
 import json
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, MagicMock
 import pytest
 import httpx
 from src.chat.storage.recurrence import next_occurrence, TZ
@@ -403,5 +403,145 @@ async def test_telegram_multi_turn_reminders(monkeypatch):
     assert len(sent_messages) == 2
     assert "Đề xuất tạo nhắc nhở y tế" in sent_messages[-1]["text"]
     assert "Một lần vào 2026-06-22 11:00" in sent_messages[-1]["text"]
+
+
+@pytest.mark.anyio
+async def test_pending_conv_unrelated_question(monkeypatch):
+    from src.chat.storage.reminders import init_reminders_db, get_pending_conversation, upsert_pending_conversation
+    from src.server.channels import telegram
+    
+    init_reminders_db()
+    chat_id = 77777
+    user_id = 66666
+    
+    upsert_pending_conversation(
+        chat_id=chat_id,
+        user_id=user_id,
+        original_request="Đặt lịch uống thuốc",
+        partial_fields={"medical_type": "medication"},
+        turns=["Đặt lịch uống thuốc"],
+        missing_fields=["schedule"]
+    )
+    
+    mock_parser_response = {
+        "is_relevant_followup": False,
+        "is_canceled": False,
+        "is_direct_request": False,
+        "is_ordinary_mention": False,
+        "merged_fields": {},
+        "missing_fields": [],
+        "is_complete": False,
+        "is_ambiguous": False,
+        "is_past": False,
+        "clarification_prompt": None
+    }
+    monkeypatch.setattr("src.chat.storage.reminder_parser.call_mini", lambda *args, **kwargs: mock_parser_response)
+    
+    from src.server.channels.telegram import ChatReply
+    monkeypatch.setattr("src.server.channels.telegram.answer_with_choices", lambda *args, **kwargs: ChatReply("Bác sĩ Chatbot xin chào!"))
+    
+    sent_messages = []
+    async def mock_send_text(c_id, text, choices=None, selection_mode=None, inline_keyboard=None):
+        sent_messages.append(text)
+        return 123
+    monkeypatch.setattr(telegram, "send_text", mock_send_text)
+    
+    await telegram._answer_and_send(chat_id, "Tôi bị ho và đau họng", user_id=user_id, chat_type="private")
+    
+    assert any("Bác sĩ Chatbot" in msg for msg in sent_messages)
+    
+    pending = get_pending_conversation(chat_id, user_id)
+    assert pending is not None
+    assert pending["original_request"] == "Đặt lịch uống thuốc"
+
+
+@pytest.mark.anyio
+async def test_pending_conv_cancel(monkeypatch):
+    from src.chat.storage.reminders import init_reminders_db, get_pending_conversation, upsert_pending_conversation
+    from src.server.channels import telegram
+    
+    init_reminders_db()
+    monkeypatch.setattr(telegram, "TELEGRAM_WEBHOOK_SECRET", None)
+    chat_id = 55555
+    user_id = 44444
+    
+    upsert_pending_conversation(
+        chat_id=chat_id,
+        user_id=user_id,
+        original_request="Đặt lịch uống thuốc",
+        partial_fields={"medical_type": "medication"},
+        turns=["Đặt lịch uống thuốc"],
+        missing_fields=["schedule"]
+    )
+    
+    monkeypatch.setattr(telegram, "send_text", AsyncMock(return_value=123))
+    
+    res = await telegram._handle_command(chat_id, "/cancel", chat_type="private", user_id=user_id)
+    assert res is True
+    
+    assert get_pending_conversation(chat_id, user_id) is None
+    
+    upsert_pending_conversation(
+        chat_id=chat_id,
+        user_id=user_id,
+        original_request="Đặt lịch uống thuốc",
+        partial_fields={"medical_type": "medication"},
+        turns=["Đặt lịch uống thuốc"],
+        missing_fields=["schedule"]
+    )
+    
+    payload = {
+        "callback_query": {
+            "id": "cb_cancel",
+            "data": "remind:cancel_conv",
+            "from": {"id": user_id},
+            "message": {
+                "chat": {"id": chat_id},
+                "message_id": 999
+            }
+        }
+    }
+    
+    request = MagicMock()
+    request.json = AsyncMock(return_value=payload)
+    
+    mock_answer = AsyncMock()
+    mock_edit = AsyncMock()
+    monkeypatch.setattr(telegram, "_answer_callback_query", mock_answer)
+    monkeypatch.setattr(telegram, "_edit_message_text", mock_edit)
+    monkeypatch.setattr(telegram, "reserve_webhook_update", lambda *args: True)
+    
+    from fastapi import BackgroundTasks
+    bg_tasks = BackgroundTasks()
+    
+    await telegram.telegram_webhook(request, bg_tasks)
+    
+    assert get_pending_conversation(chat_id, user_id) is None
+    mock_answer.assert_called_once_with("cb_cancel", "Đã hủy thiết lập.")
+    mock_edit.assert_called_once_with(chat_id, 999, "❌ Đã hủy thiết lập nhắc nhở.")
+
+
+def test_expiration_cleanup():
+    from src.chat.storage.reminders import (
+        init_reminders_db, get_pending_conversation, upsert_pending_conversation, cleanup_expired_drafts
+    )
+    init_reminders_db()
+    chat_id = 33333
+    user_id = 22222
+    
+    upsert_pending_conversation(
+        chat_id=chat_id,
+        user_id=user_id,
+        original_request="Đặt lịch uống thuốc",
+        partial_fields={"medical_type": "medication"},
+        turns=["Đặt lịch uống thuốc"],
+        missing_fields=["schedule"],
+        expires_at=int(time.time()) - 100
+    )
+    
+    cleanup_expired_drafts()
+    
+    assert get_pending_conversation(chat_id, user_id) is None
+
 
 

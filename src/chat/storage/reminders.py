@@ -62,7 +62,9 @@ def cleanup_expired_drafts() -> None:
     with _REMINDERS_LOCK:
         conn = get_sqlite()
         conn.execute("DELETE FROM telegram_reminder_drafts WHERE expires_at < ?", (now,))
+        conn.execute("DELETE FROM telegram_reminder_conversations WHERE expires_at < ?", (now,))
         conn.commit()
+
 
 def create_reminder_draft(
     chat_id: int,
@@ -329,18 +331,20 @@ def get_pending_conversation(chat_id: int, user_id: int) -> dict | None:
     now = int(time.time())
     with _REMINDERS_LOCK:
         conn = get_sqlite()
-        conn.execute(
-            "DELETE FROM telegram_reminder_conversations WHERE chat_id = ? AND user_id = ? AND expires_at < ?",
-            (chat_id, user_id, now)
-        )
-        conn.commit()
-        
         row = conn.execute(
             "SELECT chat_id, user_id, original_request, partial_fields_json, turns_json, missing_fields_json, expires_at "
             "FROM telegram_reminder_conversations WHERE chat_id = ? AND user_id = ?",
             (chat_id, user_id)
         ).fetchone()
         if not row:
+            return None
+        expires_at = row[6]
+        if expires_at < now:
+            conn.execute(
+                "DELETE FROM telegram_reminder_conversations WHERE chat_id = ? AND user_id = ?",
+                (chat_id, user_id)
+            )
+            conn.commit()
             return None
         return {
             "chat_id": row[0],
@@ -349,7 +353,7 @@ def get_pending_conversation(chat_id: int, user_id: int) -> dict | None:
             "partial_fields": json.loads(row[3]),
             "turns": json.loads(row[4]),
             "missing_fields": json.loads(row[5]),
-            "expires_at": row[6]
+            "expires_at": expires_at
         }
 
 

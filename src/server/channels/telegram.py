@@ -886,13 +886,14 @@ async def _answer_and_send(
 
     is_direct_remind = False
     is_ordinary_remind = False
+    parsed_remind = None
 
     if chat_type == "private" and user_id is not None:
         from src.chat.storage.reminders import init_reminders_db, get_pending_conversation
-        init_reminders_db()
+        await asyncio.to_thread(init_reminders_db)
         from src.chat.storage.recurrence import TZ
         
-        pending = get_pending_conversation(int(chat_id), int(user_id))
+        pending = await asyncio.to_thread(get_pending_conversation, int(chat_id), int(user_id))
         if pending:
             stop_typing = asyncio.Event()
             typing_task = asyncio.create_task(_keep_typing(chat_id, stop_typing))
@@ -906,18 +907,20 @@ async def _answer_and_send(
                 with contextlib.suppress(asyncio.CancelledError):
                     await typing_task
 
-        from src.chat.storage.reminder_parser import parse_reminder_natural_language, check_reminder_prefilter
+        from src.chat.storage.reminder_parser import parse_multi_turn_reminder, check_reminder_prefilter
         if check_reminder_prefilter(text):
-            parsed = parse_reminder_natural_language(text, datetime.datetime.now(TZ))
-            if parsed:
-                is_direct_remind = parsed.get("is_direct_request", False)
-                is_ordinary_remind = parsed.get("is_ordinary_mention", False)
+            parsed_remind = parse_multi_turn_reminder(text, datetime.datetime.now(TZ), prior_context=None)
+            if parsed_remind:
+                is_direct_remind = parsed_remind.get("is_direct_request", False)
+                is_ordinary_remind = parsed_remind.get("is_ordinary_mention", False)
                 
                 if is_direct_remind:
                     stop_typing = asyncio.Event()
                     typing_task = asyncio.create_task(_keep_typing(chat_id, stop_typing))
                     try:
-                        await _process_reminder_input_flow(chat_id, int(user_id), text, is_direct=True)
+                        await _process_reminder_input_flow(
+                            chat_id, int(user_id), text, is_direct=True, parsed_reminder=parsed_remind
+                        )
                     finally:
                         stop_typing.set()
                         typing_task.cancel()
@@ -1019,7 +1022,9 @@ async def _answer_and_send(
 
         if is_ordinary_remind and user_id is not None:
             try:
-                await _process_reminder_input_flow(chat_id, int(user_id), text, is_direct=False)
+                await _process_reminder_input_flow(
+                    chat_id, int(user_id), text, is_direct=False, parsed_reminder=parsed_remind
+                )
             except Exception:
                 logger.exception("Telegram ordinary reminder proposal failed")
 
@@ -1428,9 +1433,9 @@ async def _handle_command(
             return True
         from src.chat.storage.reminders import get_pending_conversation, delete_pending_conversation
         if user_id is not None:
-            pending = get_pending_conversation(chat_id, user_id)
+            pending = await asyncio.to_thread(get_pending_conversation, chat_id, user_id)
             if pending:
-                delete_pending_conversation(chat_id, user_id)
+                await asyncio.to_thread(delete_pending_conversation, chat_id, user_id)
                 await send_text(chat_id, "❌ Đã hủy thiết lập nhắc nhở.")
                 return True
         await send_text(chat_id, "Không có thiết lập nhắc nhở nào đang chờ.")
@@ -1598,7 +1603,7 @@ async def telegram_webhook(
                 if data.startswith(REMIND_PREFIX_CONFIRM):
                     draft_id = int(data[len(REMIND_PREFIX_CONFIRM):])
                     from src.chat.storage.reminders import confirm_reminder_draft
-                    reminder = confirm_reminder_draft(chat_id, user_id, draft_id)
+                    reminder = await asyncio.to_thread(confirm_reminder_draft, chat_id, user_id, draft_id)
                     if reminder:
                         await _answer_callback_query(cb_id, "Đã xác nhận thành công!")
                         if message_id:
@@ -1611,7 +1616,7 @@ async def telegram_webhook(
 
                 if data == "remind:cancel_conv":
                     from src.chat.storage.reminders import delete_pending_conversation
-                    delete_pending_conversation(chat_id, user_id)
+                    await asyncio.to_thread(delete_pending_conversation, chat_id, user_id)
                     await _answer_callback_query(cb_id, "Đã hủy thiết lập.")
                     if message_id:
                         await _edit_message_text(chat_id, message_id, "❌ Đã hủy thiết lập nhắc nhở.")
@@ -1620,7 +1625,7 @@ async def telegram_webhook(
                 if data.startswith(REMIND_PREFIX_CANCEL):
                     draft_id = int(data[len(REMIND_PREFIX_CANCEL):])
                     from src.chat.storage.reminders import delete_reminder_draft
-                    delete_reminder_draft(draft_id)
+                    await asyncio.to_thread(delete_reminder_draft, draft_id)
                     await _answer_callback_query(cb_id, "Đã hủy thiết lập.")
                     if message_id:
                         await _edit_message_text(chat_id, message_id, "❌ Đã hủy thiết lập nhắc nhở.")
@@ -1636,7 +1641,7 @@ async def telegram_webhook(
                 if data.startswith(REMIND_PREFIX_REMOVE_CONFIRM):
                     reminder_id = int(data[len(REMIND_PREFIX_REMOVE_CONFIRM):])
                     from src.chat.storage.reminders import delete_reminder
-                    deleted = delete_reminder(chat_id, user_id, reminder_id)
+                    deleted = await asyncio.to_thread(delete_reminder, chat_id, user_id, reminder_id)
                     if deleted:
                         await _answer_callback_query(cb_id, "Đã xóa thành công.")
                         if message_id:
@@ -1719,7 +1724,7 @@ async def _show_reminders_list(chat_id: int, user_id: int, message_id: int | Non
     from src.chat.storage.reminders import list_active_reminders
     from src.chat.storage.recurrence import format_schedule_vietnamese
     
-    active = list_active_reminders(chat_id, user_id)
+    active = await asyncio.to_thread(list_active_reminders, chat_id, user_id)
     if not active:
         text = "📋 **Nhắc nhở y tế của bạn:**\n\nBạn chưa có nhắc nhở nào hoạt động."
         kbd = {
@@ -1748,7 +1753,7 @@ async def _show_remove_confirmation(chat_id: int, user_id: int, reminder_id: int
     from src.chat.storage.reminders import list_active_reminders
     from src.chat.storage.recurrence import format_schedule_vietnamese
     
-    active = list_active_reminders(chat_id, user_id)
+    active = await asyncio.to_thread(list_active_reminders, chat_id, user_id)
     target = next((r for r in active if r["id"] == reminder_id), None)
     if not target:
         await _edit_message_text(chat_id, message_id, "Không tìm thấy nhắc nhở này.")
@@ -1781,7 +1786,7 @@ async def _process_reminder_followup(chat_id: int, user_id: int, text: str, pend
         return False
         
     if parsed.get("is_canceled", False):
-        delete_pending_conversation(chat_id, user_id)
+        await asyncio.to_thread(delete_pending_conversation, chat_id, user_id)
         await send_text(chat_id, "❌ Đã hủy thiết lập nhắc nhở.")
         return True
         
@@ -1791,7 +1796,7 @@ async def _process_reminder_followup(chat_id: int, user_id: int, text: str, pend
         turns.append(parsed.get("clarification_prompt"))
         
     if parsed.get("is_complete", False):
-        delete_pending_conversation(chat_id, user_id)
+        await asyncio.to_thread(delete_pending_conversation, chat_id, user_id)
         
         merged_fields = parsed.get("merged_fields", {})
         mtype = merged_fields.get("medical_type")
@@ -1808,16 +1813,19 @@ async def _process_reminder_followup(chat_id: int, user_id: int, text: str, pend
             await send_text(chat_id, "Lịch nhắc nhở không hợp lệ hoặc đã qua ngày kết thúc.")
             return True
             
-        if count_active_reminders(chat_id, user_id) >= 20:
+        active_count = await asyncio.to_thread(count_active_reminders, chat_id, user_id)
+        if active_count >= 20:
             await send_text(chat_id, "Bạn đã đạt giới hạn tối đa 20 nhắc nhở hoạt động. Vui lòng xóa bớt nhắc nhở trước khi thêm mới.")
             return True
             
         schedule_str = json.dumps(sched)
-        if check_duplicate_active_or_pending(chat_id, user_id, mtype, reminder_text, schedule_str):
+        is_dup = await asyncio.to_thread(check_duplicate_active_or_pending, chat_id, user_id, mtype, reminder_text, schedule_str)
+        if is_dup:
             await send_text(chat_id, "Nhắc nhở này đã tồn tại hoặc đang chờ xác nhận.")
             return True
             
-        draft_id = create_reminder_draft(
+        draft_id = await asyncio.to_thread(
+            create_reminder_draft,
             chat_id=chat_id,
             user_id=user_id,
             medical_type=mtype,
@@ -1857,7 +1865,8 @@ async def _process_reminder_followup(chat_id: int, user_id: int, text: str, pend
         return True
         
     prompt = parsed.get("clarification_prompt") or "Bạn vui lòng cung cấp thêm thông tin cho nhắc nhở."
-    upsert_pending_conversation(
+    await asyncio.to_thread(
+        upsert_pending_conversation,
         chat_id=chat_id,
         user_id=user_id,
         original_request=pending.get("original_request"),
@@ -1871,7 +1880,13 @@ async def _process_reminder_followup(chat_id: int, user_id: int, text: str, pend
     await send_text(chat_id, prompt, inline_keyboard=keyboard)
     return True
 
-async def _process_reminder_input_flow(chat_id: int, user_id: int, text: str, is_direct: bool = False) -> bool:
+async def _process_reminder_input_flow(
+    chat_id: int,
+    user_id: int,
+    text: str,
+    is_direct: bool = False,
+    parsed_reminder: dict | None = None
+) -> bool:
     import json
     import datetime
     from src.chat.storage.reminder_parser import parse_multi_turn_reminder, check_reminder_prefilter
@@ -1881,13 +1896,16 @@ async def _process_reminder_input_flow(chat_id: int, user_id: int, text: str, is
     )
     from src.chat.storage.recurrence import format_schedule_vietnamese, next_occurrence, TZ
     
-    if not check_reminder_prefilter(text):
-        return False
-        
-    now_vietnam = datetime.datetime.now(TZ)
-    parsed = parse_multi_turn_reminder(text, now_vietnam, prior_context=None)
-    if not parsed:
-        return False
+    if parsed_reminder is not None:
+        parsed = parsed_reminder
+    else:
+        if not check_reminder_prefilter(text):
+            return False
+            
+        now_vietnam = datetime.datetime.now(TZ)
+        parsed = parse_multi_turn_reminder(text, now_vietnam, prior_context=None)
+        if not parsed:
+            return False
         
     is_direct_req = parsed.get("is_direct_request", False) or is_direct
     is_ordinary_mention = parsed.get("is_ordinary_mention", False)
@@ -1897,7 +1915,7 @@ async def _process_reminder_input_flow(chat_id: int, user_id: int, text: str, is
         
     if parsed.get("is_canceled", False):
         if is_direct_req:
-            delete_pending_conversation(chat_id, user_id)
+            await asyncio.to_thread(delete_pending_conversation, chat_id, user_id)
             await send_text(chat_id, "❌ Đã hủy thiết lập nhắc nhở.")
             return True
         return False
@@ -1922,7 +1940,7 @@ async def _process_reminder_input_flow(chat_id: int, user_id: int, text: str, is
         if not sched:
             return False
             
-        first_fire = next_occurrence(sched, now_vietnam)
+        first_fire = next_occurrence(sched, now_vietnam if parsed_reminder is None else datetime.datetime.now(TZ))
         if not first_fire:
             if is_direct_req:
                 await send_text(chat_id, "Lịch nhắc nhở không hợp lệ hoặc đã qua ngày kết thúc.")
@@ -1934,20 +1952,23 @@ async def _process_reminder_input_flow(chat_id: int, user_id: int, text: str, is
         if not mtype or not reminder_text:
             return False
             
-        if count_active_reminders(chat_id, user_id) >= 20:
+        active_count = await asyncio.to_thread(count_active_reminders, chat_id, user_id)
+        if active_count >= 20:
             if is_direct_req:
                 await send_text(chat_id, "Bạn đã đạt giới hạn tối đa 20 nhắc nhở hoạt động. Vui lòng xóa bớt nhắc nhở trước khi thêm mới.")
                 return True
             return False
             
         schedule_str = json.dumps(sched)
-        if check_duplicate_active_or_pending(chat_id, user_id, mtype, reminder_text, schedule_str):
+        is_dup = await asyncio.to_thread(check_duplicate_active_or_pending, chat_id, user_id, mtype, reminder_text, schedule_str)
+        if is_dup:
             if is_direct_req:
                 await send_text(chat_id, "Nhắc nhở này đã tồn tại hoặc đang chờ xác nhận.")
                 return True
             return False
             
-        draft_id = create_reminder_draft(
+        draft_id = await asyncio.to_thread(
+            create_reminder_draft,
             chat_id=chat_id,
             user_id=user_id,
             medical_type=mtype,
@@ -1988,7 +2009,8 @@ async def _process_reminder_input_flow(chat_id: int, user_id: int, text: str, is
                 return True
                 
             prompt = parsed.get("clarification_prompt") or "Bạn vui lòng cung cấp thêm thông tin cho nhắc nhở."
-            upsert_pending_conversation(
+            await asyncio.to_thread(
+                upsert_pending_conversation,
                 chat_id=chat_id,
                 user_id=user_id,
                 original_request=text,
@@ -2029,7 +2051,7 @@ async def run_reminder_tick() -> None:
     from src.chat.storage.recurrence import next_occurrence, TZ
     
     now = int(time.time())
-    due = claim_due_reminders(now, lease_duration=300)
+    due = await asyncio.to_thread(claim_due_reminders, now, lease_duration=300)
     for r in due:
         chat_id = r["chat_id"]
         reminder_id = r["id"]
@@ -2042,9 +2064,9 @@ async def run_reminder_tick() -> None:
             now_dt = datetime.datetime.fromtimestamp(now, tz=TZ)
             next_dt = next_occurrence(sched, now_dt)
             if next_dt:
-                complete_delivery(reminder_id, int(next_dt.timestamp()))
+                await asyncio.to_thread(complete_delivery, reminder_id, int(next_dt.timestamp()))
             else:
-                complete_delivery(reminder_id, None)
+                await asyncio.to_thread(complete_delivery, reminder_id, None)
         except httpx.HTTPStatusError as exc:
             status_code = exc.response.status_code
             if status_code in (400, 403):
@@ -2052,10 +2074,10 @@ async def run_reminder_tick() -> None:
                     "Telegram rejected reminder %s for chat %s with status %s. Disabling chat.",
                     reminder_id, chat_id, status_code
                 )
-                disable_chat_reminders(chat_id)
+                await asyncio.to_thread(disable_chat_reminders, chat_id)
             else:
                 logger.warning("Transient error sending reminder %s: %s. Retrying in 5m.", reminder_id, exc)
-                reschedule_transient_failure(reminder_id, now + 300)
+                await asyncio.to_thread(reschedule_transient_failure, reminder_id, now + 300)
         except Exception as exc:
             logger.exception("Unexpected error sending reminder %s. Retrying in 5m.", reminder_id)
-            reschedule_transient_failure(reminder_id, now + 300)
+            await asyncio.to_thread(reschedule_transient_failure, reminder_id, now + 300)
