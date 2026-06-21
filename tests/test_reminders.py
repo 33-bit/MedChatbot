@@ -213,3 +213,58 @@ async def test_dispatcher_success_flow(mock_send):
     
     assert len(list_active_reminders(111, 222)) == 0
     mock_send.assert_called_once()
+
+
+from src.chat.storage.reminders import (
+    get_pending_conversation, upsert_pending_conversation, delete_pending_conversation
+)
+
+def test_pending_conversation_lifecycle():
+    init_reminders_db()
+    chat_id = 11111
+    user_id = 22222
+    
+    # 1. Initially None
+    assert get_pending_conversation(chat_id, user_id) is None
+    
+    # 2. Upsert
+    upsert_pending_conversation(
+        chat_id=chat_id,
+        user_id=user_id,
+        original_request="Đặt lịch uống thuốc",
+        partial_fields={"medical_type": "medication"},
+        turns=["Đặt lịch uống thuốc"],
+        missing_fields=["schedule"]
+    )
+    
+    pending = get_pending_conversation(chat_id, user_id)
+    assert pending is not None
+    assert pending["original_request"] == "Đặt lịch uống thuốc"
+    assert pending["partial_fields"] == {"medical_type": "medication"}
+    assert pending["turns"] == ["Đặt lịch uống thuốc"]
+    assert pending["missing_fields"] == ["schedule"]
+    
+    # 3. Expiration check (simulate expired)
+    upsert_pending_conversation(
+        chat_id=chat_id,
+        user_id=user_id,
+        original_request="Đặt lịch uống thuốc",
+        partial_fields={"medical_type": "medication"},
+        turns=["Đặt lịch uống thuốc"],
+        missing_fields=["schedule"],
+        expires_at=int(time.time()) - 10  # 10s in the past
+    )
+    assert get_pending_conversation(chat_id, user_id) is None
+    
+    # 4. Delete
+    upsert_pending_conversation(
+        chat_id=chat_id,
+        user_id=user_id,
+        original_request="Đặt lịch uống thuốc",
+        partial_fields={"medical_type": "medication"},
+        turns=["Đặt lịch uống thuốc"],
+        missing_fields=["schedule"]
+    )
+    delete_pending_conversation(chat_id, user_id)
+    assert get_pending_conversation(chat_id, user_id) is None
+

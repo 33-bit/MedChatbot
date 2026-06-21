@@ -42,6 +42,19 @@ def init_reminders_db() -> None:
             created_at INTEGER NOT NULL
         );
         """)
+
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS telegram_reminder_conversations (
+            chat_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            original_request TEXT NOT NULL,
+            partial_fields_json TEXT NOT NULL,
+            turns_json TEXT NOT NULL,
+            missing_fields_json TEXT NOT NULL,
+            expires_at INTEGER NOT NULL,
+            PRIMARY KEY (chat_id, user_id)
+        );
+        """)
         conn.commit()
 
 def cleanup_expired_drafts() -> None:
@@ -310,3 +323,69 @@ def disable_chat_reminders(chat_id: int) -> None:
         conn = get_sqlite()
         conn.execute("DELETE FROM telegram_reminders WHERE chat_id = ?", (chat_id,))
         conn.commit()
+
+
+def get_pending_conversation(chat_id: int, user_id: int) -> dict | None:
+    now = int(time.time())
+    with _REMINDERS_LOCK:
+        conn = get_sqlite()
+        conn.execute(
+            "DELETE FROM telegram_reminder_conversations WHERE chat_id = ? AND user_id = ? AND expires_at < ?",
+            (chat_id, user_id, now)
+        )
+        conn.commit()
+        
+        row = conn.execute(
+            "SELECT chat_id, user_id, original_request, partial_fields_json, turns_json, missing_fields_json, expires_at "
+            "FROM telegram_reminder_conversations WHERE chat_id = ? AND user_id = ?",
+            (chat_id, user_id)
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "chat_id": row[0],
+            "user_id": row[1],
+            "original_request": row[2],
+            "partial_fields": json.loads(row[3]),
+            "turns": json.loads(row[4]),
+            "missing_fields": json.loads(row[5]),
+            "expires_at": row[6]
+        }
+
+
+def upsert_pending_conversation(
+    chat_id: int,
+    user_id: int,
+    original_request: str,
+    partial_fields: dict,
+    turns: list,
+    missing_fields: list,
+    expires_at: int | None = None
+) -> None:
+    now = int(time.time())
+    if expires_at is None:
+        expires_at = now + 900  # 15 minutes
+    partial_fields_json = json.dumps(partial_fields)
+    turns_json = json.dumps(turns)
+    missing_fields_json = json.dumps(missing_fields)
+    
+    with _REMINDERS_LOCK:
+        conn = get_sqlite()
+        conn.execute(
+            "INSERT OR REPLACE INTO telegram_reminder_conversations "
+            "(chat_id, user_id, original_request, partial_fields_json, turns_json, missing_fields_json, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (chat_id, user_id, original_request, partial_fields_json, turns_json, missing_fields_json, expires_at)
+        )
+        conn.commit()
+
+
+def delete_pending_conversation(chat_id: int, user_id: int) -> None:
+    with _REMINDERS_LOCK:
+        conn = get_sqlite()
+        conn.execute(
+            "DELETE FROM telegram_reminder_conversations WHERE chat_id = ? AND user_id = ?",
+            (chat_id, user_id)
+        )
+        conn.commit()
+
