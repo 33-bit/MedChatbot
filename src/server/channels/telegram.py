@@ -65,6 +65,7 @@ TG_MAX_LEN = 4000  # safe under Telegram's 4096-byte limit
 TG_HARD_MAX_BYTES = 4096
 TYPING_REFRESH_SECONDS = 4.0
 BOT_COMMANDS = [
+    {"command": "menu", "description": "📋 Menu các lệnh hỗ trợ"},
     {"command": "help", "description": "📝 Cách đặt câu hỏi"},
     {"command": "mode", "description": "⚙️ Chọn chế độ trả lời"},
     {"command": "doctor", "description": "👨‍⚕️ Kết nối bác sĩ"},

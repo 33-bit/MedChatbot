@@ -155,6 +155,7 @@ def test_telegram_menu_interaction(app_client, monkeypatch):
 
 def test_telegram_bot_command_menu_hides_start_and_menu_with_icons():
     assert telegram.BOT_COMMANDS == [
+        {"command": "menu", "description": "📋 Menu các lệnh hỗ trợ"},
         {"command": "help", "description": "📝 Cách đặt câu hỏi"},
         {"command": "mode", "description": "⚙️ Chọn chế độ trả lời"},
         {"command": "doctor", "description": "👨‍⚕️ Kết nối bác sĩ"},
@@ -1644,7 +1645,11 @@ def test_banned_user_can_still_use_paydebt_command(monkeypatch):
     async def fake_send_text(chat_id, text, *args, **kwargs):
         sent.append(text)
 
+    async def fake_start_topup_payment(chat_id, amount):
+        sent.append(f"MOCK_QR:{amount}")
+
     monkeypatch.setattr(telegram, "send_text", fake_send_text)
+    monkeypatch.setattr(telegram, "_start_topup_payment", fake_start_topup_payment, raising=False)
 
     assert asyncio.run(telegram._handle_command(778, "/paydebt", chat_type="private", user_id=778))
     # Payoff = 10,000 + 10% = 11,000.
