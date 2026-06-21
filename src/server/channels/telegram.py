@@ -86,12 +86,6 @@ HELP_TEXT = """Cách sử dụng:
 
 Lưu ý: Tôi hỗ trợ thông tin y tế, không thay thế bác sĩ. Nếu tình trạng nặng hoặc diễn tiến nhanh, hãy đi khám/cấp cứu."""
 
-MENU_TEXT = """Menu lệnh:
-
-/help - 📝 Cách đặt câu hỏi hiệu quả
-/mode - ⚙️ Chọn chế độ trả lời
-/new - 🔄 Xóa ngữ cảnh hội thoại hiện tại
-"""
 RATING_PROMPT = "Bạn đánh giá câu trả lời này từ 1 đến 5 nhé."
 DOCTOR_OFFER_PROMPT = (
     "Với tình huống của bạn, bạn có muốn kết nối với bác sĩ chuyên khoa "
@@ -309,6 +303,56 @@ def _multi_choice_keyboard(
         rows.append(buttons[i:i + 2])
     rows.append([{"text": f"{DONE_ICON} {MULTI_SELECT_DONE}", "callback_data": f"{MULTI_SELECT_PREFIX}{token}:done"}])
     return {"inline_keyboard": rows}
+
+
+def _menu_keyboard() -> dict:
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "📝 Hướng dẫn", "callback_data": "cmd:/help"},
+                {"text": "⚙️ Chế độ", "callback_data": "cmd:/mode"},
+            ],
+            [
+                {"text": "👨‍⚕️ Bác sĩ", "callback_data": "cmd:/doctor"},
+                {"text": "⛔ Kết thúc", "callback_data": "cmd:/end"},
+            ],
+            [
+                {"text": "💰 Nạp tiền", "callback_data": "cmd:/topup"},
+                {"text": "💳 Số dư", "callback_data": "cmd:/balance"},
+            ],
+            [
+                {"text": "🧾 Công nợ", "callback_data": "cmd:/paydebt"},
+                {"text": "🔄 Lượt mới", "callback_data": "cmd:/new"},
+            ],
+            [
+                {"text": "🧠 Bộ nhớ", "callback_data": "menu:memory"},
+            ],
+            [
+                {"text": "❌ Đóng", "callback_data": "cmd:close"},
+            ],
+        ]
+    }
+
+
+def _menu_memory_keyboard() -> dict:
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🧠 Xem trạng thái", "callback_data": "cmd:/memory"},
+            ],
+            [
+                {"text": "✅ Bật bộ nhớ", "callback_data": "cmd:/memoryon"},
+                {"text": "⛔ Tắt bộ nhớ", "callback_data": "cmd:/memoryoff"},
+            ],
+            [
+                {"text": "🗑 Quên chủ thể", "callback_data": "cmd:/forget"},
+                {"text": "🗑 Xóa toàn bộ", "callback_data": "cmd:/forgetall"},
+            ],
+            [
+                {"text": "🔙 Quay lại", "callback_data": "menu:main"},
+            ],
+        ]
+    }
 
 
 def _mode_keyboard(selected_mode: str) -> dict:
@@ -1141,7 +1185,11 @@ async def _handle_command(
         await _handle_admin_paid(chat_id, text, user_id)
         return True
     if cmd == "/menu":
-        await send_text(chat_id, MENU_TEXT)
+        await send_text(
+            chat_id,
+            "📋 **Menu các lệnh hỗ trợ:**",
+            inline_keyboard=_menu_keyboard(),
+        )
         return True
     if cmd == "/mode":
         current = _CHAT_MODE_DEFAULTS.get(str(chat_id), "auto")

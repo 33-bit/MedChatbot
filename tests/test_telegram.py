@@ -23,7 +23,7 @@ def test_telegram_rejects_invalid_secret(app_client, monkeypatch):
 def test_telegram_static_commands_are_distinct(monkeypatch):
     sent: list[tuple[int | str, str]] = []
 
-    async def fake_send_text(chat_id: int | str, text: str) -> None:
+    async def fake_send_text(chat_id: int | str, text: str, **kwargs) -> None:
         sent.append((chat_id, text))
 
     monkeypatch.setattr(telegram, "send_text", fake_send_text)
@@ -42,7 +42,7 @@ def test_telegram_static_commands_are_distinct(monkeypatch):
         assert "Auto" in text
         assert "Thông tin" in text
         assert "Chẩn đoán" in text
-    assert "Menu lệnh" in texts[2]
+    assert "Menu các lệnh" in texts[2]
     assert "/start" not in texts[2]
     assert "/menu" not in texts[2]
 
@@ -1537,3 +1537,33 @@ def test_banned_user_can_still_use_paydebt_command(monkeypatch):
     assert asyncio.run(telegram._handle_command(778, "/paydebt", chat_type="private", user_id=778))
     # Payoff = 10,000 + 10% = 11,000.
     assert any("11,000" in t for t in sent)
+
+
+def test_telegram_menu_interaction(monkeypatch):
+    sent_texts = []
+    callback_answers = []
+    deleted_messages = []
+    edited_messages = []
+
+    async def fake_send_text(chat_id, text, choices=(), selection_mode="single", inline_keyboard=None):
+        sent_texts.append((chat_id, text, inline_keyboard))
+
+    async def fake_answer_callback_query(callback_query_id, text):
+        callback_answers.append((callback_query_id, text))
+
+    async def fake_delete_message(chat_id, message_id):
+        deleted_messages.append((chat_id, message_id))
+
+    async def fake_edit_message_text(chat_id, message_id, text, inline_keyboard=None):
+        edited_messages.append((chat_id, message_id, text, inline_keyboard))
+
+    monkeypatch.setattr(telegram, "send_text", fake_send_text)
+    monkeypatch.setattr(telegram, "_answer_callback_query", fake_answer_callback_query)
+    monkeypatch.setattr(telegram, "_delete_message", fake_delete_message)
+    monkeypatch.setattr(telegram, "_edit_message_text", fake_edit_message_text)
+
+    # Test /menu rendering
+    assert asyncio.run(telegram._handle_command(123, "/menu"))
+    assert len(sent_texts) == 1
+    assert "Menu các lệnh hỗ trợ" in sent_texts[0][1]
+    assert sent_texts[0][2] == telegram._menu_keyboard()
