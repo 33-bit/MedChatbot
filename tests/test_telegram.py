@@ -158,6 +158,7 @@ def test_telegram_bot_command_menu_hides_start_and_menu_with_icons():
         {"command": "menu", "description": "📋 Menu các lệnh hỗ trợ"},
         {"command": "help", "description": "📝 Cách đặt câu hỏi"},
         {"command": "mode", "description": "⚙️ Chọn chế độ trả lời"},
+        {"command": "remind", "description": "🔔 Đặt nhắc nhở y tế"},
         {"command": "doctor", "description": "👨‍⚕️ Kết nối bác sĩ"},
         {"command": "end", "description": "⛔ Kết thúc tư vấn bác sĩ"},
         {"command": "topup", "description": "💰 Nạp tiền vào tài khoản"},

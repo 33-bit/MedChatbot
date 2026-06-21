@@ -11,7 +11,6 @@ Expose public qua ngrok:
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import queue
@@ -28,18 +27,29 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from src.chat import answer, answer_with_meta
 from src.chat.mode_policy import normalize_mode
 from src.chat.replies import TECHNICAL_ERROR_REPLY
+from src.chat.security.identity import (
+    RequestIdentity,
+    derive_previous_owner_keys,
+    derive_request_identity,
+    validate_identity_configuration,
+)
+from src.chat.storage.durable_memory import migrate_owner_key
 from src.chat.retrieval.kg import ensure_fulltext_indexes
 from src.chat.retrieval.preload import preload_retrieval_models
 from src.chat.storage.traces import get_chat_trace, list_chat_traces, save_chat_trace
-from src.config import CHAT_API_KEY
+from src.config import CHAT_API_KEY, CHAT_API_TENANT_ID
 from src.server.channels import messenger, telegram, zalo
 from src.server.channels import telegram_doctor
 from src.server.payments import router as payos_router
+from src.server.source_documents import resolve_bachmai_source_pdf
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+# httpx includes full request URLs in INFO logs. Telegram embeds the bot token
+# in that URL, so application logs must never emit normal HTTP request lines.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
 
 # How often the doctor-session ticker runs (seconds). Drives time-limit
@@ -49,6 +59,7 @@ _DEBUG_CONSOLE_DIR = Path(__file__).parent / "static" / "debug_console"
 
 
 async def startup() -> None:
+    validate_identity_configuration()
     await asyncio.to_thread(preload_retrieval_models)
     await asyncio.to_thread(ensure_fulltext_indexes)
     try:
@@ -71,16 +82,33 @@ async def _session_ticker(interval: float = SESSION_TICK_INTERVAL_SECONDS) -> No
             log.exception("Doctor session tick failed")
 
 
+async def _reminder_ticker(interval: float = 30.0) -> None:
+    """Periodic loop driving Telegram medical reminders.
+
+    Runs until cancelled at shutdown. Each tick is wrapped so a single failure
+    never kills the loop.
+    """
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            from src.server.channels import telegram
+            await telegram.run_reminder_tick()
+        except Exception:
+            log.exception("Reminder session tick failed")
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await startup()
     ticker = asyncio.create_task(_session_ticker())
+    reminder_ticker = asyncio.create_task(_reminder_ticker())
     try:
         yield
     finally:
         ticker.cancel()
+        reminder_ticker.cancel()
         try:
-            await ticker
+            await asyncio.gather(ticker, reminder_ticker, return_exceptions=True)
         except asyncio.CancelledError:
             pass
 
@@ -97,6 +125,20 @@ def health() -> dict:
     return {"ok": True}
 
 
+@app.get("/sources/bachmai/{source_slug}.pdf")
+def bachmai_source_pdf(source_slug: str) -> FileResponse:
+    pdf_path = resolve_bachmai_source_pdf(source_slug)
+    if pdf_path is None:
+        raise HTTPException(status_code=404, detail="Source PDF not found")
+    return FileResponse(
+        pdf_path,
+        media_type="application/pdf",
+        filename=f"{source_slug}.pdf",
+        content_disposition_type="inline",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 def _require_chat_api_key(x_api_key: str | None) -> str:
     if not CHAT_API_KEY:
         raise HTTPException(status_code=503, detail="Chat API disabled: CHAT_API_KEY not set")
@@ -106,8 +148,41 @@ def _require_chat_api_key(x_api_key: str | None) -> str:
 
 
 def _scoped_api_session_id(api_key: str, client_session_id: str) -> str:
-    session_key = f"{api_key}\0{client_session_id}"
-    return "api:" + hashlib.sha256(session_key.encode("utf-8")).hexdigest()[:32]
+    del api_key
+    return derive_request_identity(
+        "api",
+        None,
+        client_session_id,
+        tenant=CHAT_API_TENANT_ID or "api-default",
+    ).session_key
+
+
+def _api_request_identity(payload: dict) -> RequestIdentity:
+    client_session_id = _require_client_session_id(payload)
+    user_id = payload.get("user_id")
+    stable_user_id = user_id if isinstance(user_id, str) and user_id.strip() else None
+    # A tenant must be operationally stable and independent of API-key rotation.
+    # Without one, temporary memory works but durable memory remains disabled.
+    identity = derive_request_identity(
+        "api",
+        stable_user_id if CHAT_API_TENANT_ID else None,
+        client_session_id,
+        tenant=CHAT_API_TENANT_ID or "api-default",
+    )
+    if identity.owner_key and stable_user_id is not None:
+        try:
+            migrate_owner_key(
+                identity.owner_key,
+                derive_previous_owner_keys(
+                    "api",
+                    stable_user_id,
+                    tenant=CHAT_API_TENANT_ID,
+                ),
+            )
+        except Exception:
+            log.exception("API owner-key rotation failed; durable memory disabled for request")
+            return RequestIdentity("", identity.session_key, False)
+    return identity
 
 
 def _require_client_session_id(body: dict | None) -> str:
@@ -123,10 +198,18 @@ def _require_query_session_id(session_id: str | None) -> str:
     return session_id.strip()
 
 
-def _run_answer_with_meta(question: str, session_id: str, mode: str) -> tuple[str, dict]:
+def _run_answer_with_meta(
+    question: str,
+    session_id: str,
+    owner_id: str | None,
+    mode: str,
+) -> tuple[str, dict]:
+    kwargs = {"session_id": session_id}
+    if owner_id:
+        kwargs["owner_id"] = owner_id
     if mode == "auto":
-        return answer_with_meta(question, session_id=session_id)
-    return answer_with_meta(question, session_id=session_id, mode=mode)
+        return answer_with_meta(question, **kwargs)
+    return answer_with_meta(question, mode=mode, **kwargs)
 
 
 def _build_debug_trace(
@@ -179,11 +262,16 @@ async def debug_chat_route_run(
     payload = body or {}
     question = payload.get("question", "")
     mode = normalize_mode(payload.get("mode"))
-    client_session_id = _require_client_session_id(payload)
-    session_id = _scoped_api_session_id(api_key, client_session_id)
+    identity = _api_request_identity(payload)
+    session_id = identity.session_key
 
     try:
-        reply, meta = _run_answer_with_meta(question, session_id, mode)
+        reply, meta = _run_answer_with_meta(
+            question,
+            session_id,
+            identity.owner_key or None,
+            mode,
+        )
     except Exception:
         log.exception("Debug chat route run failed")
         reply = TECHNICAL_ERROR_REPLY
@@ -192,14 +280,14 @@ async def debug_chat_route_run(
         reply=reply,
         meta=meta,
         question=question,
-        session_id=client_session_id,
+        session_id=session_id,
         internal_session_id=session_id,
         mode=mode,
     )
     try:
         saved = save_chat_trace(
             trace_id=trace["trace_id"],
-            session_id=client_session_id,
+            session_id=session_id,
             internal_session_id=session_id,
             mode=mode,
             question=question,
@@ -222,8 +310,8 @@ async def debug_chat_route_stream(
     payload = body or {}
     question = payload.get("question", "")
     mode = normalize_mode(payload.get("mode"))
-    client_session_id = _require_client_session_id(payload)
-    session_id = _scoped_api_session_id(api_key, client_session_id)
+    identity = _api_request_identity(payload)
+    session_id = identity.session_key
 
     from src.chat import pipeline
 
@@ -234,7 +322,12 @@ async def debug_chat_route_stream(
     def _worker():
         pipeline._install_event_sink(events)
         try:
-            reply, meta = _run_answer_with_meta(question, session_id, mode)
+            reply, meta = _run_answer_with_meta(
+                question,
+                session_id,
+                identity.owner_key or None,
+                mode,
+            )
         except Exception:
             log.exception("Debug chat route stream failed")
             reply, meta = TECHNICAL_ERROR_REPLY, {"error": "technical_error"}
@@ -258,14 +351,14 @@ async def debug_chat_route_stream(
             reply=result["reply"],
             meta=result.get("meta"),
             question=question,
-            session_id=client_session_id,
+            session_id=session_id,
             internal_session_id=session_id,
             mode=mode,
         )
         try:
             saved = save_chat_trace(
                 trace_id=trace["trace_id"],
-                session_id=client_session_id,
+                session_id=session_id,
                 internal_session_id=session_id,
                 mode=mode,
                 question=question,
@@ -334,20 +427,28 @@ async def chat_debug(
     payload = body or {}
     question = payload.get("question", "")
     mode = normalize_mode(payload.get("mode"))
-    client_session_id = _require_client_session_id(payload)
-    session_id = _scoped_api_session_id(api_key, client_session_id)
+    identity = _api_request_identity(payload)
+    session_id = identity.session_key
     if include_meta:
         try:
-            reply, meta = _run_answer_with_meta(question, session_id, mode)
+            reply, meta = _run_answer_with_meta(
+                question,
+                session_id,
+                identity.owner_key or None,
+                mode,
+            )
         except Exception:
             log.exception("Chat endpoint failed")
             return {"answer": TECHNICAL_ERROR_REPLY, "meta": {"error": "technical_error"}}
         return {"answer": reply, "meta": meta}
     try:
+        answer_kwargs = {"session_id": session_id}
+        if identity.owner_key:
+            answer_kwargs["owner_id"] = identity.owner_key
         if mode == "auto":
-            reply = answer(question, session_id=session_id)
+            reply = answer(question, **answer_kwargs)
         else:
-            reply = answer(question, session_id=session_id, mode=mode)
+            reply = answer(question, mode=mode, **answer_kwargs)
     except Exception:
         log.exception("Chat endpoint failed")
         reply = TECHNICAL_ERROR_REPLY
