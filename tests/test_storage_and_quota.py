@@ -14,6 +14,9 @@ from src.chat.storage import webhook_dedupe
 from src.chat.storage import session as session_store
 from src.chat.storage.session import PatientSession
 
+SESSION_KEY = "session_v1_" + "a" * 64
+OTHER_SESSION_KEY = "session_v1_" + "b" * 64
+
 
 class FakeRedis:
     def __init__(self) -> None:
@@ -64,11 +67,14 @@ def test_clear_session_only_deletes_redis_not_sqlite_consultation(monkeypatch):
     fake_redis = FakeRedis()
     monkeypatch.setattr(redis_session, "get_redis", lambda: fake_redis)
 
-    session_store.log_consultation("tg:1", "q", "a")
-    session_store.clear_session("tg:1")
+    session_store.log_consultation(SESSION_KEY, "q", "a")
+    session_store.clear_session(SESSION_KEY)
 
-    consultations = session_store.get_past_consultations("tg:1")
-    assert fake_redis.deleted == ["session:tg:1"]
+    consultations = session_store.get_past_consultations(SESSION_KEY)
+    assert fake_redis.deleted[:2] == [
+        f"session:{SESSION_KEY}",
+        f"conversation_context:v1:{SESSION_KEY}",
+    ]
     assert len(consultations) == 1
     assert consultations[0]["question"] == "q"
     assert consultations[0]["answer"] == "a"
@@ -123,7 +129,7 @@ def test_reserve_webhook_update_accepts_only_first_delivery():
 
 def test_reserve_webhook_update_uses_memory_fallback_when_sqlite_errors(monkeypatch):
     broken = BrokenSqlite()
-    webhook_dedupe._MEMORY_UPDATES.clear()
+    webhook_dedupe._SEEN_UPDATES.clear()
     monkeypatch.setattr(webhook_dedupe, "get_sqlite", lambda: broken)
 
     assert session_store.reserve_webhook_update("telegram", 223) is True
@@ -134,9 +140,9 @@ def test_reserve_webhook_update_uses_memory_fallback_when_sqlite_errors(monkeypa
 
 def test_feedback_request_can_record_rating():
     token = feedback.create_feedback_request(
-        "tg:1",
+        SESSION_KEY,
         "telegram",
-        "1",
+        SESSION_KEY,
         "Tôi bị ho",
         "Bạn nên nghỉ ngơi.",
     )
@@ -147,9 +153,9 @@ def test_feedback_request_can_record_rating():
     row = feedback.get_feedback(token)
     assert row == {
         "token": token,
-        "session_id": "tg:1",
+        "session_id": SESSION_KEY,
         "channel": "telegram",
-        "recipient_id": "1",
+        "recipient_id": SESSION_KEY,
         "question": "Tôi bị ho",
         "answer": "Bạn nên nghỉ ngơi.",
         "rating": 5,
@@ -158,7 +164,7 @@ def test_feedback_request_can_record_rating():
 
 def test_standalone_webhook_dedupe_uses_memory_fallback_when_sqlite_errors(monkeypatch):
     broken = BrokenSqlite()
-    webhook_dedupe._MEMORY_UPDATES.clear()
+    webhook_dedupe._SEEN_UPDATES.clear()
     monkeypatch.setattr(webhook_dedupe, "get_sqlite", lambda: broken)
 
     assert webhook_dedupe.reserve_webhook_update("telegram", 323) is True
@@ -183,8 +189,8 @@ def test_chat_trace_storage_round_trips_meta():
 
     saved = traces.save_chat_trace(
         trace_id="trace-1",
-        session_id="debug-user",
-        internal_session_id="api:scoped",
+        session_id=SESSION_KEY,
+        internal_session_id=SESSION_KEY,
         mode="auto",
         question="Tôi bị ho",
         answer="Bạn nên nghỉ ngơi.",
@@ -196,13 +202,13 @@ def test_chat_trace_storage_round_trips_meta():
         },
     )
 
-    loaded = traces.get_chat_trace("trace-1", internal_session_id="api:scoped")
+    loaded = traces.get_chat_trace("trace-1", internal_session_id=SESSION_KEY)
 
     assert saved == loaded
     assert loaded == {
         "trace_id": "trace-1",
-        "session_id": "debug-user",
-        "internal_session_id": "api:scoped",
+        "session_id": SESSION_KEY,
+        "internal_session_id": SESSION_KEY,
         "mode": "auto",
         "question": "Tôi bị ho",
         "answer": "Bạn nên nghỉ ngơi.",
@@ -221,8 +227,8 @@ def test_chat_trace_list_filters_and_limits():
 
     traces.save_chat_trace(
         trace_id="trace-old",
-        session_id="debug-user",
-        internal_session_id="api:debug-user",
+        session_id=SESSION_KEY,
+        internal_session_id=SESSION_KEY,
         mode="auto",
         question="old question",
         answer="old answer",
@@ -231,8 +237,8 @@ def test_chat_trace_list_filters_and_limits():
     )
     traces.save_chat_trace(
         trace_id="trace-new",
-        session_id="debug-user",
-        internal_session_id="api:debug-user",
+        session_id=SESSION_KEY,
+        internal_session_id=SESSION_KEY,
         mode="information",
         question="new question",
         answer="new answer",
@@ -241,8 +247,8 @@ def test_chat_trace_list_filters_and_limits():
     )
     traces.save_chat_trace(
         trace_id="trace-other",
-        session_id="other-user",
-        internal_session_id="api:other",
+        session_id=OTHER_SESSION_KEY,
+        internal_session_id=OTHER_SESSION_KEY,
         mode="auto",
         question="other question",
         answer="other answer",
@@ -251,12 +257,12 @@ def test_chat_trace_list_filters_and_limits():
     )
 
     summaries = traces.list_chat_traces(
-        internal_session_id="api:debug-user",
+        internal_session_id=SESSION_KEY,
         trace_id=None,
         limit=1,
     )
     exact = traces.list_chat_traces(
-        internal_session_id="api:debug-user",
+        internal_session_id=SESSION_KEY,
         trace_id="trace-old",
         limit=20,
     )
@@ -273,16 +279,16 @@ def test_chat_trace_reads_are_scoped_to_internal_session_id():
 
     traces.save_chat_trace(
         trace_id="trace-private",
-        session_id="debug-user",
-        internal_session_id="api:owner",
+        session_id=SESSION_KEY,
+        internal_session_id=SESSION_KEY,
         mode="auto",
         question="private question",
         answer="private answer",
         meta={"trace_id": "trace-private"},
     )
 
-    assert traces.get_chat_trace("trace-private", internal_session_id="api:other") is None
-    assert traces.list_chat_traces(internal_session_id="api:other") == []
+    assert traces.get_chat_trace("trace-private", internal_session_id=OTHER_SESSION_KEY) is None
+    assert traces.list_chat_traces(internal_session_id=OTHER_SESSION_KEY) == []
 
 
 def test_chat_trace_duplicate_id_raises_integrity_error():
@@ -290,8 +296,8 @@ def test_chat_trace_duplicate_id_raises_integrity_error():
 
     payload = {
         "trace_id": "trace-duplicate",
-        "session_id": "debug-user",
-        "internal_session_id": "api:owner",
+        "session_id": SESSION_KEY,
+        "internal_session_id": SESSION_KEY,
         "mode": "auto",
         "question": "first question",
         "answer": "first answer",
@@ -308,7 +314,7 @@ def test_chat_trace_duplicate_id_raises_integrity_error():
             }
         )
 
-    loaded = traces.get_chat_trace("trace-duplicate", internal_session_id="api:owner")
+    loaded = traces.get_chat_trace("trace-duplicate", internal_session_id=SESSION_KEY)
     assert loaded is not None
     assert loaded["question"] == "first question"
     assert loaded["answer"] == "first answer"

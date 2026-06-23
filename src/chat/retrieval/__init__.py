@@ -11,11 +11,12 @@ from src.chat.retrieval.kg import (
 from src.chat.retrieval.rerank import rerank
 from src.chat.retrieval.service import hybrid_search, hybrid_search_with_debug
 from src.chat.retrieval.sparse import bm25_search
-from src.chat.retrieval.types import Hit
+from src.chat.retrieval.types import Hit, RetrievalScope
 
 __all__ = [
     "Hit",
     "KGContext",
+    "RetrievalScope",
     "bm25_search",
     "dense_search",
     "ensure_fulltext_indexes",

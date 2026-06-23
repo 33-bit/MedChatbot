@@ -7,7 +7,7 @@ from typing import Any
 from src.chat.errors import QdrantUnavailable
 from src.chat.retrieval.fusion import rrf_merge
 from src.chat.retrieval.sparse import bm25_search
-from src.chat.retrieval.types import Hit
+from src.chat.retrieval.types import Hit, RetrievalScope
 from src.chat.timing import elapsed_ms
 from src.config import HYBRID_CANDIDATE_K, RERANK_TOP_K
 
@@ -83,6 +83,7 @@ def _attach_debug(
 def _run_hybrid_search(
     query: str,
     top_k: int,
+    scope: RetrievalScope = "medical",
     on_stage=None,
 ) -> tuple[list[Hit], _HybridSearchDebug]:
     import time
@@ -94,7 +95,14 @@ def _run_hybrid_search(
     total_start = time.perf_counter()
     stage_start = time.perf_counter()
     try:
-        dense_hits = dense_search(query, top_k=HYBRID_CANDIDATE_K)
+        if scope == "medical":
+            dense_hits = dense_search(query, top_k=HYBRID_CANDIDATE_K)
+        else:
+            dense_hits = dense_search(
+                query,
+                top_k=HYBRID_CANDIDATE_K,
+                scope=scope,
+            )
     except QdrantUnavailable as exc:
         _record_debug_failure(
             debug, "dense_search", stage_start, total_start,
@@ -119,7 +127,14 @@ def _run_hybrid_search(
 
     stage_start = time.perf_counter()
     try:
-        sparse_hits = bm25_search(query, top_k=HYBRID_CANDIDATE_K)
+        if scope == "medical":
+            sparse_hits = bm25_search(query, top_k=HYBRID_CANDIDATE_K)
+        else:
+            sparse_hits = bm25_search(
+                query,
+                top_k=HYBRID_CANDIDATE_K,
+                scope=scope,
+            )
     except Exception as e:
         _record_debug_failure(
             debug, "sparse_search", stage_start, total_start,
@@ -199,16 +214,26 @@ def _serialize_hits(hits: list[Hit], stage: str) -> list[dict]:
     ]
 
 
-def hybrid_search(query: str, top_k: int = RERANK_TOP_K) -> list[Hit]:
+def hybrid_search(
+    query: str,
+    top_k: int = RERANK_TOP_K,
+    scope: RetrievalScope = "medical",
+) -> list[Hit]:
     """Dense + BM25 → RRF fusion → Cross-Encoder re-rank."""
-    hits, _ = _run_hybrid_search(query, top_k)
+    hits, _ = _run_hybrid_search(query, top_k, scope=scope)
     return hits
 
 
 def hybrid_search_with_debug(
     query: str,
     top_k: int = RERANK_TOP_K,
+    scope: RetrievalScope = "medical",
     on_stage=None,
 ) -> tuple[list[Hit], dict]:
-    hits, debug = _run_hybrid_search(query, top_k, on_stage=on_stage)
+    hits, debug = _run_hybrid_search(
+        query,
+        top_k,
+        scope=scope,
+        on_stage=on_stage,
+    )
     return hits, debug.as_dict()

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import uuid
 
 from src.chat.replies import TECHNICAL_ERROR_REPLY
@@ -14,6 +13,40 @@ def test_health_endpoint(app_client):
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+
+
+def test_bachmai_source_pdf_endpoint_serves_split_pdf(
+    app_client,
+    monkeypatch,
+    tmp_path,
+):
+    client, app_module = app_client
+    pdf = tmp_path / "source.pdf"
+    pdf.write_bytes(b"%PDF-1.4\ntest")
+    monkeypatch.setattr(
+        app_module,
+        "resolve_bachmai_source_pdf",
+        lambda slug: pdf if slug == "may_day" else None,
+    )
+
+    response = client.get("/sources/bachmai/may_day.pdf")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.headers["content-disposition"].startswith("inline;")
+    assert response.content == b"%PDF-1.4\ntest"
+
+
+def test_bachmai_source_pdf_endpoint_returns_404_for_unknown_slug(
+    app_client,
+    monkeypatch,
+):
+    client, app_module = app_client
+    monkeypatch.setattr(app_module, "resolve_bachmai_source_pdf", lambda slug: None)
+
+    response = client.get("/sources/bachmai/not_found.pdf")
+
+    assert response.status_code == 404
 
 
 def test_app_uses_lifespan_instead_of_legacy_event_handlers():
@@ -120,8 +153,8 @@ def test_chat_scopes_session_to_api_key_and_body_session_id(app_client, monkeypa
         json={"question": "Tôi bị đau đầu", "session_id": "user-b"},
     )
 
-    expected_first = "api:" + hashlib.sha256(b"secret\x00user-a").hexdigest()[:32]
-    expected_second = "api:" + hashlib.sha256(b"secret\x00user-b").hexdigest()[:32]
+    expected_first = app_module._scoped_api_session_id("secret", "user-a")
+    expected_second = app_module._scoped_api_session_id("secret", "user-b")
     assert first.status_code == 200
     assert second.status_code == 200
     assert seen == [expected_first, expected_second]
@@ -146,7 +179,7 @@ def test_chat_does_not_pass_raw_body_session_id_to_pipeline(app_client, monkeypa
         json={"question": "Tôi bị ho", "session_id": "victim"},
     )
 
-    expected_session = "api:" + hashlib.sha256(b"secret\x00victim").hexdigest()[:32]
+    expected_session = app_module._scoped_api_session_id("secret", "victim")
     assert response.status_code == 200
     assert response.json() == {"answer": "ok"}
     assert seen == {"question": "Tôi bị ho", "session_id": expected_session}
@@ -254,7 +287,7 @@ def test_debug_chat_route_run_scopes_saves_and_returns_trace(app_client, monkeyp
         json={"question": "Tôi bị ho", "session_id": "debug-user", "mode": "information"},
     )
 
-    expected_internal = "api:" + hashlib.sha256(b"secret\x00debug-user").hexdigest()[:32]
+    expected_internal = app_module._scoped_api_session_id("secret", "debug-user")
     data = response.json()
     assert response.status_code == 200
     assert seen == {
@@ -265,7 +298,7 @@ def test_debug_chat_route_run_scopes_saves_and_returns_trace(app_client, monkeyp
     persisted_trace_id = data["trace"]["trace_id"]
     assert str(uuid.UUID(persisted_trace_id)) == persisted_trace_id
     assert persisted_trace_id != "trace-api"
-    assert data["trace"]["session_id"] == "debug-user"
+    assert data["trace"]["session_id"] == expected_internal
     assert data["trace"]["internal_session_id"] == expected_internal
     assert data["trace"]["answer"] == "debug answer"
     assert data["trace"]["created_at"] > 0

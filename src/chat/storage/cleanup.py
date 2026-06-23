@@ -24,6 +24,11 @@ from src.chat.storage.doctors import sweep_idle
 
 CONSULT_RETENTION_DAYS = int(os.getenv("CONSULT_RETENTION_DAYS", "30"))
 PROFILE_RETENTION_DAYS = int(os.getenv("PROFILE_RETENTION_DAYS", "30"))
+TRACE_RETENTION_DAYS = int(os.getenv("TRACE_RETENTION_DAYS", "30"))
+FEEDBACK_RETENTION_DAYS = int(os.getenv("FEEDBACK_RETENTION_DAYS", "30"))
+SUPERSEDED_PROFILE_RETENTION_DAYS = int(
+    os.getenv("SUPERSEDED_PROFILE_RETENTION_DAYS", "30")
+)
 
 
 def run(verbose: bool = True, vacuum: bool = False) -> dict:
@@ -38,6 +43,37 @@ def run(verbose: bool = True, vacuum: bool = False) -> dict:
     cutoff = now - PROFILE_RETENTION_DAYS * 86400
     cur = conn.execute("DELETE FROM patient_profile WHERE updated_at < ?", (cutoff,))
     stats["profiles_deleted"] = cur.rowcount
+
+    cutoff = now - TRACE_RETENTION_DAYS * 86400
+    cur = conn.execute("DELETE FROM chat_trace WHERE created_at < ?", (cutoff,))
+    stats["traces_deleted"] = cur.rowcount
+
+    cutoff = now - FEEDBACK_RETENTION_DAYS * 86400
+    cur = conn.execute("DELETE FROM response_feedback WHERE created_at < ?", (cutoff,))
+    stats["feedback_deleted"] = cur.rowcount
+
+    cur = conn.execute(
+        "DELETE FROM medical_profile_fact "
+        "WHERE valid_until IS NOT NULL AND valid_until < ?",
+        (now,),
+    )
+    stats["expired_profile_facts_deleted"] = cur.rowcount
+
+    cutoff = now - SUPERSEDED_PROFILE_RETENTION_DAYS * 86400
+    cur = conn.execute(
+        "DELETE FROM medical_profile_fact "
+        "WHERE superseded_by IS NOT NULL AND updated_at < ?",
+        (cutoff,),
+    )
+    stats["superseded_profile_facts_deleted"] = cur.rowcount
+
+    cur = conn.execute(
+        "DELETE FROM medical_profile_subject WHERE NOT EXISTS ("
+        "SELECT 1 FROM medical_profile_fact "
+        "WHERE medical_profile_fact.owner_id = medical_profile_subject.owner_id "
+        "AND medical_profile_fact.subject_id = medical_profile_subject.subject_id)"
+    )
+    stats["orphaned_profile_subjects_deleted"] = cur.rowcount
 
     cur = conn.execute("DELETE FROM rate_limit WHERE ts < ?", (now - 120,))
     stats["rate_limit_purged"] = cur.rowcount

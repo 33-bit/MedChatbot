@@ -12,6 +12,13 @@ import time
 import unicodedata
 from dataclasses import dataclass
 
+from src.chat.profile import (
+    build_medical_profile,
+    ensure_subject,
+    get_subject,
+    list_subjects,
+    migrate_owner_key,
+)
 from src.chat.storage import doctors
 from src.chat.storage import wallet
 from src.chat.storage.seed_doctors import PAID_RATE_PER_MIN, SPECIALTIES
@@ -26,6 +33,9 @@ SPECIALTY_PREFIX = "doctor:specialty:"
 SPECIALTIES_PREFIX = "doctor:specialties:"
 PROFILE_PREFIX = "doctor:profile:"
 PICK_PREFIX = "doctor:pick:"
+SHARE_CONFIRM_PREFIX = "doctor:share:confirm:"
+SHARE_CHOOSE_PREFIX = "doctor:share:choose:"
+SHARE_SUBJECT_PREFIX = "doctor:share:subject:"
 ACCEPT_PREFIX = "doctor:accept:"
 DECLINE_PREFIX = "doctor:decline:"
 REFRESH_PREFIX = "doctor:refresh:"
@@ -38,6 +48,22 @@ HANDOFF_OTHER = "doctor:handoff:other"
 HANDOFF_DECLINE = "doctor:handoff:decline"
 CANCEL_CALLBACK = "doctor:cancel"
 HANDOFF_TTL_SECONDS = 15 * 60
+
+_RELATIONSHIP_LABELS = {
+    "self": "Bạn",
+    "father": "Bố",
+    "mother": "Mẹ",
+    "child": "Con",
+    "spouse": "Vợ/Chồng",
+    "relative": "Người thân",
+}
+
+_GENDER_LABELS = {
+    "female": "Nữ",
+    "male": "Nam",
+    "other": "Khác",
+    "unknown": "Không muốn trả lời",
+}
 
 
 @dataclass
@@ -274,6 +300,233 @@ def _doctor_profile_keyboard(doctor_id: int, tier: str, specialty_slug: str) -> 
     }
 
 
+def _profile_owner_key(
+    chat_id: int | str,
+    telegram_user_id: int | str,
+) -> str | None:
+    from src.chat.security.identity import (
+        derive_previous_owner_keys,
+        derive_request_identity,
+    )
+
+    identity = derive_request_identity(
+        "telegram",
+        telegram_user_id,
+        str(chat_id),
+    )
+    if not identity.owner_key:
+        return None
+    try:
+        migrate_owner_key(
+            identity.owner_key,
+            derive_previous_owner_keys("telegram", telegram_user_id),
+        )
+    except Exception:
+        log.exception("Doctor handoff owner-key rotation failed")
+        return None
+    return identity.owner_key
+
+
+def _default_profile_subject_id(
+    chat_id: int | str,
+    telegram_user_id: int | str,
+    owner_key: str,
+) -> str:
+    from src.chat.context.context_store import load_conversation_context
+    from src.chat.security.identity import derive_request_identity
+
+    identity = derive_request_identity("telegram", telegram_user_id, str(chat_id))
+    state, _, available = load_conversation_context(identity.session_key, owner_key)
+    if available and state.active_subject_id:
+        if get_subject(owner_key, state.active_subject_id) is not None:
+            return state.active_subject_id
+        relationship_matches = [
+            subject for subject in list_subjects(owner_key)
+            if subject.get("relationship") == state.active_subject_id
+        ]
+        if len(relationship_matches) == 1:
+            return str(relationship_matches[0]["subject_id"])
+    return "self"
+
+
+def _subject_display_name(subject: dict) -> str:
+    name = str(subject.get("display_name") or "").strip()
+    relationship = str(subject.get("relationship") or "").strip()
+    return name or _RELATIONSHIP_LABELS.get(relationship, relationship or "Người được tư vấn")
+
+
+def _profile_snapshot(owner_key: str, subject_id: str) -> str | None:
+    subject = get_subject(owner_key, subject_id)
+    if subject is None:
+        return None
+    profile = build_medical_profile(owner_key, subject_id)
+    demo = profile.demographics
+    relationship = _RELATIONSHIP_LABELS.get(
+        demo.relationship or "",
+        demo.relationship or "Chưa rõ",
+    )
+    lines = [
+        f"Người được tư vấn: {_subject_display_name(subject)} ({relationship})",
+        f"Tuổi: {demo.age if demo.age is not None else 'Chưa có thông tin'}",
+        f"Giới tính: {_GENDER_LABELS.get(demo.gender or '', demo.gender or 'Chưa có thông tin')}",
+    ]
+
+    def add_section(
+        heading: str,
+        section: str,
+        entries: list,
+        formatter,
+    ) -> None:
+        if entries:
+            lines.append(f"{heading}:")
+            for entry in entries[:8]:
+                confirmation = "đã xác nhận" if entry.confirmed else "chưa xác nhận"
+                lines.append(f"- {formatter(entry)} ({confirmation})")
+            if len(entries) > 8:
+                lines.append(f"- Và {len(entries) - 8} mục khác")
+            return
+        state = profile.section_states.get(section)
+        if state and state.status == "none_known":
+            lines.append(f"{heading}: Đã xác nhận hiện không có")
+        else:
+            lines.append(f"{heading}: Chưa có thông tin")
+
+    add_section(
+        "Vấn đề sức khỏe",
+        "problems",
+        profile.problems,
+        lambda entry: entry.condition,
+    )
+    add_section(
+        "Dị ứng",
+        "allergies",
+        profile.allergies,
+        lambda entry: (
+            entry.agent
+            + (f"; phản ứng: {', '.join(entry.reactions)}" if entry.reactions else "")
+        ),
+    )
+    add_section(
+        "Thuốc đang dùng",
+        "medications",
+        profile.medications,
+        lambda entry: (
+            entry.medication
+            + (f"; liều: {entry.dosage_text}" if entry.dosage_text else "")
+            + (f"; tần suất: {entry.frequency}" if entry.frequency else "")
+        ),
+    )
+    pregnancy_labels = {
+        "pregnant": "Đang mang thai",
+        "not_pregnant": "Không mang thai",
+        "true": "Đang mang thai",
+        "false": "Không mang thai",
+        "unknown": "Chưa rõ",
+        "current": "Đang áp dụng",
+    }
+    add_section(
+        "Thai kỳ",
+        "pregnancy",
+        profile.pregnancy,
+        lambda entry: pregnancy_labels.get(entry.status.casefold(), entry.status),
+    )
+    snapshot = "\n".join(lines)
+    if len(snapshot) > 2800:
+        snapshot = snapshot[:2760].rstrip() + "\n- …Một số mục khác không hiển thị trong bản xem trước."
+    return snapshot
+
+
+def _profile_share_keyboard(doctor_id: int, subject_id: str) -> dict:
+    return {
+        "inline_keyboard": [
+            [{
+                "text": "✅ Đồng ý gửi và kết nối",
+                "callback_data": f"{SHARE_CONFIRM_PREFIX}{doctor_id}:{subject_id}",
+            }],
+            [{
+                "text": "👪 Đổi người được tư vấn",
+                "callback_data": f"{SHARE_CHOOSE_PREFIX}{doctor_id}",
+            }],
+            [{"text": "❌ Hủy", "callback_data": CANCEL_CALLBACK}],
+        ]
+    }
+
+
+async def _show_profile_share_confirmation(
+    chat_id: int | str,
+    message_id: int,
+    telegram_user_id: int | str,
+    doctor_id: int,
+    subject_id: str,
+) -> None:
+    owner_key = _profile_owner_key(chat_id, telegram_user_id)
+    if owner_key is None:
+        await telegram._edit_message_text(
+            chat_id,
+            message_id,
+            "Bot chưa thể mở hồ sơ sức khỏe lúc này. Vui lòng thử lại sau.",
+        )
+        return
+    ensure_subject(owner_key, "self", relationship="self", display_name=None)
+    snapshot = _profile_snapshot(owner_key, subject_id)
+    doctor = doctors.get_doctor(doctor_id)
+    if snapshot is None or doctor is None or not doctor["active"]:
+        await telegram._edit_message_text(
+            chat_id,
+            message_id,
+            "Không tìm thấy hồ sơ hoặc bác sĩ đã chọn. Vui lòng thử lại.",
+        )
+        return
+    text = (
+        "🔒 Xác nhận chia sẻ hồ sơ\n\n"
+        f"Bác sĩ nhận thông tin: {doctor['name']}\n\n"
+        f"{snapshot}\n\n"
+        "Nếu bạn đồng ý, bot sẽ gửi đúng bản tóm tắt trên và phần hội thoại gần đây "
+        "cho bác sĩ. Hãy chọn “Đổi người được tư vấn” nếu hồ sơ chưa đúng."
+    )
+    await telegram._edit_message_text(
+        chat_id,
+        message_id,
+        text,
+        _profile_share_keyboard(doctor_id, subject_id),
+    )
+
+
+async def _show_profile_subject_list(
+    chat_id: int | str,
+    message_id: int,
+    telegram_user_id: int | str,
+    doctor_id: int,
+) -> None:
+    owner_key = _profile_owner_key(chat_id, telegram_user_id)
+    if owner_key is None:
+        await telegram._edit_message_text(
+            chat_id,
+            message_id,
+            "Bot chưa thể mở hồ sơ sức khỏe lúc này. Vui lòng thử lại sau.",
+        )
+        return
+    ensure_subject(owner_key, "self", relationship="self", display_name=None)
+    rows = []
+    for subject in list_subjects(owner_key):
+        subject_id = str(subject["subject_id"])
+        relationship = _RELATIONSHIP_LABELS.get(
+            str(subject.get("relationship") or ""),
+            str(subject.get("relationship") or "Người thân"),
+        )
+        rows.append([{
+            "text": f"👤 {_subject_display_name(subject)} · {relationship}",
+            "callback_data": f"{SHARE_SUBJECT_PREFIX}{doctor_id}:{subject_id}",
+        }])
+    rows.append([{"text": "❌ Hủy", "callback_data": CANCEL_CALLBACK}])
+    await telegram._edit_message_text(
+        chat_id,
+        message_id,
+        "Ai là người cần bác sĩ tư vấn? Hãy chọn đúng hồ sơ trước khi gửi.",
+        {"inline_keyboard": rows},
+    )
+
+
 def _specialty_keyboard(tier: str, specialties: list[str]) -> dict:
     keyboard = [
         [{"text": f"📁 {specialty}", "callback_data": f"doctor:specialty:{tier}:{_specialty_slug(specialty)}"}]
@@ -447,7 +700,31 @@ async def _show_doctor_profile(
     )
 
 
-async def _handle_pick(chat_id: int | str, message_id: int, doctor_id: int) -> None:
+async def _handle_pick(
+    chat_id: int | str,
+    message_id: int,
+    doctor_id: int,
+    *,
+    profile_owner_key: str | None = None,
+    subject_id: str | None = None,
+) -> None:
+    profile_snapshot = None
+    if profile_owner_key is not None or subject_id is not None:
+        if not profile_owner_key or not subject_id:
+            await telegram._edit_message_text(
+                chat_id,
+                message_id,
+                "Không xác định được hồ sơ cần gửi. Vui lòng chọn lại.",
+            )
+            return
+        profile_snapshot = _profile_snapshot(profile_owner_key, subject_id)
+        if profile_snapshot is None:
+            await telegram._edit_message_text(
+                chat_id,
+                message_id,
+                "Hồ sơ đã chọn không còn tồn tại. Vui lòng chọn lại.",
+            )
+            return
     debt = wallet.debt_status(f"tg:{chat_id}")
     if debt["in_debt"]:
         await telegram._edit_message_text(
@@ -513,6 +790,11 @@ async def _handle_pick(chat_id: int | str, message_id: int, doctor_id: int) -> N
             "Có bệnh nhân muốn tư vấn sau khi hỏi bot. Bạn có nhận không?"
             f"{specialty_line}\n\n"
             f"{context.summary}"
+        )
+    if profile_snapshot is not None:
+        request_text += (
+            "\n\nHồ sơ sức khỏe người dùng đã xem và đồng ý chia sẻ:\n"
+            f"{profile_snapshot}"
         )
     try:
         await telegram.send_text(
@@ -674,6 +956,7 @@ async def handle_doctor_callback(callback_query: dict) -> bool:
     message = callback_query.get("message") or {}
     chat_id = (message.get("chat") or {}).get("id")
     message_id = message.get("message_id")
+    telegram_user_id = (callback_query.get("from") or {}).get("id")
     if chat_id is None:
         return True
 
@@ -777,10 +1060,83 @@ async def handle_doctor_callback(callback_query: dict) -> bool:
         if callback_query_id:
             await telegram._answer_callback_query(str(callback_query_id), "Đã làm mới.")
         return True
-    if data.startswith(PICK_PREFIX):
-        await _handle_pick(chat_id, int(message_id), int(data[len(PICK_PREFIX):]))
+    if data.startswith(SHARE_CHOOSE_PREFIX):
+        if telegram_user_id is None:
+            await telegram._edit_message_text(
+                chat_id, int(message_id), "Không xác định được người dùng. Vui lòng thử lại.",
+            )
+        else:
+            await _show_profile_subject_list(
+                chat_id,
+                int(message_id),
+                telegram_user_id,
+                int(data[len(SHARE_CHOOSE_PREFIX):]),
+            )
         if callback_query_id:
-            await telegram._answer_callback_query(str(callback_query_id), "Đã gửi yêu cầu.")
+            await telegram._answer_callback_query(str(callback_query_id), "Chọn người được tư vấn.")
+        return True
+    if data.startswith(SHARE_SUBJECT_PREFIX):
+        payload = data[len(SHARE_SUBJECT_PREFIX):]
+        doctor_id_text, _, subject_id = payload.partition(":")
+        if telegram_user_id is None or not subject_id:
+            await telegram._edit_message_text(
+                chat_id, int(message_id), "Không xác định được hồ sơ. Vui lòng thử lại.",
+            )
+        else:
+            await _show_profile_share_confirmation(
+                chat_id,
+                int(message_id),
+                telegram_user_id,
+                int(doctor_id_text),
+                subject_id,
+            )
+        if callback_query_id:
+            await telegram._answer_callback_query(str(callback_query_id), "Đã chọn hồ sơ.")
+        return True
+    if data.startswith(SHARE_CONFIRM_PREFIX):
+        payload = data[len(SHARE_CONFIRM_PREFIX):]
+        doctor_id_text, _, subject_id = payload.partition(":")
+        owner_key = (
+            _profile_owner_key(chat_id, telegram_user_id)
+            if telegram_user_id is not None else None
+        )
+        if owner_key is None or not subject_id:
+            await telegram._edit_message_text(
+                chat_id, int(message_id), "Không xác định được hồ sơ. Vui lòng thử lại.",
+            )
+        else:
+            await _handle_pick(
+                chat_id,
+                int(message_id),
+                int(doctor_id_text),
+                profile_owner_key=owner_key,
+                subject_id=subject_id,
+            )
+        if callback_query_id:
+            await telegram._answer_callback_query(str(callback_query_id), "Đã xác nhận chia sẻ.")
+        return True
+    if data.startswith(PICK_PREFIX):
+        doctor_id = int(data[len(PICK_PREFIX):])
+        if telegram_user_id is None:
+            # Compatibility for internal callers and older test fixtures.
+            await _handle_pick(chat_id, int(message_id), doctor_id)
+        else:
+            owner_key = _profile_owner_key(chat_id, telegram_user_id)
+            subject_id = (
+                _default_profile_subject_id(
+                    chat_id, telegram_user_id, owner_key,
+                )
+                if owner_key is not None else "self"
+            )
+            await _show_profile_share_confirmation(
+                chat_id,
+                int(message_id),
+                telegram_user_id,
+                doctor_id,
+                subject_id,
+            )
+        if callback_query_id:
+            await telegram._answer_callback_query(str(callback_query_id), "Kiểm tra hồ sơ trước khi gửi.")
         return True
     if data.startswith(ACCEPT_PREFIX):
         await _handle_accept(chat_id, int(message_id), int(data[len(ACCEPT_PREFIX):]))

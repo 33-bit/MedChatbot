@@ -29,17 +29,18 @@ from src.chat import answer_with_choices
 from src.chat.mode_policy import mode_label, normalize_mode
 from src.chat.replies import ChatReply, TECHNICAL_ERROR_REPLY
 from src.chat.security.identity import derive_previous_owner_keys, derive_request_identity
-from src.chat.storage.durable_memory import (
-    delete_all_memory,
-    delete_subject_memory,
-    list_memory_facts,
-    list_subjects,
-    migrate_owner_key,
-    set_memory_preference,
-)
 from src.chat.storage.feedback import create_feedback_request, record_feedback_rating
 from src.chat.storage.session import clear_session, reserve_webhook_update
-from src.chat.storage.redis_memory import clear_memory_context, load_memory_context
+from src.chat.storage.telegram_tts import is_tts_enabled, set_tts_enabled
+from src.chat.tts import synthesize_speech
+from src.chat.context.context_store import clear_conversation_context
+from src.server.channels import telegram_profile as telegram_profile_channel
+from src.server.channels.telegram_profile import (
+    PROFILE_CALLBACK_PREFIX,
+    handle_profile_callback as handle_profile_callback_query,
+    handle_profile_command,
+    intercept_pending_profile_edit,
+)
 from src.chat.storage.wallet import (
     apply_payment,
     create_order,
@@ -70,6 +71,7 @@ BOT_COMMANDS = [
     {"command": "menu", "description": "📋 Menu các lệnh hỗ trợ"},
     {"command": "help", "description": "📝 Cách đặt câu hỏi"},
     {"command": "mode", "description": "⚙️ Chọn chế độ trả lời"},
+    {"command": "tts", "description": "🔊 Bật/tắt đọc câu trả lời"},
     {"command": "remind", "description": "🔔 Đặt nhắc nhở y tế"},
     {"command": "doctor", "description": "👨‍⚕️ Kết nối bác sĩ"},
     {"command": "end", "description": "⛔ Kết thúc tư vấn bác sĩ"},
@@ -77,11 +79,7 @@ BOT_COMMANDS = [
     {"command": "balance", "description": "💳 Xem số dư"},
     {"command": "paydebt", "description": "🧾 Thanh toán công nợ"},
     {"command": "new", "description": "🔄 Xóa ngữ cảnh và bắt đầu lượt mới"},
-    {"command": "memory", "description": "🧠 Xem trạng thái bộ nhớ"},
-    {"command": "memoryon", "description": "✅ Cho phép bộ nhớ dài hạn"},
-    {"command": "memoryoff", "description": "⛔ Tắt bộ nhớ dài hạn"},
-    {"command": "forget", "description": "🗑 Quên chủ thể hiện tại"},
-    {"command": "forgetall", "description": "🗑 Xóa toàn bộ bộ nhớ"},
+    {"command": "profile", "description": "🩺 Hồ sơ y tế cá nhân"},
 ]
 START_TEXT = """Xin chào! Tôi là trợ lý y tế.
 
@@ -157,6 +155,7 @@ _TOPUP_PENDING: dict[str, bool] = {}
 
 REMIND_PREFIX_CONFIRM = "remind:confirm:"
 REMIND_PREFIX_CANCEL = "remind:cancel:"
+REMIND_PREFIX_EDIT = "remind:edit:"
 REMIND_PREFIX_REMOVE = "remind:remove:"
 REMIND_PREFIX_REMOVE_CONFIRM = "remind:remove_confirm:"
 REMIND_PREFIX_REMOVE_CANCEL = "remind:remove_cancel:"
@@ -387,31 +386,13 @@ def _menu_keyboard() -> dict:
             ],
             [
                 {"text": "🧾 Công nợ", "callback_data": "cmd:/paydebt"},
-                {"text": "🧠 Bộ nhớ", "callback_data": "menu:memory"},
+                {"text": "🩺 Hồ sơ", "callback_data": "cmd:/profile"},
+            ],
+            [
+                {"text": "🔊 Đọc câu trả lời", "callback_data": "cmd:/tts"},
             ],
             [
                 {"text": "❌ Đóng", "callback_data": "cmd:close"},
-            ],
-        ]
-    }
-
-
-def _menu_memory_keyboard() -> dict:
-    return {
-        "inline_keyboard": [
-            [
-                {"text": "🧠 Xem trạng thái", "callback_data": "cmd:/memory"},
-            ],
-            [
-                {"text": "✅ Bật bộ nhớ", "callback_data": "cmd:/memoryon"},
-                {"text": "⛔ Tắt bộ nhớ", "callback_data": "cmd:/memoryoff"},
-            ],
-            [
-                {"text": "🗑 Quên chủ thể", "callback_data": "cmd:/forget"},
-                {"text": "🗑 Xóa toàn bộ", "callback_data": "cmd:/forgetall"},
-            ],
-            [
-                {"text": "🔙 Quay lại", "callback_data": "menu:main"},
             ],
         ]
     }
@@ -428,6 +409,21 @@ def _mode_keyboard(selected_mode: str) -> dict:
         text = f"{SELECTED_ICON} {label}" if mode == selected else label
         buttons.append({"text": text, "callback_data": f"{MODE_CALLBACK_PREFIX}{mode}"})
     return {"inline_keyboard": [buttons]}
+
+
+def _tts_keyboard(enabled: bool) -> dict:
+    return {
+        "inline_keyboard": [[
+            {
+                "text": f"{SELECTED_ICON} Bật" if enabled else "Bật",
+                "callback_data": "cmd:/ttson",
+            },
+            {
+                "text": f"{SELECTED_ICON} Tắt" if not enabled else "Tắt",
+                "callback_data": "cmd:/ttsoff",
+            },
+        ]]
+    }
 
 
 def _mode_retry_keyboard(mode: str, question: str) -> dict:
@@ -536,6 +532,21 @@ async def send_voice(chat_id: int | str, voice_file_id: str) -> None:
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(_api_url("sendVoice"), json=payload)
     logger.info("Telegram sendVoice status=%s", r.status_code)
+
+
+async def send_voice_audio(chat_id: int | str, voice_audio: bytes) -> None:
+    if not TELEGRAM_BOT_TOKEN:
+        logger.warning("TELEGRAM_BOT_TOKEN chưa cấu hình; bỏ qua gửi voice.")
+        return
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        r = await client.post(
+            _api_url("sendVoice"),
+            data={"chat_id": str(chat_id)},
+            files={"voice": ("answer.ogg", voice_audio, "audio/ogg")},
+        )
+    logger.info("Telegram sendVoice(audio) status=%s", r.status_code)
+    if r.status_code >= 400:
+        raise RuntimeError(f"Telegram sendVoice failed: {r.status_code}")
 
 
 async def copy_message(chat_id: int | str, from_chat_id: int | str, message_id: int | str) -> None:
@@ -870,6 +881,14 @@ def _request_identity(
         except Exception:
             logger.exception("Telegram owner-key rotation failed")
             return type(identity)("", identity.session_key, False)
+    if identity.owner_key:
+        # Best-effort: remember this session for owner-wide invalidation
+        # when the medical profile is edited or deleted from the manager UI.
+        try:
+            from src.chat.profile.ui_state import track_profile_session
+            track_profile_session(identity.owner_key, identity.session_key)
+        except Exception:
+            logger.debug("track_profile_session failed (non-fatal)")
     return identity
 
 
@@ -884,16 +903,45 @@ async def _answer_and_send(
     identity = _request_identity(chat_id, user_id, chat_type)
     session_id = identity.session_key
 
+    # Intercept a pending profile rename/edit input before the chatbot runs.
+    if await intercept_pending_profile_edit(chat_id, user_id, text):
+        return
+
     is_direct_remind = False
     is_ordinary_remind = False
     parsed_remind = None
 
     if chat_type == "private" and user_id is not None:
-        from src.chat.storage.reminders import init_reminders_db, get_pending_conversation
+        from src.chat.storage.reminders import (
+            get_latest_reminder_draft,
+            get_pending_conversation,
+            init_reminders_db,
+        )
         await asyncio.to_thread(init_reminders_db)
         from src.chat.storage.recurrence import TZ
         
         pending = await asyncio.to_thread(get_pending_conversation, int(chat_id), int(user_id))
+        if pending is None:
+            draft = await asyncio.to_thread(
+                get_latest_reminder_draft,
+                int(chat_id),
+                int(user_id),
+            )
+            if draft:
+                pending = {
+                    "original_request": draft["reminder_text"],
+                    "partial_fields": {
+                        "medical_type": draft["medical_type"],
+                        "reminder_text": draft["reminder_text"],
+                        "schedule": draft["schedule"],
+                        "end_date": draft["end_date"],
+                    },
+                    "turns": [draft["reminder_text"]],
+                    "missing_fields": [],
+                    "expires_at": draft["expires_at"],
+                    "draft_id": draft["id"],
+                    "source": draft["source"],
+                }
         if pending:
             stop_typing = asyncio.Event()
             typing_task = asyncio.create_task(_keep_typing(chat_id, stop_typing))
@@ -907,26 +955,35 @@ async def _answer_and_send(
                 with contextlib.suppress(asyncio.CancelledError):
                     await typing_task
 
-        from src.chat.storage.reminder_parser import parse_multi_turn_reminder, check_reminder_prefilter
-        if check_reminder_prefilter(text):
+        from src.chat.storage.reminder_parser import (
+            check_reminder_prefilter,
+            direct_reminder_fallback,
+            is_explicit_reminder_request,
+            parse_multi_turn_reminder,
+        )
+        explicit_reminder = is_explicit_reminder_request(text)
+        if check_reminder_prefilter(text) or explicit_reminder:
             parsed_remind = parse_multi_turn_reminder(text, datetime.datetime.now(TZ), prior_context=None)
             if parsed_remind:
-                is_direct_remind = parsed_remind.get("is_direct_request", False)
+                is_direct_remind = explicit_reminder or parsed_remind.get("is_direct_request", False)
                 is_ordinary_remind = parsed_remind.get("is_ordinary_mention", False)
-                
-                if is_direct_remind:
-                    stop_typing = asyncio.Event()
-                    typing_task = asyncio.create_task(_keep_typing(chat_id, stop_typing))
-                    try:
-                        await _process_reminder_input_flow(
-                            chat_id, int(user_id), text, is_direct=True, parsed_reminder=parsed_remind
-                        )
-                    finally:
-                        stop_typing.set()
-                        typing_task.cancel()
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await typing_task
-                    return
+            elif explicit_reminder:
+                parsed_remind = direct_reminder_fallback(text)
+                is_direct_remind = True
+
+            if is_direct_remind:
+                stop_typing = asyncio.Event()
+                typing_task = asyncio.create_task(_keep_typing(chat_id, stop_typing))
+                try:
+                    await _process_reminder_input_flow(
+                        chat_id, int(user_id), text, is_direct=True, parsed_reminder=parsed_remind
+                    )
+                finally:
+                    stop_typing.set()
+                    typing_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await typing_task
+                return
     answer_mode = normalize_mode(mode or _CHAT_MODE_DEFAULTS.get(str(chat_id)))
     stop_typing = asyncio.Event()
     typing_task = asyncio.create_task(_keep_typing(chat_id, stop_typing))
@@ -993,6 +1050,12 @@ async def _answer_and_send(
     except Exception:
         logger.exception("Telegram send failed")
     else:
+        try:
+            if is_tts_enabled(chat_id):
+                voice_audio = await asyncio.to_thread(synthesize_speech, reply.text)
+                await send_voice_audio(chat_id, voice_audio)
+        except Exception:
+            logger.exception("Telegram TTS failed")
         if answer_now_ack_message_id is not None:
             try:
                 await _delete_message(chat_id, answer_now_ack_message_id)
@@ -1401,6 +1464,22 @@ async def _handle_command(
             inline_keyboard=_mode_keyboard(current),
         )
         return True
+    if cmd in {"/tts", "/ttson", "/ttsoff"}:
+        if cmd == "/ttson":
+            set_tts_enabled(chat_id, True)
+        elif cmd == "/ttsoff":
+            set_tts_enabled(chat_id, False)
+        enabled = is_tts_enabled(chat_id)
+        await send_text(
+            chat_id,
+            (
+                "Đọc câu trả lời bằng giọng nói\n\n"
+                f"Trạng thái hiện tại: **{'Bật' if enabled else 'Tắt'}**\n\n"
+                "Khi bật, bot vẫn gửi văn bản trước rồi gửi thêm bản đọc tiếng Việt."
+            ),
+            inline_keyboard=_tts_keyboard(enabled),
+        )
+        return True
     if cmd == "/topup":
         if chat_type != "private":
             await send_text(chat_id, "Lệnh nạp tiền chỉ dùng được trong cuộc trò chuyện riêng tư với bot.")
@@ -1431,11 +1510,21 @@ async def _handle_command(
         if chat_type != "private":
             await send_text(chat_id, "Tính năng này chỉ dùng được trong cuộc trò chuyện riêng tư.")
             return True
-        from src.chat.storage.reminders import get_pending_conversation, delete_pending_conversation
+        from src.chat.storage.reminders import (
+            delete_pending_conversation,
+            delete_reminder_drafts_for_user,
+            get_pending_conversation,
+        )
         if user_id is not None:
             pending = await asyncio.to_thread(get_pending_conversation, chat_id, user_id)
+            deleted_drafts = await asyncio.to_thread(
+                delete_reminder_drafts_for_user,
+                chat_id,
+                user_id,
+            )
             if pending:
                 await asyncio.to_thread(delete_pending_conversation, chat_id, user_id)
+            if pending or deleted_drafts:
                 await send_text(chat_id, "❌ Đã hủy thiết lập nhắc nhở.")
                 return True
         await send_text(chat_id, "Không có thiết lập nhắc nhở nào đang chờ.")
@@ -1470,50 +1559,16 @@ async def _handle_command(
         return True
     if cmd == "/new":
         clear_session(identity.session_key)
-        clear_memory_context(identity.session_key)
+        clear_conversation_context(identity.session_key)
         _CHAT_MODE_DEFAULTS.pop(str(chat_id), None)
         await send_text(chat_id, "Tôi đã xóa ngữ cảnh hội thoại hiện tại. Bạn có thể bắt đầu câu hỏi mới.")
         return True
-    if cmd == "/memory":
-        if not identity.owner_key:
-            await send_text(chat_id, "Bộ nhớ dài hạn không khả dụng vì chưa xác định được danh tính an toàn.")
-            return True
-        subjects = list_subjects(identity.owner_key)
-        facts = list_memory_facts(identity.owner_key)
-        await send_text(
-            chat_id,
-            f"Bộ nhớ dài hạn hiện có {len(facts)} thông tin cho {len(subjects)} chủ thể.",
-        )
+    if cmd == "/profile":
+        await handle_profile_command(chat_id, user_id, chat_type)
         return True
-    if cmd == "/memoryon":
-        if not identity.owner_key:
-            await send_text(chat_id, "Không thể bật bộ nhớ dài hạn cho cuộc trò chuyện này.")
-            return True
-        set_memory_preference(identity.owner_key, True)
-        await send_text(chat_id, "Đã bật bộ nhớ dài hạn. Thông tin y tế vẫn là dữ liệu nhạy cảm.")
-        return True
-    if cmd == "/memoryoff":
-        if identity.owner_key:
-            set_memory_preference(identity.owner_key, False)
-        await send_text(chat_id, "Đã tắt đọc và ghi bộ nhớ dài hạn. Dữ liệu cũ chưa bị xóa.")
-        return True
-    if cmd == "/forget":
-        if not identity.owner_key:
-            await send_text(chat_id, "Không có bộ nhớ dài hạn để xóa.")
-            return True
-        state, _, _ = load_memory_context(identity.session_key, identity.owner_key)
-        if not state.active_subject_id:
-            await send_text(chat_id, "Chưa có chủ thể y tế hiện tại để quên.")
-            return True
-        delete_subject_memory(identity.owner_key, state.active_subject_id)
-        await send_text(chat_id, "Đã xóa bộ nhớ dài hạn của chủ thể hiện tại.")
-        return True
-    if cmd == "/forgetall":
-        if identity.owner_key:
-            delete_all_memory(identity.owner_key)
-        clear_session(identity.session_key)
-        clear_memory_context(identity.session_key)
-        await send_text(chat_id, "Đã xóa toàn bộ bộ nhớ dài hạn và ngữ cảnh hội thoại.")
+    if cmd in {"/memory", "/memoryon", "/memoryoff", "/forget", "/forgetall"}:
+        from src.server.channels.telegram_profile import OBSOLETE_COMMAND_TEXT
+        await send_text(chat_id, OBSOLETE_COMMAND_TEXT)
         return True
     return False
 
@@ -1538,6 +1593,7 @@ async def telegram_webhook(
         data = callback_query.get("data") or ""
         message = callback_query.get("message") or {}
         chat_id = (message.get("chat") or {}).get("id")
+        chat_type = (message.get("chat") or {}).get("type", "private")
         message_id = message.get("message_id")
         user_id = (callback_query.get("from") or {}).get("id")
         cb_id = callback_query.get("id")
@@ -1553,16 +1609,6 @@ async def telegram_webhook(
                 cmd_text = data[len("cmd:"):]
                 await _answer_callback_query(cb_id, f"Đang thực hiện {cmd_text}")
                 await _handle_command(chat_id, cmd_text, "private", user_id)
-                return {"ok": True}
-
-            if data == "menu:memory" and chat_id and message_id:
-                await _answer_callback_query(cb_id, "")
-                await _edit_message_text(
-                    chat_id,
-                    message_id,
-                    "🧠 **Quản lý bộ nhớ:**",
-                    inline_keyboard=_menu_memory_keyboard(),
-                )
                 return {"ok": True}
 
             if data == "menu:main" and chat_id and message_id:
@@ -1595,8 +1641,61 @@ async def telegram_webhook(
                         await _edit_message_text(
                             chat_id,
                             message_id,
-                            "🔔 **Quản lý nhắc nhở y tế**\n\nBạn có thể thêm nhắc nhở bằng cách gửi tin nhắn bằng tiếng Việt hoặc tiếng Anh (ví dụ: 'Nhắc tôi uống thuốc Panadol lúc 8h sáng hàng ngày') hoặc quản lý danh sách hiện có.",
+                            "🔔 Quản lý nhắc nhở y tế\n\nBạn có thể thêm nhắc nhở bằng cách gửi tin nhắn bằng tiếng Việt hoặc tiếng Anh (ví dụ: 'Nhắc tôi uống thuốc Panadol lúc 8h sáng hàng ngày') hoặc quản lý danh sách hiện có.",
                             inline_keyboard=_remind_menu_keyboard()
+                        )
+                    return {"ok": True}
+
+                if data.startswith(REMIND_PREFIX_EDIT):
+                    reminder_id = int(data[len(REMIND_PREFIX_EDIT):])
+                    from src.chat.storage.reminders import (
+                        create_reminder_draft,
+                        delete_reminder_drafts_for_user,
+                        list_active_reminders,
+                    )
+                    active = await asyncio.to_thread(list_active_reminders, chat_id, user_id)
+                    target = next((item for item in active if item["id"] == reminder_id), None)
+                    if not target:
+                        await _answer_callback_query(cb_id, "Không tìm thấy nhắc nhở.")
+                        return {"ok": True}
+
+                    await asyncio.to_thread(delete_reminder_drafts_for_user, chat_id, user_id)
+                    draft_id = await asyncio.to_thread(
+                        create_reminder_draft,
+                        chat_id=chat_id,
+                        user_id=user_id,
+                        medical_type=target["medical_type"],
+                        reminder_text=target["reminder_text"],
+                        schedule=target["schedule"],
+                        next_fire_at=target["next_fire_at"],
+                        end_date=target["end_date"],
+                        source=f"edit:{reminder_id}",
+                    )
+                    mtype = "Uống thuốc" if target["medical_type"] == "medication" else "Khám bệnh"
+                    from src.chat.storage.recurrence import format_schedule_vietnamese
+                    sched_desc = format_schedule_vietnamese(target["schedule"])
+                    edit_text = (
+                        "✏️ Chỉnh sửa nhắc nhở\n\n"
+                        f"Loại: {mtype}\n"
+                        f"Nội dung: {target['reminder_text']}\n"
+                        f"Lịch nhắc: {sched_desc}\n\n"
+                        "Hãy gửi nội dung bạn muốn thay đổi, ví dụ:\n"
+                        "• đổi nội dung thành vitamin A\n"
+                        "• đổi giờ thành 13h"
+                    )
+                    keyboard = {
+                        "inline_keyboard": [[{
+                            "text": "❌ Hủy chỉnh sửa",
+                            "callback_data": f"{REMIND_PREFIX_CANCEL}{draft_id}",
+                        }]]
+                    }
+                    await _answer_callback_query(cb_id, "Hãy nhập thay đổi.")
+                    if message_id:
+                        await _edit_message_text(
+                            chat_id,
+                            message_id,
+                            edit_text,
+                            inline_keyboard=keyboard,
                         )
                     return {"ok": True}
 
@@ -1665,6 +1764,16 @@ async def telegram_webhook(
             return {"ok": True}
         if await telegram_doctor.handle_doctor_callback(callback_query):
             return {"ok": True}
+        if data.startswith(PROFILE_CALLBACK_PREFIX):
+            if await handle_profile_callback_query(callback_query, user_id, chat_type):
+                return {"ok": True}
+        if data.startswith("mem:"):
+            # Legacy callback prefix from the previous memory-manager UI.
+            # Acknowledge once and direct the user to /profile; never mutate.
+            await _answer_callback_query(
+                cb_id, "Hồ sơ đã chuyển sang /profile — bấm lại từ menu chính."
+            )
+            return {"ok": True}
         if await _handle_multi_select_callback(callback_query, background_tasks):
             return {"ok": True}
         await _handle_rating_callback(callback_query)
@@ -1726,22 +1835,30 @@ async def _show_reminders_list(chat_id: int, user_id: int, message_id: int | Non
     
     active = await asyncio.to_thread(list_active_reminders, chat_id, user_id)
     if not active:
-        text = "📋 **Nhắc nhở y tế của bạn:**\n\nBạn chưa có nhắc nhở nào hoạt động."
+        text = "📋 Nhắc nhở y tế của bạn\n\nBạn chưa có nhắc nhở nào hoạt động."
         kbd = {
             "inline_keyboard": [
-                [{"text": "🔙 Quay lại", "callback_data": REMIND_CALLBACK_MAIN}]
+                [{"text": "⬅️ Quay lại", "callback_data": REMIND_CALLBACK_MAIN}]
             ]
         }
     else:
-        text = "📋 **Nhắc nhở y tế của bạn:**\n\n"
+        text = "📋 Nhắc nhở y tế của bạn\n\n"
         buttons = []
         for idx, r in enumerate(active, 1):
             mtype = "Uống thuốc" if r["medical_type"] == "medication" else "Khám bệnh"
             sched_desc = format_schedule_vietnamese(r["schedule"])
-            text += f"{idx}. 💊 *{mtype}*: {r['reminder_text']} ({sched_desc})\n"
-            buttons.append([{"text": f"🗑 Xóa số {idx}", "callback_data": f"{REMIND_PREFIX_REMOVE}{r['id']}"}])
+            icon = "💊" if r["medical_type"] == "medication" else "🏥"
+            text += (
+                f"{idx}. {icon} {mtype}\n"
+                f"Nội dung: {r['reminder_text']}\n"
+                f"Lịch nhắc: {sched_desc}\n\n"
+            )
+            buttons.append([
+                {"text": f"✏️ Sửa {idx}", "callback_data": f"{REMIND_PREFIX_EDIT}{r['id']}"},
+                {"text": f"🗑 Xóa {idx}", "callback_data": f"{REMIND_PREFIX_REMOVE}{r['id']}"},
+            ])
             
-        buttons.append([{"text": "🔙 Quay lại", "callback_data": REMIND_CALLBACK_MAIN}])
+        buttons.append([{"text": "⬅️ Quay lại", "callback_data": REMIND_CALLBACK_MAIN}])
         kbd = {"inline_keyboard": buttons}
         
     if message_id:
@@ -1762,7 +1879,7 @@ async def _show_remove_confirmation(chat_id: int, user_id: int, reminder_id: int
     mtype = "Uống thuốc" if target["medical_type"] == "medication" else "Khám bệnh"
     sched_desc = format_schedule_vietnamese(target["schedule"])
     text = (
-        f"❓ **Xác nhận xóa nhắc nhở:**\n\n"
+        f"❓ Xác nhận xóa nhắc nhở\n\n"
         f"- Loại: {mtype}\n"
         f"- Nội dung: {target['reminder_text']}\n"
         f"- Lịch nhắc: {sched_desc}\n\n"
@@ -1773,7 +1890,14 @@ async def _show_remove_confirmation(chat_id: int, user_id: int, reminder_id: int
 async def _process_reminder_followup(chat_id: int, user_id: int, text: str, pending: dict) -> bool:
     import datetime
     from src.chat.storage.reminder_parser import parse_multi_turn_reminder
-    from src.chat.storage.reminders import delete_pending_conversation, upsert_pending_conversation, create_reminder_draft, count_active_reminders, check_duplicate_active_or_pending
+    from src.chat.storage.reminders import (
+        check_duplicate_active_or_pending,
+        count_active_reminders,
+        create_reminder_draft,
+        delete_pending_conversation,
+        delete_reminder_draft,
+        upsert_pending_conversation,
+    )
     from src.chat.storage.recurrence import TZ, format_schedule_vietnamese, next_occurrence
     import json
     
@@ -1784,6 +1908,10 @@ async def _process_reminder_followup(chat_id: int, user_id: int, text: str, pend
         
     if not parsed.get("is_relevant_followup", False):
         return False
+
+    draft_id = pending.get("draft_id")
+    if draft_id is not None:
+        await asyncio.to_thread(delete_reminder_draft, draft_id)
         
     if parsed.get("is_canceled", False):
         await asyncio.to_thread(delete_pending_conversation, chat_id, user_id)
@@ -1833,7 +1961,7 @@ async def _process_reminder_followup(chat_id: int, user_id: int, text: str, pend
             schedule=sched,
             next_fire_at=int(first_fire.timestamp()),
             end_date=end_date,
-            source="direct"
+            source=pending.get("source", "direct")
         )
         
         mtype_vn = "Uống thuốc" if mtype == "medication" else "Khám bệnh"
@@ -1853,18 +1981,15 @@ async def _process_reminder_followup(chat_id: int, user_id: int, text: str, pend
         await send_text(chat_id, confirm_msg, inline_keyboard=_remind_draft_keyboard(draft_id))
         return True
         
-    if parsed.get("is_ambiguous", False):
-        await send_text(
-            chat_id,
-            "Tôi chưa rõ thời gian cụ thể bạn muốn nhắc nhở (ví dụ: 'sáng mai' lúc mấy giờ?). Bạn vui lòng cung cấp thời gian chính xác nhé."
-        )
-        return True
-        
     if parsed.get("is_past", False):
-        await send_text(chat_id, "Thời gian nhắc nhở không thể ở trong quá khứ.")
-        return True
-        
-    prompt = parsed.get("clarification_prompt") or "Bạn vui lòng cung cấp thêm thông tin cho nhắc nhở."
+        prompt = "Thời gian nhắc nhở không thể ở trong quá khứ. Bạn vui lòng chọn thời gian khác."
+    elif parsed.get("is_ambiguous", False):
+        prompt = parsed.get("clarification_prompt") or (
+            "Tôi chưa rõ thời gian cụ thể bạn muốn nhắc nhở. "
+            "Bạn vui lòng cung cấp ngày và giờ chính xác."
+        )
+    else:
+        prompt = parsed.get("clarification_prompt") or "Bạn vui lòng cung cấp thêm thông tin cho nhắc nhở."
     await asyncio.to_thread(
         upsert_pending_conversation,
         chat_id=chat_id,
@@ -1873,7 +1998,8 @@ async def _process_reminder_followup(chat_id: int, user_id: int, text: str, pend
         partial_fields=parsed.get("merged_fields", {}),
         turns=turns,
         missing_fields=parsed.get("missing_fields", []),
-        expires_at=pending.get("expires_at")
+        expires_at=pending.get("expires_at"),
+        source=pending.get("source", "direct"),
     )
     
     keyboard = {"inline_keyboard": [[{"text": "❌ Hủy", "callback_data": "remind:cancel_conv"}]]}
@@ -1998,17 +2124,15 @@ async def _process_reminder_input_flow(
         
     else:
         if is_direct_req:
-            if parsed.get("is_ambiguous", False):
-                await send_text(
-                    chat_id,
-                    "Tôi chưa rõ thời gian cụ thể bạn muốn nhắc nhở (ví dụ: 'sáng mai' lúc mấy giờ?). Bạn vui lòng cung cấp thời gian chính xác nhé."
-                )
-                return True
             if parsed.get("is_past", False):
-                await send_text(chat_id, "Thời gian nhắc nhở không thể ở trong quá khứ.")
-                return True
-                
-            prompt = parsed.get("clarification_prompt") or "Bạn vui lòng cung cấp thêm thông tin cho nhắc nhở."
+                prompt = "Thời gian nhắc nhở không thể ở trong quá khứ. Bạn vui lòng chọn thời gian khác."
+            elif parsed.get("is_ambiguous", False):
+                prompt = parsed.get("clarification_prompt") or (
+                    "Tôi chưa rõ thời gian cụ thể bạn muốn nhắc nhở. "
+                    "Bạn vui lòng cung cấp ngày và giờ chính xác."
+                )
+            else:
+                prompt = parsed.get("clarification_prompt") or "Bạn vui lòng cung cấp thêm thông tin cho nhắc nhở."
             await asyncio.to_thread(
                 upsert_pending_conversation,
                 chat_id=chat_id,
@@ -2056,7 +2180,7 @@ async def run_reminder_tick() -> None:
         chat_id = r["chat_id"]
         reminder_id = r["id"]
         mtype = "Uống thuốc" if r["medical_type"] == "medication" else "Khám bệnh"
-        msg = f"⏰ **Nhắc nhở y tế ({mtype}):**\n\n{r['reminder_text']}"
+        msg = f"⏰ *Nhắc nhở y tế ({mtype}):*\n\n{r['reminder_text']}"
         
         try:
             await send_checked_reminder_message(chat_id, msg)

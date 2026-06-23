@@ -12,7 +12,13 @@ from src.chat.storage.reminders import (
     complete_delivery, release_claim, count_active_reminders,
     check_duplicate_active_or_pending, delete_reminder_draft
 )
-from src.chat.storage.reminder_parser import parse_reminder_natural_language, check_reminder_prefilter, parse_multi_turn_reminder
+from src.chat.storage.reminder_parser import (
+    check_reminder_prefilter,
+    direct_reminder_fallback,
+    is_explicit_reminder_request,
+    parse_multi_turn_reminder,
+    parse_reminder_natural_language,
+)
 from src.server.channels.telegram import run_reminder_tick, send_checked_reminder_message
 
 def test_recurrence_one_time():
@@ -243,6 +249,7 @@ def test_pending_conversation_lifecycle():
     assert pending["partial_fields"] == {"medical_type": "medication"}
     assert pending["turns"] == ["Đặt lịch uống thuốc"]
     assert pending["missing_fields"] == ["schedule"]
+    assert pending["source"] == "direct"
     
     # 3. Expiration check (simulate expired)
     upsert_pending_conversation(
@@ -544,4 +551,428 @@ def test_expiration_cleanup():
     assert get_pending_conversation(chat_id, user_id) is None
 
 
+def test_explicit_reminder_detection_and_safe_fallback():
+    assert is_explicit_reminder_request("đặt lịch uống thuốc cho tôi") is True
+    assert is_explicit_reminder_request("Nhắc tôi đi khám") is True
+    assert is_explicit_reminder_request("I have a medicine question") is False
 
+    fallback = direct_reminder_fallback("đặt lịch uống thuốc cho tôi")
+    assert fallback["is_direct_request"] is True
+    assert fallback["merged_fields"]["medical_type"] == "medication"
+    assert fallback["merged_fields"]["reminder_text"] == "Uống thuốc"
+    assert fallback["missing_fields"] == ["schedule"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("parser_result", [
+    None,
+    {
+        "is_relevant_followup": True,
+        "is_canceled": False,
+        "merged_fields": {
+            "medical_type": "medication",
+            "reminder_text": "uống thuốc",
+            "schedule": None,
+            "end_date": None,
+        },
+        "missing_fields": ["schedule"],
+        "is_complete": False,
+        "is_ambiguous": True,
+        "is_past": False,
+        "clarification_prompt": "Bạn muốn uống thuốc vào lúc nào trong ngày?",
+    },
+])
+async def test_explicit_reminder_never_falls_through_to_rag(monkeypatch, parser_result):
+    from src.chat.storage.reminders import delete_pending_conversation, init_reminders_db
+    from src.server.channels import telegram
+
+    chat_id = 99101
+    user_id = 99102
+    init_reminders_db()
+    delete_pending_conversation(chat_id, user_id)
+
+    monkeypatch.setattr(
+        "src.chat.storage.reminder_parser.parse_multi_turn_reminder",
+        lambda *args, **kwargs: parser_result,
+    )
+    process_reminder = AsyncMock(return_value=True)
+    monkeypatch.setattr(telegram, "_process_reminder_input_flow", process_reminder)
+    monkeypatch.setattr(
+        telegram,
+        "answer_with_choices",
+        MagicMock(side_effect=AssertionError("explicit reminder reached medical RAG")),
+    )
+
+    async def wait_for_stop(_chat_id, stop):
+        await stop.wait()
+
+    monkeypatch.setattr(telegram, "_keep_typing", wait_for_stop)
+
+    await telegram._answer_and_send(
+        chat_id,
+        "đặt lịch uống thuốc cho tôi",
+        user_id=user_id,
+        chat_type="private",
+    )
+
+    process_reminder.assert_awaited_once()
+    assert process_reminder.await_args.kwargs["is_direct"] is True
+    assert process_reminder.await_args.kwargs["parsed_reminder"] is not None
+
+
+@pytest.mark.anyio
+async def test_ambiguous_direct_reminder_is_persisted_before_clarification(monkeypatch):
+    from src.chat.storage.reminders import (
+        delete_pending_conversation,
+        get_pending_conversation,
+        init_reminders_db,
+    )
+    from src.server.channels import telegram
+
+    chat_id = 99103
+    user_id = 99104
+    init_reminders_db()
+    delete_pending_conversation(chat_id, user_id)
+    monkeypatch.setattr(telegram, "send_text", AsyncMock(return_value=123))
+
+    parsed = {
+        "is_relevant_followup": True,
+        "is_canceled": False,
+        "merged_fields": {
+            "medical_type": "medication",
+            "reminder_text": "uống thuốc",
+            "schedule": None,
+            "end_date": None,
+        },
+        "missing_fields": ["schedule"],
+        "is_complete": False,
+        "is_ambiguous": True,
+        "is_past": False,
+        "clarification_prompt": "Bạn muốn uống thuốc vào lúc nào trong ngày?",
+    }
+
+    handled = await telegram._process_reminder_input_flow(
+        chat_id,
+        user_id,
+        "đặt lịch uống thuốc cho tôi",
+        is_direct=True,
+        parsed_reminder=parsed,
+    )
+
+    assert handled is True
+    pending = get_pending_conversation(chat_id, user_id)
+    assert pending is not None
+    assert pending["partial_fields"]["medical_type"] == "medication"
+    assert pending["missing_fields"] == ["schedule"]
+
+
+@pytest.mark.anyio
+async def test_confirmation_draft_accepts_free_text_correction(monkeypatch):
+    from src.chat.storage.reminders import (
+        create_reminder_draft,
+        delete_reminder_drafts_for_user,
+        get_latest_reminder_draft,
+        init_reminders_db,
+    )
+    from src.server.channels import telegram
+
+    chat_id = 99105
+    user_id = 99106
+    init_reminders_db()
+    delete_reminder_drafts_for_user(chat_id, user_id)
+    old_draft_id = create_reminder_draft(
+        chat_id=chat_id,
+        user_id=user_id,
+        medical_type="medication",
+        reminder_text="uống thuốc",
+        schedule={"type": "one_time", "datetime": "2026-06-22 12:00"},
+        next_fire_at=int(datetime.datetime(2026, 6, 22, 12, 0, tzinfo=TZ).timestamp()),
+        end_date=None,
+        source="direct",
+    )
+
+    corrected = {
+        "is_relevant_followup": True,
+        "is_canceled": False,
+        "corrected": True,
+        "merged_fields": {
+            "medical_type": "medication",
+            "reminder_text": "Vitamin A",
+            "schedule": {"type": "one_time", "datetime": "2026-06-22 12:00"},
+            "end_date": None,
+        },
+        "missing_fields": [],
+        "is_complete": True,
+        "is_ambiguous": False,
+        "is_past": False,
+        "clarification_prompt": None,
+    }
+    monkeypatch.setattr(
+        "src.chat.storage.reminder_parser.parse_multi_turn_reminder",
+        lambda *args, **kwargs: corrected,
+    )
+    monkeypatch.setattr(telegram, "send_text", AsyncMock(return_value=123))
+    monkeypatch.setattr(
+        telegram,
+        "answer_with_choices",
+        MagicMock(side_effect=AssertionError("draft correction reached medical RAG")),
+    )
+
+    async def wait_for_stop(_chat_id, stop):
+        await stop.wait()
+
+    monkeypatch.setattr(telegram, "_keep_typing", wait_for_stop)
+
+    await telegram._answer_and_send(
+        chat_id,
+        "đổi tên nội dung thành vitamin A",
+        user_id=user_id,
+        chat_type="private",
+    )
+
+    latest = get_latest_reminder_draft(chat_id, user_id)
+    assert latest is not None
+    assert latest["id"] != old_draft_id
+    assert latest["reminder_text"] == "Vitamin A"
+
+
+@pytest.mark.anyio
+async def test_cancel_command_deletes_confirmation_draft(monkeypatch):
+    from src.chat.storage.reminders import (
+        create_reminder_draft,
+        delete_reminder_drafts_for_user,
+        get_latest_reminder_draft,
+        init_reminders_db,
+    )
+    from src.server.channels import telegram
+
+    chat_id = 99107
+    user_id = 99108
+    init_reminders_db()
+    delete_reminder_drafts_for_user(chat_id, user_id)
+    create_reminder_draft(
+        chat_id=chat_id,
+        user_id=user_id,
+        medical_type="medication",
+        reminder_text="Vitamin A",
+        schedule={"type": "one_time", "datetime": "2026-06-22 12:00"},
+        next_fire_at=int(datetime.datetime(2026, 6, 22, 12, 0, tzinfo=TZ).timestamp()),
+        end_date=None,
+        source="direct",
+    )
+    send_text = AsyncMock(return_value=123)
+    monkeypatch.setattr(telegram, "send_text", send_text)
+
+    handled = await telegram._handle_command(
+        chat_id,
+        "/cancel",
+        chat_type="private",
+        user_id=user_id,
+    )
+
+    assert handled is True
+    assert get_latest_reminder_draft(chat_id, user_id) is None
+    send_text.assert_awaited_once_with(chat_id, "❌ Đã hủy thiết lập nhắc nhở.")
+
+
+@pytest.mark.anyio
+async def test_reminder_list_renders_plain_text_with_edit_and_delete(monkeypatch):
+    from src.chat.storage.reminders import (
+        confirm_reminder_draft,
+        create_reminder_draft,
+        init_reminders_db,
+        list_active_reminders,
+    )
+    from src.server.channels import telegram
+
+    chat_id = 99109
+    user_id = 99110
+    init_reminders_db()
+    for reminder in list_active_reminders(chat_id, user_id):
+        delete_reminder(chat_id, user_id, reminder["id"])
+    draft_id = create_reminder_draft(
+        chat_id=chat_id,
+        user_id=user_id,
+        medical_type="medication",
+        reminder_text="vitamin A",
+        schedule={"type": "one_time", "datetime": "2026-06-22 12:00"},
+        next_fire_at=int(datetime.datetime(2026, 6, 22, 12, 0, tzinfo=TZ).timestamp()),
+        end_date=None,
+        source="direct",
+    )
+    reminder = confirm_reminder_draft(chat_id, user_id, draft_id)
+    edit_message = AsyncMock()
+    monkeypatch.setattr(telegram, "_edit_message_text", edit_message)
+
+    await telegram._show_reminders_list(chat_id, user_id, message_id=123)
+
+    rendered = edit_message.await_args.args[2]
+    keyboard = edit_message.await_args.kwargs["inline_keyboard"]["inline_keyboard"]
+    assert "*" not in rendered
+    assert "Nội dung: vitamin A" in rendered
+    assert "Lịch nhắc: Một lần vào 2026-06-22 12:00" in rendered
+    assert keyboard[0][0]["callback_data"] == f"remind:edit:{reminder['id']}"
+    assert keyboard[0][1]["callback_data"] == f"remind:remove:{reminder['id']}"
+
+
+def test_confirm_edit_draft_updates_existing_reminder():
+    from src.chat.storage.reminders import (
+        confirm_reminder_draft,
+        create_reminder_draft,
+        init_reminders_db,
+        list_active_reminders,
+    )
+
+    chat_id = 99111
+    user_id = 99112
+    init_reminders_db()
+    original_draft = create_reminder_draft(
+        chat_id=chat_id,
+        user_id=user_id,
+        medical_type="medication",
+        reminder_text="uống thuốc",
+        schedule={"type": "one_time", "datetime": "2026-06-22 12:00"},
+        next_fire_at=int(datetime.datetime(2026, 6, 22, 12, 0, tzinfo=TZ).timestamp()),
+        end_date=None,
+        source="direct",
+    )
+    original = confirm_reminder_draft(chat_id, user_id, original_draft)
+    edit_draft = create_reminder_draft(
+        chat_id=chat_id,
+        user_id=user_id,
+        medical_type="medication",
+        reminder_text="vitamin A",
+        schedule={"type": "daily", "times": ["13:00"]},
+        next_fire_at=int(datetime.datetime(2026, 6, 22, 13, 0, tzinfo=TZ).timestamp()),
+        end_date=None,
+        source=f"edit:{original['id']}",
+    )
+
+    updated = confirm_reminder_draft(chat_id, user_id, edit_draft)
+
+    active = list_active_reminders(chat_id, user_id)
+    assert updated["id"] == original["id"]
+    assert updated["reminder_text"] == "vitamin A"
+    assert len(active) == 1
+    assert active[0]["schedule"] == {"type": "daily", "times": ["13:00"]}
+
+
+@pytest.mark.anyio
+async def test_multi_turn_edit_preserves_original_reminder_id(monkeypatch):
+    from src.chat.storage.reminders import (
+        confirm_reminder_draft,
+        create_reminder_draft,
+        delete_pending_conversation,
+        delete_reminder_drafts_for_user,
+        get_latest_reminder_draft,
+        get_pending_conversation,
+        init_reminders_db,
+        list_active_reminders,
+    )
+    from src.server.channels import telegram
+
+    chat_id = 99113
+    user_id = 99114
+    init_reminders_db()
+    delete_pending_conversation(chat_id, user_id)
+    delete_reminder_drafts_for_user(chat_id, user_id)
+    for reminder in list_active_reminders(chat_id, user_id):
+        delete_reminder(chat_id, user_id, reminder["id"])
+
+    original_draft = create_reminder_draft(
+        chat_id=chat_id,
+        user_id=user_id,
+        medical_type="medication",
+        reminder_text="vitamin A",
+        schedule={"type": "one_time", "datetime": "2026-06-22 12:00"},
+        next_fire_at=int(datetime.datetime(2026, 6, 22, 12, 0, tzinfo=TZ).timestamp()),
+        end_date=None,
+        source="direct",
+    )
+    original = confirm_reminder_draft(chat_id, user_id, original_draft)
+    create_reminder_draft(
+        chat_id=chat_id,
+        user_id=user_id,
+        medical_type="medication",
+        reminder_text="vitamin A",
+        schedule={"type": "one_time", "datetime": "2026-06-22 12:00"},
+        next_fire_at=int(datetime.datetime(2026, 6, 22, 12, 0, tzinfo=TZ).timestamp()),
+        end_date=None,
+        source=f"edit:{original['id']}",
+    )
+
+    parser_results = [
+        {
+            "is_relevant_followup": True,
+            "is_canceled": False,
+            "corrected": True,
+            "merged_fields": {
+                "medical_type": "medication",
+                "reminder_text": "vitamin A",
+                "schedule": None,
+                "end_date": None,
+            },
+            "missing_fields": ["schedule"],
+            "is_complete": False,
+            "is_ambiguous": True,
+            "is_past": False,
+            "clarification_prompt": "Bạn muốn nhắc vào mấy giờ mỗi ngày?",
+        },
+        {
+            "is_relevant_followup": True,
+            "is_canceled": False,
+            "corrected": False,
+            "merged_fields": {
+                "medical_type": "medication",
+                "reminder_text": "vitamin A",
+                "schedule": {"type": "daily", "times": ["12:00"]},
+                "end_date": None,
+            },
+            "missing_fields": [],
+            "is_complete": True,
+            "is_ambiguous": False,
+            "is_past": False,
+            "clarification_prompt": None,
+        },
+    ]
+    monkeypatch.setattr(
+        "src.chat.storage.reminder_parser.parse_multi_turn_reminder",
+        lambda *args, **kwargs: parser_results.pop(0),
+    )
+    monkeypatch.setattr(telegram, "send_text", AsyncMock(return_value=123))
+    monkeypatch.setattr(
+        telegram,
+        "answer_with_choices",
+        MagicMock(side_effect=AssertionError("multi-turn edit reached medical RAG")),
+    )
+
+    async def wait_for_stop(_chat_id, stop):
+        await stop.wait()
+
+    monkeypatch.setattr(telegram, "_keep_typing", wait_for_stop)
+
+    await telegram._answer_and_send(
+        chat_id,
+        "đổi thành nhắc hàng ngày",
+        user_id=user_id,
+        chat_type="private",
+    )
+    pending = get_pending_conversation(chat_id, user_id)
+    assert pending is not None
+    assert pending["source"] == f"edit:{original['id']}"
+
+    await telegram._answer_and_send(
+        chat_id,
+        "12h",
+        user_id=user_id,
+        chat_type="private",
+    )
+    edited_draft = get_latest_reminder_draft(chat_id, user_id)
+    assert edited_draft is not None
+    assert edited_draft["source"] == f"edit:{original['id']}"
+
+    updated = confirm_reminder_draft(chat_id, user_id, edited_draft["id"])
+    active = list_active_reminders(chat_id, user_id)
+    assert updated["id"] == original["id"]
+    assert len(active) == 1
+    assert active[0]["schedule"] == {"type": "daily", "times": ["12:00"]}

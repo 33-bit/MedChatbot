@@ -12,23 +12,23 @@ log = logging.getLogger(__name__)
 WEBHOOK_UPDATE_TTL_SECONDS = 7 * 24 * 60 * 60
 WEBHOOK_UPDATE_MEMORY_MAX = 4096
 _SQLITE_LOCK = RLock()
-_MEMORY_UPDATES: OrderedDict[tuple[str, str], float] = OrderedDict()
+_SEEN_UPDATES: OrderedDict[tuple[str, str], float] = OrderedDict()
 
 
-def _reserve_memory(channel: str, update_id: str | int, now: float) -> bool:
+def _reserve_seen_update(channel: str, update_id: str | int, now: float) -> bool:
     cutoff = now - WEBHOOK_UPDATE_TTL_SECONDS
-    for key, created_at in list(_MEMORY_UPDATES.items()):
+    for key, created_at in list(_SEEN_UPDATES.items()):
         if created_at < cutoff:
-            _MEMORY_UPDATES.pop(key, None)
+            _SEEN_UPDATES.pop(key, None)
 
     key = (channel, str(update_id))
-    if key in _MEMORY_UPDATES:
-        _MEMORY_UPDATES.move_to_end(key)
+    if key in _SEEN_UPDATES:
+        _SEEN_UPDATES.move_to_end(key)
         return False
 
-    _MEMORY_UPDATES[key] = now
-    while len(_MEMORY_UPDATES) > WEBHOOK_UPDATE_MEMORY_MAX:
-        _MEMORY_UPDATES.popitem(last=False)
+    _SEEN_UPDATES[key] = now
+    while len(_SEEN_UPDATES) > WEBHOOK_UPDATE_MEMORY_MAX:
+        _SEEN_UPDATES.popitem(last=False)
     return True
 
 
@@ -36,7 +36,7 @@ def reserve_webhook_update(channel: str, update_id: str | int) -> bool:
     """Return True only for the first delivery of a webhook update."""
     now = time.time()
     with _SQLITE_LOCK:
-        if not _reserve_memory(channel, update_id, now):
+        if not _reserve_seen_update(channel, update_id, now):
             return False
 
         conn = get_sqlite()
@@ -55,9 +55,8 @@ def reserve_webhook_update(channel: str, update_id: str | int) -> bool:
         except sqlite3.Error as e:
             conn.rollback()
             log.warning(
-                "Webhook update reservation failed for %s:%s: %s",
+                "Webhook update reservation failed for channel=%s: %s",
                 channel,
-                update_id,
                 e,
             )
             return True

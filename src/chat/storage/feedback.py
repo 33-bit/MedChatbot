@@ -5,6 +5,7 @@ import time
 from threading import RLock
 
 from src.chat.clients import get_sqlite
+from src.chat.security.identity import is_session_key
 
 _SQLITE_LOCK = RLock()
 
@@ -16,6 +17,8 @@ def create_feedback_request(
     question: str,
     answer: str,
 ) -> str:
+    if not is_session_key(session_id) or recipient_id != session_id:
+        raise ValueError("Feedback persistence requires a pseudonymous session key")
     token = secrets.token_urlsafe(16)
     with _SQLITE_LOCK:
         conn = get_sqlite()

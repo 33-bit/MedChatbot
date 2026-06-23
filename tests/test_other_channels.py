@@ -4,6 +4,7 @@ import asyncio
 
 from src.server.channels import common
 from src.server.channels import messenger, zalo
+from src.chat.security.identity import derive_request_identity
 
 
 def test_messenger_verify_accepts_matching_token(app_client, monkeypatch):
@@ -60,7 +61,8 @@ def test_messenger_webhook_answers_text_message(app_client, monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
-    assert calls == [("Tôi bị ho", "u1", "fb:u1")]
+    expected = derive_request_identity("messenger", "u1", "u1").session_key
+    assert calls == [("Tôi bị ho", "u1", expected)]
 
 
 def test_zalo_verify_endpoint(app_client):
@@ -99,7 +101,8 @@ def test_zalo_webhook_answers_user_text(app_client, monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
-    assert calls == [("Tôi bị ho", "zchat1", "zalo:zchat1")]
+    expected = derive_request_identity("zalo", None, "zchat1").session_key
+    assert calls == [("Tôi bị ho", "zchat1", expected)]
 
 
 def test_zalo_webhook_answers_flattened_user_text_payload(app_client, monkeypatch):
@@ -126,7 +129,8 @@ def test_zalo_webhook_answers_flattened_user_text_payload(app_client, monkeypatc
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
-    assert calls == [("Tôi bị ho", "zchat1", "zalo:zchat1")]
+    expected = derive_request_identity("zalo", None, "zchat1").session_key
+    assert calls == [("Tôi bị ho", "zchat1", expected)]
 
 
 def test_zalo_webhook_rejects_invalid_secret(app_client, monkeypatch):

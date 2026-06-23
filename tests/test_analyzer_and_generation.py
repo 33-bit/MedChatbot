@@ -52,6 +52,44 @@ def test_analyzer_normalizes_direct_answer_requested_from_one_shot_llm(monkeypat
     assert result["turn"]["direct_answer_requested"] is True
 
 
+def test_analyzer_normalizes_scalar_memory_fact_value(monkeypatch):
+    monkeypatch.setattr(
+        analyzer,
+        "call_mini",
+        lambda *args, **kwargs: {
+            "guardrail": {"verdict": "allow"},
+            "turn": {"label": "diagnostic", "intent": "symptom_triage"},
+            "rewrite": {"rewritten": "Tôi bị dị ứng penicillin", "confident": True},
+            "entities": {"symptoms": [], "medications": ["penicillin"]},
+            "context": {
+                "subject": {
+                    "id": "self",
+                    "source": "explicit",
+                    "confidence": 1.0,
+                },
+                "references": [],
+                "relation": "new_entity",
+                "needs_medical_profile": True,
+            },
+            "profile_candidates": [{
+                "subject_id": "self",
+                "fact_type": "allergy",
+                "entity_type": "drug",
+                "entity_id": "penicillin",
+                "attribute": "reaction_type",
+                "value": "allergic",
+                "temporal_status": "current",
+                "confidence": 1.0,
+                "source": "explicit",
+            }],
+        },
+    )
+
+    result = analyzer.analyze_turn("Tôi bị dị ứng penicillin")
+
+    assert result["profile_candidates"][0]["value"] == {"value": "allergic"}
+
+
 def test_analyzer_preserves_refined_intent_from_one_shot_llm(monkeypatch):
     monkeypatch.setattr(
         analyzer,
@@ -78,6 +116,44 @@ def test_analyzer_preserves_refined_intent_from_one_shot_llm(monkeypatch):
 
     assert result["turn"]["label"] == "diagnostic"
     assert result["turn"]["intent"] == "contextual_drug_info"
+
+
+def test_analyzer_routes_emergency_urgency_independently_of_turn_intent(monkeypatch):
+    monkeypatch.setattr(
+        analyzer,
+        "call_mini",
+        lambda *args, **kwargs: {
+            "guardrail": {"verdict": "allow"},
+            "turn": {
+                "label": "diagnostic",
+                "intent": "symptom_triage",
+                "direct_answer_requested": False,
+            },
+            "triage": {
+                "urgency": "emergency",
+                "red_flags": ["đau ngực kèm khó thở"],
+                "reason": "Có dấu hiệu đe dọa tim hoặc hô hấp.",
+            },
+            "rewrite": {
+                "rewritten": "Tôi bị đau ngực, khó thở",
+                "confident": True,
+            },
+            "entities": {
+                "symptoms": [{"name": "đau ngực"}, {"name": "khó thở"}],
+                "medications": [],
+            },
+        },
+    )
+
+    result = analyzer.analyze_turn("Tôi bị đau ngực, khó thở")
+
+    assert result["turn"]["label"] == "diagnostic"
+    assert result["turn"]["intent"] == "emergency"
+    assert result["triage"] == {
+        "urgency": "emergency",
+        "red_flags": ["đau ngực kèm khó thở"],
+        "reason": "Có dấu hiệu đe dọa tim hoặc hô hấp.",
+    }
 
 
 def test_guardrail_reply_verdicts_are_valid_for_analyzer():
@@ -161,6 +237,15 @@ def test_turn_analysis_prompt_recognizes_tapped_clarification_replies():
     assert "symptom_triage" in text
 
 
+def test_turn_analysis_prompt_assesses_urgency_independently_of_intent():
+    text = prompts.TURN_ANALYSIS_SYSTEM
+
+    assert '"urgency": "routine" | "urgent" | "emergency"' in text
+    assert "ĐỘC LẬP với turn.intent" in text
+    assert "tình huống giả định" in text
+    assert "TOÀN BỘ cụm triệu chứng và ngữ cảnh" in text
+
+
 def test_generator_system_prompt_adopts_patient_friendly_template_rules():
     text = prompts.GENERATOR_SYSTEM
 
@@ -175,6 +260,23 @@ def test_generator_system_prompt_adopts_patient_friendly_template_rules():
         "gọi cấp cứu 115",
     ):
         assert phrase in text
+
+
+def test_context_bundle_formats_exact_subject_address():
+    text = generator._format_patient({
+        "subject": {
+            "id": "father",
+            "relationship": "father",
+            "display_name": "bố bạn",
+        },
+        "safety_profile": [],
+        "relevant_facts": [],
+        "active_case": None,
+        "reference_turns": [],
+    })
+
+    assert "Chủ thể y tế: bố bạn" in text
+    assert "Luôn gọi đúng người này" in text
 
 
 def test_direct_diagnostic_prompt_uses_template_answer_structure():
@@ -304,6 +406,36 @@ def test_generator_only_lists_sources_cited_in_answer(monkeypatch):
     assert "[1] Dược thư Quốc gia 2022 - [Acid Folic]" in answer
     assert "Nicotinamide" not in answer
     assert "Bismuth" not in answer
+
+
+def test_generator_links_bachmai_source_pdf(monkeypatch):
+    hit = Hit(
+        text="Mày đay có thể gây sẩn phù.",
+        score=1.0,
+        source_type="disease",
+        source_name="Mày đay",
+        heading_path="I. ĐẠI CƯƠNG",
+        source_slug="may_day",
+        metadata={"chapter": "CHƯƠNG 11: DỊ ỨNG - MIỄN DỊCH LÂM SÀNG"},
+    )
+    fake_response = {
+        "choices": [{"message": {"content": "Mày đay gây sẩn phù [1]."}}]
+    }
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=lambda **kwargs: fake_response)
+        )
+    )
+    monkeypatch.setattr(generator, "PUBLIC_BASE_URL", "https://chat.example.vn")
+    monkeypatch.setattr(generator, "get_openai", lambda: fake_client)
+
+    answer = generator.generate("Mày đay là gì?", [hit])
+
+    assert (
+        "[Hướng dẫn chẩn đoán và điều trị - Bệnh viện Bạch Mai - "
+        "CHƯƠNG 11: DỊ ỨNG - MIỄN DỊCH LÂM SÀNG - Mày đay]"
+        "(https://chat.example.vn/sources/bachmai/may_day.pdf)"
+    ) in answer
 
 
 def test_generator_omits_thinking_for_mistral_base_url(monkeypatch):

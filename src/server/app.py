@@ -33,7 +33,7 @@ from src.chat.security.identity import (
     derive_request_identity,
     validate_identity_configuration,
 )
-from src.chat.storage.durable_memory import migrate_owner_key
+from src.chat.profile.repository import migrate_owner_key
 from src.chat.retrieval.kg import ensure_fulltext_indexes
 from src.chat.retrieval.preload import preload_retrieval_models
 from src.chat.storage.traces import get_chat_trace, list_chat_traces, save_chat_trace
@@ -41,7 +41,10 @@ from src.config import CHAT_API_KEY, CHAT_API_TENANT_ID
 from src.server.channels import messenger, telegram, zalo
 from src.server.channels import telegram_doctor
 from src.server.payments import router as payos_router
-from src.server.source_documents import resolve_bachmai_source_pdf
+from src.server.source_documents import (
+    resolve_bachmai_source_pdf,
+    resolve_health_insurance_source_pdf,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -139,6 +142,20 @@ def bachmai_source_pdf(source_slug: str) -> FileResponse:
     )
 
 
+@app.get("/sources/health-insurance/22-vbhn-vpqh.pdf")
+def health_insurance_source_pdf() -> FileResponse:
+    pdf_path = resolve_health_insurance_source_pdf()
+    if pdf_path is None:
+        raise HTTPException(status_code=404, detail="Source PDF not found")
+    return FileResponse(
+        pdf_path,
+        media_type="application/pdf",
+        filename="22-VBHN-VPQH.pdf",
+        content_disposition_type="inline",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 def _require_chat_api_key(x_api_key: str | None) -> str:
     if not CHAT_API_KEY:
         raise HTTPException(status_code=503, detail="Chat API disabled: CHAT_API_KEY not set")
@@ -162,7 +179,7 @@ def _api_request_identity(payload: dict) -> RequestIdentity:
     user_id = payload.get("user_id")
     stable_user_id = user_id if isinstance(user_id, str) and user_id.strip() else None
     # A tenant must be operationally stable and independent of API-key rotation.
-    # Without one, temporary memory works but durable memory remains disabled.
+    # Without one, conversation context still works but the medical profile remains disabled.
     identity = derive_request_identity(
         "api",
         stable_user_id if CHAT_API_TENANT_ID else None,
@@ -180,7 +197,7 @@ def _api_request_identity(payload: dict) -> RequestIdentity:
                 ),
             )
         except Exception:
-            log.exception("API owner-key rotation failed; durable memory disabled for request")
+            log.exception("API owner-key rotation failed; medical profile disabled for request")
             return RequestIdentity("", identity.session_key, False)
     return identity
 

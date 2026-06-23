@@ -118,22 +118,21 @@ def test_telegram_menu_interaction(app_client, monkeypatch):
     assert len(sent_texts) == 1
     assert "Cách sử dụng" in sent_texts[0][1]
 
-    # 3. Test menu:memory callback
+    # 3. Test cmd:/profile callback (replaces the old memory menu)
     response = client.post(
         "/webhook/telegram",
         json={
             "update_id": 202,
             "callback_query": {
-                "id": "cb-memory",
-                "data": "menu:memory",
+                "id": "cb-profile",
+                "data": "cmd:/profile",
                 "message": {"message_id": 456, "chat": {"id": 123}},
             },
         },
     )
     assert response.status_code == 200
     assert response.json() == {"ok": True}
-    assert ("cb-memory", "") in callback_answers
-    assert (123, 456, "🧠 **Quản lý bộ nhớ:**", telegram._menu_memory_keyboard()) in edited_messages
+    assert ("cb-profile", "Đang thực hiện /profile") in callback_answers
 
     # 4. Test menu:main callback
     response = client.post(
@@ -158,6 +157,7 @@ def test_telegram_bot_command_menu_hides_start_and_menu_with_icons():
         {"command": "menu", "description": "📋 Menu các lệnh hỗ trợ"},
         {"command": "help", "description": "📝 Cách đặt câu hỏi"},
         {"command": "mode", "description": "⚙️ Chọn chế độ trả lời"},
+        {"command": "tts", "description": "🔊 Bật/tắt đọc câu trả lời"},
         {"command": "remind", "description": "🔔 Đặt nhắc nhở y tế"},
         {"command": "doctor", "description": "👨‍⚕️ Kết nối bác sĩ"},
         {"command": "end", "description": "⛔ Kết thúc tư vấn bác sĩ"},
@@ -165,12 +165,38 @@ def test_telegram_bot_command_menu_hides_start_and_menu_with_icons():
         {"command": "balance", "description": "💳 Xem số dư"},
         {"command": "paydebt", "description": "🧾 Thanh toán công nợ"},
         {"command": "new", "description": "🔄 Xóa ngữ cảnh và bắt đầu lượt mới"},
-        {"command": "memory", "description": "🧠 Xem trạng thái bộ nhớ"},
-        {"command": "memoryon", "description": "✅ Cho phép bộ nhớ dài hạn"},
-        {"command": "memoryoff", "description": "⛔ Tắt bộ nhớ dài hạn"},
-        {"command": "forget", "description": "🗑 Quên chủ thể hiện tại"},
-        {"command": "forgetall", "description": "🗑 Xóa toàn bộ bộ nhớ"},
+        {"command": "profile", "description": "🩺 Hồ sơ y tế cá nhân"},
     ]
+
+
+def test_telegram_tts_command_turns_voice_on_and_off(monkeypatch):
+    sent: list[dict] = []
+    state = {"enabled": False}
+
+    async def fake_send_text(chat_id, text, **kwargs):
+        sent.append({"chat_id": chat_id, "text": text, **kwargs})
+
+    monkeypatch.setattr(telegram, "send_text", fake_send_text)
+    monkeypatch.setattr(
+        telegram,
+        "is_tts_enabled",
+        lambda chat_id: state["enabled"],
+    )
+    monkeypatch.setattr(
+        telegram,
+        "set_tts_enabled",
+        lambda chat_id, enabled: state.update(enabled=enabled),
+    )
+
+    assert asyncio.run(telegram._handle_command(123, "/ttson"))
+    assert state["enabled"] is True
+    assert "**Bật**" in sent[-1]["text"]
+    assert sent[-1]["inline_keyboard"] == telegram._tts_keyboard(True)
+
+    assert asyncio.run(telegram._handle_command(123, "/ttsoff"))
+    assert state["enabled"] is False
+    assert "**Tắt**" in sent[-1]["text"]
+    assert sent[-1]["inline_keyboard"] == telegram._tts_keyboard(False)
 
 
 def test_telegram_new_command_clears_redis_session(monkeypatch):
@@ -182,7 +208,7 @@ def test_telegram_new_command_clears_redis_session(monkeypatch):
 
     monkeypatch.setattr(telegram, "send_text", fake_send_text)
     monkeypatch.setattr(telegram, "clear_session", lambda session_id: cleared.append(session_id))
-    monkeypatch.setattr(telegram, "clear_memory_context", lambda session_id: None)
+    monkeypatch.setattr(telegram, "clear_conversation_context", lambda session_id: None)
     telegram._CHAT_MODE_DEFAULTS.clear()
     telegram._CHAT_MODE_DEFAULTS["456"] = "information"
 
@@ -484,6 +510,58 @@ def test_telegram_answer_sends_rating_prompt_after_reply(monkeypatch):
             "answer": "Bạn nên nghỉ ngơi.",
         }
     ]
+    assert prompts == [(123, "rating-token")]
+
+
+def test_telegram_answer_sends_voice_when_tts_is_enabled(monkeypatch):
+    voices: list[tuple[int | str, bytes]] = []
+
+    def fake_answer_with_choices(question: str, session_id: str = "default"):
+        return telegram.ChatReply("Bạn nên nghỉ ngơi.", ())
+
+    async def fake_send_text(*args, **kwargs) -> None:
+        return None
+
+    async def fake_send_voice_audio(chat_id: int | str, audio: bytes) -> None:
+        voices.append((chat_id, audio))
+
+    monkeypatch.setattr(telegram, "answer_with_choices", fake_answer_with_choices)
+    monkeypatch.setattr(telegram, "send_text", fake_send_text)
+    monkeypatch.setattr(telegram, "send_voice_audio", fake_send_voice_audio)
+    monkeypatch.setattr(telegram, "is_tts_enabled", lambda chat_id: True)
+    monkeypatch.setattr(telegram, "synthesize_speech", lambda text: b"ogg-audio")
+    monkeypatch.setattr(telegram, "create_feedback_request", lambda *args: "rating-token")
+    monkeypatch.setattr(telegram, "_send_rating_prompt", fake_send_text)
+
+    asyncio.run(telegram._answer_and_send(123, "Tôi bị ho"))
+
+    assert voices == [(123, b"ogg-audio")]
+
+
+def test_telegram_tts_failure_does_not_skip_feedback(monkeypatch):
+    prompts: list[tuple[int | str, str]] = []
+
+    def fake_answer_with_choices(question: str, session_id: str = "default"):
+        return telegram.ChatReply("Bạn nên nghỉ ngơi.", ())
+
+    async def fake_send_text(*args, **kwargs) -> None:
+        return None
+
+    async def fake_send_rating_prompt(chat_id: int | str, token: str) -> None:
+        prompts.append((chat_id, token))
+
+    monkeypatch.setattr(telegram, "answer_with_choices", fake_answer_with_choices)
+    monkeypatch.setattr(telegram, "send_text", fake_send_text)
+    monkeypatch.setattr(
+        telegram,
+        "is_tts_enabled",
+        lambda chat_id: (_ for _ in ()).throw(RuntimeError("database unavailable")),
+    )
+    monkeypatch.setattr(telegram, "create_feedback_request", lambda *args: "rating-token")
+    monkeypatch.setattr(telegram, "_send_rating_prompt", fake_send_rating_prompt)
+
+    asyncio.run(telegram._answer_and_send(123, "Tôi bị ho"))
+
     assert prompts == [(123, "rating-token")]
 
 
@@ -1496,6 +1574,37 @@ def test_telegram_send_voice_uses_send_voice_api(monkeypatch):
     assert calls[-1][0].endswith("/sendVoice")
     assert calls[-1][1]["chat_id"] == 456
     assert calls[-1][1]["voice"] == "voice-file-id"
+
+
+def test_telegram_send_voice_audio_uploads_ogg(monkeypatch):
+    calls: list[tuple[str, dict, dict]] = []
+
+    class Response:
+        status_code = 200
+
+    class Client:
+        def __init__(self, timeout: float):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url: str, data: dict, files: dict):
+            calls.append((url, data, files))
+            return Response()
+
+    monkeypatch.setattr(telegram, "TELEGRAM_BOT_TOKEN", "token")
+    monkeypatch.setattr(telegram.httpx, "AsyncClient", Client)
+
+    asyncio.run(telegram.send_voice_audio(456, b"ogg-audio"))
+
+    url, data, files = calls[-1]
+    assert url.endswith("/sendVoice")
+    assert data == {"chat_id": "456"}
+    assert files == {"voice": ("answer.ogg", b"ogg-audio", "audio/ogg")}
 
 
 def test_telegram_copy_message_uses_copy_message_api(monkeypatch):

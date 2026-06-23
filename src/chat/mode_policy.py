@@ -9,6 +9,7 @@ VALID_INTENTS = (
     "pure_info",
     "condition_management_info",
     "contextual_drug_info",
+    "health_insurance_info",
     "symptom_triage",
     "care_seeking_advice",
     "emergency",
@@ -20,6 +21,7 @@ INFO_INTENTS = {
     "pure_info",
     "condition_management_info",
     "contextual_drug_info",
+    "health_insurance_info",
 }
 DIAGNOSTIC_INTENTS = {"symptom_triage", "care_seeking_advice"}
 
@@ -76,10 +78,13 @@ def apply_mode_policy(mode: str, intent: str, active_flow: bool = False) -> Mode
         return ModeDecision(False, reply=OFF_SCOPE_REPLY)
 
     if intent == "emergency":
-        return ModeDecision(True, route_label="diagnostic", force_answer=True)
+        return ModeDecision(True, route_label="emergency")
 
     if intent == "clarification_answer":
         return ModeDecision(True, route_label="clarification_answer")
+
+    if intent == "health_insurance_info":
+        return ModeDecision(True, route_label="health_insurance")
 
     if mode == "auto":
         if intent in INFO_INTENTS:

@@ -74,7 +74,7 @@ GUARDRAIL_MODEL = os.getenv("GUARDRAIL_MODEL", FAST_MODEL)
 VISION_MODEL = os.getenv("VISION_MODEL", MODEL)
 MODEL_MAX_TOKENS = int(os.getenv("MODEL_MAX_TOKENS", "4096"))
 FAST_MODEL_MAX_TOKENS = int(os.getenv("FAST_MODEL_MAX_TOKENS", "1024"))
-GUARDRAIL_MAX_TOKENS = int(os.getenv("GUARDRAIL_MAX_TOKENS", "256"))
+GUARDRAIL_MAX_TOKENS = int(os.getenv("GUARDRAIL_MAX_TOKENS", "1024"))
 BATCH_MAX_TOKENS = int(os.getenv("BATCH_MAX_TOKENS", "16000"))
 
 # --- Abuse protection ---
@@ -87,6 +87,30 @@ REDIS_URL                = os.getenv("REDIS_URL", "")
 SESSION_TTL_SECONDS      = int(os.getenv("SESSION_TTL_SECONDS", "86400"))  # 24h
 RATE_LIMIT_PER_MINUTE    = int(os.getenv("RATE_LIMIT_PER_MINUTE", "10"))
 SQLITE_PATH              = os.getenv("SQLITE_PATH", str(PROJECT_ROOT / "outputs" / "chatbot.db"))
+CONVERSATION_CONTEXT_ENABLED = _env_bool("CONVERSATION_CONTEXT_ENABLED", "0")
+PROFILE_READ_ENABLED = _env_bool("PROFILE_READ_ENABLED", "0")
+PROFILE_WRITE_ENABLED = _env_bool("PROFILE_WRITE_ENABLED", "0")
+PROFILE_REQUIRE_CONSENT = _env_bool(
+    "PROFILE_REQUIRE_CONSENT", "1"
+)
+PROFILE_IDENTITY_ACTIVE_VERSION = os.getenv(
+    "PROFILE_IDENTITY_ACTIVE_VERSION",
+    os.getenv("PROFILE_IDENTITY_KEY_VERSION", "v1"),
+).strip()
+PROFILE_IDENTITY_PREVIOUS_VERSIONS = tuple(
+    version.strip()
+    for version in os.getenv("PROFILE_IDENTITY_PREVIOUS_VERSIONS", "").split(",")
+    if version.strip()
+)
+PROFILE_IDENTITY_HMAC_KEY = os.getenv("PROFILE_IDENTITY_HMAC_KEY", "").strip()
+PROFILE_DEFAULT_TENANT_ID = os.getenv("PROFILE_DEFAULT_TENANT_ID", "default").strip()
+CHAT_API_TENANT_ID = os.getenv("CHAT_API_TENANT_ID", "").strip()
+PROFILE_THIRD_PARTY_TTL_SECONDS = int(
+    os.getenv("PROFILE_THIRD_PARTY_TTL_SECONDS", "7776000")
+)
+PROFILE_SUPERSEDED_RETENTION_SECONDS = int(
+    os.getenv("PROFILE_SUPERSEDED_RETENTION_SECONDS", "2592000")
+)
 
 QDRANT_URL     = os.getenv("QDRANT_URL", "")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
@@ -100,6 +124,10 @@ NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "")
 EMBED_MODEL              = os.getenv("EMBED_MODEL", "intfloat/multilingual-e5-large")
 DISEASES_COLLECTION      = os.getenv("DISEASES_COLLECTION", "medical_guidelines")
 DRUGS_COLLECTION         = os.getenv("DRUGS_COLLECTION", "otc_drugs")
+HEALTH_INSURANCE_COLLECTION = os.getenv(
+    "HEALTH_INSURANCE_COLLECTION",
+    "health_insurance_law",
+)
 RAG_TOP_K                = int(os.getenv("RAG_TOP_K", "6"))
 RERANKER_MODEL           = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
 RERANKER_DEVICE          = os.getenv("RERANKER_DEVICE", "cpu")

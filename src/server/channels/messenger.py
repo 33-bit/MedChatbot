@@ -15,6 +15,8 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
 from src.config import MESSENGER_PAGE_TOKEN, MESSENGER_VERIFY_TOKEN
+from src.chat.security.identity import derive_previous_owner_keys, derive_request_identity
+from src.chat.profile.repository import migrate_owner_key
 from src.server.channels.common import answer_and_send
 
 logger = logging.getLogger(__name__)
@@ -50,7 +52,7 @@ async def send_text(recipient_id: str, text: str, choices: list[str] | tuple[str
     }
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(GRAPH_SEND_URL, params=params, json=payload)
-        logger.info("Messenger send → %s %s", r.status_code, r.text[:200])
+        logger.info("Messenger send status=%s", r.status_code)
 
 
 @router.get("/webhook/messenger")
@@ -76,12 +78,27 @@ async def messenger_webhook(request: Request, background_tasks: BackgroundTasks)
             text = (evt.get("message") or {}).get("text", "")
             if not sender_id or not text:
                 continue
+            identity = derive_request_identity(
+                "messenger",
+                sender_id,
+                sender_id,
+            )
+            if identity.owner_key:
+                try:
+                    migrate_owner_key(
+                        identity.owner_key,
+                        derive_previous_owner_keys("messenger", sender_id),
+                    )
+                except Exception:
+                    logger.exception("Messenger owner-key rotation failed")
+                    identity = type(identity)("", identity.session_key, False)
             background_tasks.add_task(
                 answer_and_send,
                 text,
                 sender_id,
-                f"fb:{sender_id}",
+                identity.session_key,
                 send_text,
+                owner_id=identity.owner_key or None,
                 logger=logger,
                 channel="Messenger",
             )

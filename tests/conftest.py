@@ -7,6 +7,7 @@ import pytest
 def isolated_service_caches(tmp_path, monkeypatch):
     """Keep tests off the developer's real Redis/SQLite/Neo4j/OpenAI clients."""
     from src.chat import clients
+    from src.chat import pipeline
 
     for factory_name in ("get_sqlite", "get_redis", "get_neo4j", "get_openai"):
         factory = getattr(clients, factory_name, None)
@@ -14,6 +15,9 @@ def isolated_service_caches(tmp_path, monkeypatch):
             factory.cache_clear()
 
     monkeypatch.setattr(clients, "SQLITE_PATH", str(tmp_path / "chatbot-test.db"))
+    # Unit tests opt into the new selector explicitly. Do not let a developer's
+    # local .env make unrelated tests contact Redis or alter legacy routing.
+    monkeypatch.setattr(pipeline, "CONVERSATION_CONTEXT_ENABLED", False)
     yield
 
     for factory_name in ("get_sqlite", "get_redis", "get_neo4j", "get_openai"):

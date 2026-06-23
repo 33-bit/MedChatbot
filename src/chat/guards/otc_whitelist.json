@@ -1,0 +1,2189 @@
+[
+  {
+    "ten_hoat_chat": "Acetylcystein",
+    "ten_ngan": "Acetylcystein",
+    "ten_normalized": "acetylcystein",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Acetylleucin",
+    "ten_ngan": "Acetylleucin",
+    "ten_normalized": "acetylleucin",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Acid acetylsalicylic (Aspirin) dạng đơn thành phần hoặc phối hợp với Vitamin C và/hoặc Acid citric và/hoặc Natri bicarbonat và/hoặc Natri salicylat",
+    "ten_ngan": "Acid acetylsalicylic",
+    "ten_normalized": "acid acetylsalicylic",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "Với chỉ định giảm đau, hạ sốt, chống viêm",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Acid alginic (Natri Alginat) đơn thành phần hay phối hợp với các hợp chất của nhôm, magnesisi",
+    "ten_ngan": "Acid alginic",
+    "ten_normalized": "acid alginic",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Acid amin đơn thành phần hoặc phối hợp (bao gồm cả dạng phối hợp với các Vitamin)",
+    "ten_ngan": "Acid amin",
+    "ten_normalized": "acid amin",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "Với chỉ định bổ sung acid amin, vitamin cho cơ thể",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Acid aminobenzoic (Acid para aminobenzoic)",
+    "ten_ngan": "Acid aminobenzoic",
+    "ten_normalized": "acid aminobenzoic",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Acid benzoic đơn thành phần hoặc phối hợp",
+    "ten_ngan": "Acid benzoic",
+    "ten_normalized": "acid benzoic",
+    "duong_dung_dang_bao_che": "Dùng ngoài Uống: viên ngậm",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Acid boric đơn thành phần hoặc phối hợp",
+    "ten_ngan": "Acid boric",
+    "ten_normalized": "acid boric",
+    "duong_dung_dang_bao_che": "Dùng ngoài Thuốc tra mắt",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Acid citric phối hợp với các muối natri, kali",
+    "ten_ngan": "Acid citric",
+    "ten_normalized": "acid citric",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Acid cromoglicic và các dạng muối cromoglicat",
+    "ten_ngan": "Acid cromoglicic và các dạng muối cromoglicat",
+    "ten_normalized": "acid cromoglicic và các muối cromoglicat",
+    "duong_dung_dang_bao_che": "Thuốc tra mắt, tra mũi với giới hạn nồng độ tính theo acid cromoglicic ≤ 2%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Acid dimecrotic",
+    "ten_ngan": "Acid dimecrotic",
+    "ten_normalized": "acid dimecrotic",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Acid folic đơn thành phần hoặc phối hợp với sắt và/hoặc các Vitamin nhóm B, khoáng chất, sorbitol",
+    "ten_ngan": "Acid folic",
+    "ten_normalized": "acid folic",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "Với chỉ định chống thiếu máu, bổ sung dinh dưỡng",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Acid glycyrrhizinic (Glycyrrhizinat) phối hợp với một số hoạt chất khác như Chlorpheniramin maleat, DL-methylephedrin, Cafein...",
+    "ten_ngan": "Acid glycyrrhizinic",
+    "ten_normalized": "acid glycyrrhizinic",
+    "duong_dung_dang_bao_che": "Uống: các dạng, bao gồm cả dạng viên ngậm Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Acid lactic đơn thành phần hoặc phối hợp",
+    "ten_ngan": "Acid lactic",
+    "ten_normalized": "acid lactic",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Acid mefenamic",
+    "ten_ngan": "Acid mefenamic",
+    "ten_normalized": "acid mefenamic",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Acid salicylic đơn thành phần hoặc phối hợp trong các thành phẩm dùng ngoài (phối hợp Lactic acid; Lưu huỳnh kết tủa...)",
+    "ten_ngan": "Acid salicylic",
+    "ten_normalized": "acid salicylic",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Acyclovir",
+    "ten_ngan": "Acyclovir",
+    "ten_normalized": "acyclovir",
+    "duong_dung_dang_bao_che": "Dùng ngoài: thuốc bôi ngoài da với nồng độ Acyclovir ≤ 5%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Albendazol",
+    "ten_ngan": "Albendazol",
+    "ten_normalized": "albendazol",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "Với chỉ định trị giun",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Alcol diclorobenzyl dạng phối hợp trong các thành phẩm viên ngậm",
+    "ten_ngan": "Alcol diclorobenzyl",
+    "ten_normalized": "alcol diclorobenzyl",
+    "duong_dung_dang_bao_che": "Uống: viên ngậm",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Alcol polyvinyl",
+    "ten_ngan": "Alcol polyvinyl",
+    "ten_normalized": "alcol polyvinyl",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Alimemazin tartrat (Trimeprazin tartrat)",
+    "ten_ngan": "Alimemazin tartrat",
+    "ten_normalized": "alimemazin tartrat",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Allantoin dạng phối hợp trong các thành phẩm dùng ngoài, thuốc đặt hậu môn (Cao cepae fluid; ...)",
+    "ten_ngan": "Allantoin",
+    "ten_normalized": "allantoin",
+    "duong_dung_dang_bao_che": "Dùng ngoài Thuốc đặt hậu môn",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Allatoin phối hợp với các Vitamin và/hoặc Chondroitin",
+    "ten_ngan": "Allatoin",
+    "ten_normalized": "allatoin",
+    "duong_dung_dang_bao_che": "Thuốc tra mắt",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Almagat",
+    "ten_ngan": "Almagat",
+    "ten_normalized": "almagat",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Ambroxol đơn thành phần hoặc phối hợp trong các thành phẩm thuốc ho, hạ nhiệt, giảm đau",
+    "ten_ngan": "Ambroxol",
+    "ten_normalized": "ambroxol",
+    "duong_dung_dang_bao_che": "Uống: các dạng với giới hạn hoạt chất như sau: - Đã chia liều Ambroxol clorhydrat ≤ 30mg/đơn vị - Chưa chia liều: Ambroxol clorhydrat ≤ 0,8%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Amylase dạng đơn thành phần hoặc phối hợp với Protease và/hoặc Lipase và/hoặc Cellulase",
+    "ten_ngan": "Amylase dạng",
+    "ten_normalized": "amylase",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Amylmetacresol dạng phối hợp trong các thành phẩm viên ngậm (như với các tinh dầu, Bacitracin...)",
+    "ten_ngan": "Amylmetacresol",
+    "ten_normalized": "amylmetacresol",
+    "duong_dung_dang_bao_che": "Uống: viên ngậm",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Argyron",
+    "ten_ngan": "Argyron",
+    "ten_normalized": "argyron",
+    "duong_dung_dang_bao_che": "Thuốc tra mắt Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Aspartam",
+    "ten_ngan": "Aspartam",
+    "ten_normalized": "aspartam",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Aspartat đơn thành phần hoặc phối hợp",
+    "ten_ngan": "Aspartat",
+    "ten_normalized": "aspartat",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Attapulgit",
+    "ten_ngan": "Attapulgit",
+    "ten_normalized": "attapulgit",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Azelastin",
+    "ten_ngan": "Azelastin",
+    "ten_normalized": "azelastin",
+    "duong_dung_dang_bao_che": "Thuốc tra mắt, tra mũi",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Bạc Sulphadiazin",
+    "ten_ngan": "Bạc Sulphadiazin",
+    "ten_normalized": "bạc sulphadiazin",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Bacitracin phối hợp với một số hoạt chất khác trong các thành phẩm viên ngậm (phối hợp với Neomycin sulfat; Amylocain; Tixocortol...)",
+    "ten_ngan": "Bacitracin",
+    "ten_normalized": "bacitracin",
+    "duong_dung_dang_bao_che": "Uống: viên ngậm",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Beclomethason dipropionat",
+    "ten_ngan": "Beclomethason dipropionat",
+    "ten_normalized": "beclomethason dipropionat",
+    "duong_dung_dang_bao_che": "Thuốc tra mũi: dạng khí dung với giới hạn liều dùng tối đa 1 ngày ≤ 400 mcg, đóng gói ≤ 200 liều (tính theo hoạt chất không có muối)",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Benzalkonium phối hợp trong các thành phẩm dùng ngoài (với Cholin; acid salicylic; Nystatin; Diiodohydroxyquin ...), trong các thành phẩm viên ngậm (với Tyrothricin, Bacitracin, tinh dầu...)",
+    "ten_ngan": "Benzalkonium",
+    "ten_normalized": "benzalkonium",
+    "duong_dung_dang_bao_che": "Dùng ngoài Viên ngậm",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Benzocain dạng phối hợp",
+    "ten_ngan": "Benzocain",
+    "ten_normalized": "benzocain",
+    "duong_dung_dang_bao_che": "Dùng ngoài: các dạng với giới hạn Benzocain ≤ 10%; Viên đặt hậu môn Uống: viên ngậm",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Benzoyl peroxid đơn thành phần hoặc phối hợp với Iod và/hoặc lưu huỳnh",
+    "ten_ngan": "Benzoyl peroxid",
+    "ten_normalized": "benzoyl peroxid",
+    "duong_dung_dang_bao_che": "Dùng ngoài: các dạng với giới hạn nồng độ ≤ 10%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Benzydamin Hydrochlorid đơn thành phần hoặc phối hợp",
+    "ten_ngan": "Benzydamin Hydrochlorid",
+    "ten_normalized": "benzydamin hydrochlorid",
+    "duong_dung_dang_bao_che": "Dùng ngoài: kem bôi niêm mạc miệng, nước xúc miệng, thuốc xịt họng Uống: viên ngậm",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Benzydamin salicylat đơn thành phần hoặc phối hợp",
+    "ten_ngan": "Benzydamin salicylat",
+    "ten_normalized": "benzydamin salicylat",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Benzyl benzoat phối hợp trong các thành phẩm dùng ngoài (với các tinh dầu, Cồn Isopropyl...)",
+    "ten_ngan": "Benzyl benzoat",
+    "ten_normalized": "benzyl benzoat",
+    "duong_dung_dang_bao_che": "Dùng ngoài: các dạng Miếng dán",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Berberin",
+    "ten_ngan": "Berberin",
+    "ten_normalized": "berberin",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Biclotymol đơn thành phần hoặc phối hợp với Enoxolon và/hoặc Phenylephrin hydrochlorid và/hoặc Clorpheniramin maleat và/hoặc tinh dầu",
+    "ten_ngan": "Biclotymol",
+    "ten_normalized": "biclotymol",
+    "duong_dung_dang_bao_che": "Dùng ngoài Thuốc tra mũi Uống: viên ngậm",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Bifonazol đơn thành phần hoặc phối hợp với Urea",
+    "ten_ngan": "Bifonazol",
+    "ten_normalized": "bifonazol",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Bisacodyl",
+    "ten_ngan": "Bisacodyl",
+    "ten_normalized": "bisacodyl",
+    "duong_dung_dang_bao_che": "Uống: các dạng đã chia liều với hàm lượng ≤ 10mg/đơn vị",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Bismuth dạng muối",
+    "ten_ngan": "Bismuth dạng muối",
+    "ten_normalized": "bismuth muối",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "Chỉ định điều trị chứng ợ nóng",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Boldine",
+    "ten_ngan": "Boldine",
+    "ten_normalized": "boldine",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Bromhexin Hydrochlorid đơn thành phần hoặc phối hợp trong các thành phẩm thuốc ho, hạ nhiệt, giảm đau",
+    "ten_ngan": "Bromhexin Hydrochlorid",
+    "ten_normalized": "bromhexin hydrochlorid",
+    "duong_dung_dang_bao_che": "Uống: các dạng với giới hạn Bromhexin Hydrochlorid như sau: - Đã chia liều ≤ 8mg/đơn vị; - Chưa chia liều ≤ 0,8% Thuốc đặt hậu môn",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Bromelain đơn thành phần hoặc phối hợp với Trypsin",
+    "ten_ngan": "Bromelain",
+    "ten_normalized": "bromelain",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Brompheniramin maleat đơn thành phần hoặc phối hợp trong các thành phẩm thuốc ho, hạ nhiệt, giảm đau",
+    "ten_ngan": "Brompheniramin maleat",
+    "ten_normalized": "brompheniramin maleat",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Budesonid",
+    "ten_ngan": "Budesonid",
+    "ten_normalized": "budesonid",
+    "duong_dung_dang_bao_che": "Thuốc tra mũi: dạng khí dung, ống hít, thuốc bột để hít với giới hạn liều dùng tối đa 1 ngày ≤ 400mcg, đóng gói ≤ 200 liều",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Bufexamac đơn thành phần hoặc phối hợp trong các thành phẩm dùng ngoài, thuốc đặt hậu môn (với Titan Dioxid, Bismuth, Subgallat, Lidocain...)",
+    "ten_ngan": "Bufexamac",
+    "ten_normalized": "bufexamac",
+    "duong_dung_dang_bao_che": "Dùng ngoài Thuốc đặt hậu môn",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Butoconazol",
+    "ten_ngan": "Butoconazol",
+    "ten_normalized": "butoconazol",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Cafein phối hợp với các hoạt chất có trong danh mục này",
+    "ten_ngan": "Cafein",
+    "ten_normalized": "cafein",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Calamin đơn thành phần hoặc phối hợp trong các thành phẩm dùng ngoài",
+    "ten_ngan": "Calamin",
+    "ten_normalized": "calamin",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Calci (bao gồm các dạng hợp chất) thuốc đơn thành phần hoặc phối hợp với Vitamin D (trừ Calcitriol) và/hoặc các Vitamin và/hoặc Ipriflavon",
+    "ten_ngan": "Calci",
+    "ten_normalized": "calci",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "Với chỉ định bổ sung calci cho cơ thể",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Carbinoxamin đơn thành phần hoặc phối hợp trong các thành phẩm thuốc ho, hạ nhiệt, giảm đau (với Pseudoephedrin hydrochlorid và/hoặc Bromhexin và/hoặc Paracetamol)",
+    "ten_ngan": "Carbinoxamin",
+    "ten_normalized": "carbinoxamin",
+    "duong_dung_dang_bao_che": "Dạng uống",
+    "dieu_kien_cu_the": "Tất cả các thuốc thành phẩm có chứa Pseudoephedrin được bán không cần đơn với số lượng tối đa cho 15 ngày sử dụng. Cơ sở bán lẻ phải theo dõi tên, địa chỉ người mua trong sổ bán lẻ.",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Carbocystein",
+    "ten_ngan": "Carbocystein",
+    "ten_normalized": "carbocystein",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Carbomer",
+    "ten_ngan": "Carbomer",
+    "ten_normalized": "carbomer",
+    "duong_dung_dang_bao_che": "Dùng ngoài Thuốc tra mắt",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Catalase đơn thành phần hoặc phối hợp trong các thành phẩm dùng ngoài (với Neomycin)",
+    "ten_ngan": "Catalase",
+    "ten_normalized": "catalase",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Cetirizin dihydrochlorid",
+    "ten_ngan": "Cetirizin dihydrochlorid",
+    "ten_normalized": "cetirizin dihydrochlorid",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Cetrimid phối hợp với một số hoạt chất khác trong các thành phẩm dùng ngoài (Lidocain, Kẽm, Calamin, Aminacrine, tinh dầu...)",
+    "ten_ngan": "Cetrimid",
+    "ten_normalized": "cetrimid",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Cetrimonium phối hợp trong các thành phẩm dùng ngoài, viên ngậm (phối hợp với Lidocain; Tyrothricin, tinh dầu...)",
+    "ten_ngan": "Cetrimonium",
+    "ten_normalized": "cetrimonium",
+    "duong_dung_dang_bao_che": "Dùng ngoài Uống: viên ngậm",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Chitosan (Polyglusam)",
+    "ten_ngan": "Chitosan",
+    "ten_normalized": "chitosan",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Cholin đơn thành phần hoặc phối hợp các acid amin, Vitamin trong các thành phẩm dạng uống; phối hợp với acid Salicylic, Benzalkonium... trong các thành phẩm dùng ngoài",
+    "ten_ngan": "Cholin",
+    "ten_normalized": "cholin",
+    "duong_dung_dang_bao_che": "Uống: các dạng Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Chondroitin đơn thành phần hoặc phối hợp với Glucosamin và/hoặc dầu cá và/hoặc các Vitamin và/hoặc các acid amin",
+    "ten_ngan": "Chondroitin",
+    "ten_normalized": "chondroitin",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Chondroitin đơn thành phần hoặc phối hợp Borneol và, hoặc các Vitamin",
+    "ten_ngan": "Chondroitin",
+    "ten_normalized": "chondroitin",
+    "duong_dung_dang_bao_che": "Thuốc tra mắt Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Ciclopirox olamin",
+    "ten_ngan": "Ciclopirox olamin",
+    "ten_normalized": "ciclopirox olamin",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Cimetidin",
+    "ten_ngan": "Cimetidin",
+    "ten_normalized": "cimetidin",
+    "duong_dung_dang_bao_che": "Uống: dạng chia liều với giới hạn hàm lượng Cimetidin ≤ 200mg/đơn vị",
+    "dieu_kien_cu_the": "Chỉ định điều trị chứng ợ nóng",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Cinarizin",
+    "ten_ngan": "Cinarizin",
+    "ten_normalized": "cinarizin",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Cinchocain phối hợp trong các thành phẩm dùng ngoài, thuốc đặt hậu môn (như với Hydrocortison, Neomycin, Esculin...)",
+    "ten_ngan": "Cinchocain",
+    "ten_normalized": "cinchocain",
+    "duong_dung_dang_bao_che": "Dùng ngoài Thuốc đặt hậu môn",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Citrullin",
+    "ten_ngan": "Citrullin",
+    "ten_normalized": "citrullin",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Clobetason butyrat",
+    "ten_ngan": "Clobetason butyrat",
+    "ten_normalized": "clobetason butyrat",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Clorhexidin",
+    "ten_ngan": "Clorhexidin",
+    "ten_normalized": "clorhexidin",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Clorophyl",
+    "ten_ngan": "Clorophyl",
+    "ten_normalized": "clorophyl",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Clorpheniramin maleat đơn thành phần hoặc phối hợp trong các thành phẩm thuốc ho, hạ nhiệt, giảm đau",
+    "ten_ngan": "Clorpheniramin maleat",
+    "ten_normalized": "clorpheniramin maleat",
+    "duong_dung_dang_bao_che": "Uống: các dạng. Dạng đơn thành phần đã chia liều: Clorpheniramin maleat ≤ 4mg/đơn vị.",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Clorpheniramin maleat phối hợp Chondroitin và/hoặc các Vitamin",
+    "ten_ngan": "Clorpheniramin maleat",
+    "ten_normalized": "clorpheniramin maleat",
+    "duong_dung_dang_bao_che": "Thuốc tra mắt",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Clotrimazol",
+    "ten_ngan": "Clotrimazol",
+    "ten_normalized": "clotrimazol",
+    "duong_dung_dang_bao_che": "Dùng ngoài: các dạng với giới hạn nồng độ ≤ 3% Viên đặt âm đạo",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Codein phối hợp với các hoạt chất có trong danh mục này với chỉ định chữa ho, hạ nhiệt, giảm đau",
+    "ten_ngan": "Codein",
+    "ten_normalized": "codein",
+    "duong_dung_dang_bao_che": "Uống: các dạng. với giới hạn hàm lượng Codein (tính theo dạng base) như sau: - Dạng chia liều ≤ 12mg/đơn vị; - Dạng chưa chia liều ≤ 2,5%",
+    "dieu_kien_cu_the": "Thành phẩm chứa Codein được bán không cần đơn với số lượng tối đa cho 10 ngày sử dụng. Cơ sở bán lẻ phải theo dõi tên, địa chỉ người mua trong sổ bán lẻ.",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Coenzym Q10 đơn thành phần hoặc phối hợp với các Vitamin",
+    "ten_ngan": "Coenzym Q10",
+    "ten_normalized": "coenzym q10",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Crotamiton",
+    "ten_ngan": "Crotamiton",
+    "ten_normalized": "crotamiton",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Dequalinium đơn thành phần hoặc phối hợp trong các thành phẩm dùng ngoài, viên ngậm (Tyrothricin; Hydrocortison; acid Glycyrrhetinic; Lidocain...)",
+    "ten_ngan": "Dequalinium",
+    "ten_normalized": "dequalinium",
+    "duong_dung_dang_bao_che": "Dùng ngoài Viên đặt âm đạo Uống: viên ngậm",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Desloratadin",
+    "ten_ngan": "Desloratadin",
+    "ten_normalized": "desloratadin",
+    "duong_dung_dang_bao_che": "Uống: các dạng với giới hạn hàm lượng ≤ 5mg/đơn vị chia liều Hoặc uống với liều tối đa 5mg/ngày",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Dexbrompheniramin maleat đơn thành phần hoặc phối hợp trong các thành phẩm thuốc ho, hạ nhiệt, giảm đau",
+    "ten_ngan": "Dexbrompheniramin maleat",
+    "ten_normalized": "dexbrompheniramin maleat",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Dexclorpheniramin maleat đơn thành phần hoặc phối hợp trong các thành phẩm thuốc ho, hạ nhiệt, giảm đau",
+    "ten_ngan": "Dexclorpheniramin maleat",
+    "ten_normalized": "dexclorpheniramin maleat",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Dexpanthenol",
+    "ten_ngan": "Dexpanthenol",
+    "ten_normalized": "dexpanthenol",
+    "duong_dung_dang_bao_che": "Thuốc tra mắt Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Diclofenac đơn thành phần hoặc phối hợp với Methyl salicylat; các chất thuộc nhóm tinh dầu...",
+    "ten_ngan": "Diclofenac",
+    "ten_normalized": "diclofenac",
+    "duong_dung_dang_bao_che": "Dùng ngoài Thuốc tra mắt (dạng đơn thành phần)",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Dicyclomin",
+    "ten_ngan": "Dicyclomin",
+    "ten_normalized": "dicyclomin",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Diethylphtalat (DEP)",
+    "ten_ngan": "Diethylphtalat",
+    "ten_normalized": "diethylphtalat",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Dimenhydrinat",
+    "ten_ngan": "Dimenhydrinat",
+    "ten_normalized": "dimenhydrinat",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Dimethicon (Dimethylpolysiloxan) đơn thành phần hoặc phối hợp với Guaiazulen",
+    "ten_ngan": "Dimethicon",
+    "ten_normalized": "dimethicon",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Dimethicon phối hợp trong các thành phẩm dùng ngoài (với Kẽm; Calamin; Cetrimid...)",
+    "ten_ngan": "Dimethicon",
+    "ten_normalized": "dimethicon",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Dimethinden",
+    "ten_ngan": "Dimethinden",
+    "ten_normalized": "dimethinden",
+    "duong_dung_dang_bao_che": "Uống: các dạng Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Dinatri Inosin monophosphat",
+    "ten_ngan": "Dinatri Inosin monophosphat",
+    "ten_normalized": "dinatri inosin monophosphat",
+    "duong_dung_dang_bao_che": "Thuốc tra mắt",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Diosmectit (Dioctahedral smectit)",
+    "ten_ngan": "Diosmectit",
+    "ten_normalized": "diosmectit",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Diosmin phối hợp Hesperidin và/hoặc một số cao dược liệu chứa Flavonoid",
+    "ten_ngan": "Diosmin",
+    "ten_normalized": "diosmin",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Diphenhydramin hydrochlorid hoặc monocitrat",
+    "ten_ngan": "Diphenhydramin hydrochlorid hoặc monocitrat",
+    "ten_normalized": "diphenhydramin hydrochlorid hoặc monocitrat",
+    "duong_dung_dang_bao_che": "Uống: các dạng với giới hạn hàm lượng (tính theo dạng base) như sau: - Đã chia liều ≤ 50mg/đơn vị; - Chưa chia liều: ≤ 2,5%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Đồng sulfat",
+    "ten_ngan": "Đồng sulfat",
+    "ten_normalized": "đồng sulfat",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Doxylamin phối hợp trong các thành phẩm thuốc ho, hạ nhiệt, giảm đau (với Paracetamol, Pseudoephedrin Hydrochlorid, các hoạt chất khác có trong danh mục thuốc không kê đơn)",
+    "ten_ngan": "Doxylamin",
+    "ten_normalized": "doxylamin",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "Tất cả các thuốc thành phẩm có chứa Pseudoephedrin được bán không cần đơn với số lượng tối đa cho 15 ngày sử dụng. Cơ sở bán lẻ phải theo dõi tên, địa chỉ người mua trong sổ bán lẻ.",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Econazol đơn thành phần hoặc phối hợp với Hydrocortison",
+    "ten_ngan": "Econazol",
+    "ten_normalized": "econazol",
+    "duong_dung_dang_bao_che": "Dùng ngoài, giới hạn nồng độ Hydrocortison tính theo dạng base ≤ 0,05%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Enoxolon đơn thành phần hoặc phối hợp trong các thành phẩm dùng ngoài, viên ngậm",
+    "ten_ngan": "Enoxolon",
+    "ten_normalized": "enoxolon",
+    "duong_dung_dang_bao_che": "Dùng ngoài: thuốc bôi ngoài da, kem bôi niêm mạc miệng, nước xúc miệng Uống: viên ngậm",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Ephedrin Hydrochlorid",
+    "ten_ngan": "Ephedrin Hydrochlorid",
+    "ten_normalized": "ephedrin hydrochlorid",
+    "duong_dung_dang_bao_che": "Thuốc tra mắt, tra mũi: dung dịch ≤ 1%. Đóng gói ≤ 15ml/đơn vị",
+    "dieu_kien_cu_the": "Thành phẩm chứa Ephedrin được bán tối đa không cần đơn với số lượng 3 đơn vị đóng gói nhỏ nhất/lần Cơ sở bán lẻ phải theo dõi tên, địa chỉ người mua trong sổ bán lẻ.",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Eprazinon",
+    "ten_ngan": "Eprazinon",
+    "ten_normalized": "eprazinon",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Esdepallethrin phối hợp trong các thành phẩm dùng ngoài (với Piperonyl, Spregal, tinh dầu, các chất có trong thành phần tinh dầu)",
+    "ten_ngan": "Esdepallethrin",
+    "ten_normalized": "esdepallethrin",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Estradiol đơn thành phần và phối hợp Dydrogesteron",
+    "ten_ngan": "Estradiol",
+    "ten_normalized": "estradiol",
+    "duong_dung_dang_bao_che": "Uống: các dạng đã chia liều",
+    "dieu_kien_cu_the": "* Thuốc chỉ được phê duyệt với chỉ định tránh thai",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Ethanol đơn thành phần hoặc phối hợp",
+    "ten_ngan": "Ethanol",
+    "ten_normalized": "ethanol",
+    "duong_dung_dang_bao_che": "Dùng ngoài (cồn sát trùng) Uống: dạng phối hợp",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Ethylestradiol đơn thành phần",
+    "ten_ngan": "Ethylestradiol",
+    "ten_normalized": "ethylestradiol",
+    "duong_dung_dang_bao_che": "Uống: các dạng đã chia liều",
+    "dieu_kien_cu_the": "* Thuốc chỉ được phê duyệt với chỉ định tránh thai",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Etofenamat",
+    "ten_ngan": "Etofenamat",
+    "ten_normalized": "etofenamat",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Famotidin",
+    "ten_ngan": "Famotidin",
+    "ten_normalized": "famotidin",
+    "duong_dung_dang_bao_che": "Uống: dạng chia liều với giới hạn hàm lượng ≤20mg/đơn vị",
+    "dieu_kien_cu_the": "Bán không cần đơn tối đa cho 14 ngày sử dụng",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Fenticonazol",
+    "ten_ngan": "Fenticonazol",
+    "ten_normalized": "fenticonazol",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Fexofenadin",
+    "ten_ngan": "Fexofenadin",
+    "ten_normalized": "fexofenadin",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Flurbiprofen",
+    "ten_ngan": "Flurbiprofen",
+    "ten_normalized": "flurbiprofen",
+    "duong_dung_dang_bao_che": "Viên ngậm Dùng ngoài Thuốc tra mắt",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Glucosamin đơn thành phần hoặc phối hợp với Chondroitin và/hoặc các Vitamin",
+    "ten_ngan": "Glucosamin",
+    "ten_normalized": "glucosamin",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Glucose hoặc Dextrose đơn thành phần hoặc phối hợp với các muối natri, kali",
+    "ten_ngan": "Glucose hoặc Dextrose",
+    "ten_normalized": "glucose hoặc dextrose",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "Với chỉ định bổ sung đường, chất điện giải.",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Glycerin đơn thành phần hoặc phối hợp trong các thành phẩm dùng ngoài, thuốc tra mắt (với Polysorbat 80)",
+    "ten_ngan": "Glycerin",
+    "ten_normalized": "glycerin",
+    "duong_dung_dang_bao_che": "Dùng ngoài Thuốc tra mắt",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Glycerol phối hợp với dịch chiết dược liệu",
+    "ten_ngan": "Glycerol",
+    "ten_normalized": "glycerol",
+    "duong_dung_dang_bao_che": "Thuốc thụt trực tràng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Guaiphenesin đơn thành phần hoặc phối hợp với các hoạt chất có trong danh mục thuốc không kê đơn có tác dụng chữa ho, hạ nhiệt, giảm đau.",
+    "ten_ngan": "Guaiphenesin",
+    "ten_normalized": "guaiphenesin",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "Tất cả các thuốc thành phẩm có chứa Pseudoephedrin được bán không cần đơn với số lượng tối đa cho 15 ngày sử dụng. Cơ sở bán lẻ phải theo dõi tên, địa chỉ người mua trong sổ bán lẻ.",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Hexamidin đơn thành phần hoặc phối hợp (với Cetrimid, Lidocain, Clotrimazol, Catalase)",
+    "ten_ngan": "Hexamidin",
+    "ten_normalized": "hexamidin",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Hexetidin đơn thành phần hoặc phối hợp (với Benzydamin, Cetylpyridinum, Cholin Salicylat, Methyl salicylat, tinh dầu...)",
+    "ten_ngan": "Hexetidin",
+    "ten_normalized": "hexetidin",
+    "duong_dung_dang_bao_che": "Dùng ngoài: thuốc bôi ngoài da, dung dịch xúc miệng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Hydrocortison đơn thành phần hoặc phối hợp (với Miconazol, Econazol, Tioconazol, Neomycin)",
+    "ten_ngan": "Hydrocortison",
+    "ten_normalized": "hydrocortison",
+    "duong_dung_dang_bao_che": "Dùng ngoài: các dạng với nồng độ Hydrocortison ≤ 0,5%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Hydrogen Peroxid (Oxy già) đơn thành phần hoặc phối hợp Natri Lauryl sulfat và/hoặc tinh dầu...",
+    "ten_ngan": "Hydrogen Peroxid",
+    "ten_normalized": "hydrogen peroxid",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Hydrotalcit",
+    "ten_ngan": "Hydrotalcit",
+    "ten_normalized": "hydrotalcit",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Hyoscine (Scopolamin) butylbromid đơn thành phần hoặc phối hợp với Meclizin hydrochlorid",
+    "ten_ngan": "Hyoscine",
+    "ten_normalized": "hyoscine",
+    "duong_dung_dang_bao_che": "Uống: các dạng, bao gồm viên nhai. Giới hạn hàm lượng đã chia liều ≤ 20mg Miếng dán",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Hydroxypropyl methylcellulose (Hypromellose, HPMC) đơn thành phần hoặc phối hợp Dextran 70 và/hoặc Carbomer",
+    "ten_ngan": "Hydroxypropyl methylcellulose",
+    "ten_normalized": "hydroxypropyl methylcellulose",
+    "duong_dung_dang_bao_che": "Thuốc tra mắt: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Ibuprofen",
+    "ten_ngan": "Ibuprofen",
+    "ten_normalized": "ibuprofen",
+    "duong_dung_dang_bao_che": "Uống: các dạng với giới hạn hàm lượng như sau: đã chia liều ≤ 400mg/đơn vị. Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Ichthammol",
+    "ten_ngan": "Ichthammol",
+    "ten_normalized": "ichthammol",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Indomethacin",
+    "ten_ngan": "Indomethacin",
+    "ten_normalized": "indomethacin",
+    "duong_dung_dang_bao_che": "Dùng ngoài Tra mắt dung dịch 0,1%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Iod phối hợp Kali Iodid và/hoặc Acid Benzoic và/hoặc Acid Salicylic",
+    "ten_ngan": "Iod",
+    "ten_normalized": "iod",
+    "duong_dung_dang_bao_che": "Dùng ngoài với nồng độ Iod ≤ 5%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Isoconazol",
+    "ten_ngan": "Isoconazol",
+    "ten_normalized": "isoconazol",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Isopropyl Methylphenol",
+    "ten_ngan": "Isopropyl Methylphenol",
+    "ten_normalized": "isopropyl methylphenol",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Kẽm oxid, Kẽm pyrithion, Kẽm Gluconat, Kẽm undecylenat đơn thành phần hoặc phối hợp trong các thành phẩm dùng ngoài",
+    "ten_ngan": "Kẽm oxid, Kẽm pyrithion, Kẽm Gluconat, Kẽm undecylenat",
+    "ten_normalized": "kẽm oxid kẽm pyrithion kẽm gluconat kẽm undecylenat",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Kẽm sulfat",
+    "ten_ngan": "Kẽm sulfat",
+    "ten_normalized": "kẽm sulfat",
+    "duong_dung_dang_bao_che": "Dùng ngoài Thuốc tra mắt",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Ketoconazol đơn thành phần hoặc phối hợp với Kẽm Pirythion và/hoặc Hydrocortison và/hoặc Trolamin",
+    "ten_ngan": "Ketoconazol",
+    "ten_normalized": "ketoconazol",
+    "duong_dung_dang_bao_che": "Dùng ngoài: các dạng với nồng độ Ketoconazol ≤ 2%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Ketoprofen",
+    "ten_ngan": "Ketoprofen",
+    "ten_normalized": "ketoprofen",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Lactitol",
+    "ten_ngan": "Lactitol",
+    "ten_normalized": "lactitol",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Lactoserum atomisate",
+    "ten_ngan": "Lactoserum atomisate",
+    "ten_normalized": "lactoserum atomisate",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Lactulose",
+    "ten_ngan": "Lactulose",
+    "ten_normalized": "lactulose",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "L-Carnitin dạng đơn thành phần hoặc phối hợp với các vitamin",
+    "ten_ngan": "L-Carnitin dạng",
+    "ten_normalized": "l carnitin",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Levocetirizin",
+    "ten_ngan": "Levocetirizin",
+    "ten_normalized": "levocetirizin",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Levonorgestrel đơn thành phần hoặc phối hợp với Ethylestradiol",
+    "ten_ngan": "Levonorgestrel",
+    "ten_normalized": "levonorgestrel",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "* Thuốc chỉ được phê duyệt với chỉ định tránh thai",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Lidocain đơn thành phần hoặc phối hợp",
+    "ten_ngan": "Lidocain",
+    "ten_normalized": "lidocain",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Lindan (Benhexachlor, 666, Gamma-BHC) đơn thành phần hoặc phối hợp với Lidocain",
+    "ten_ngan": "Lindan",
+    "ten_normalized": "lindan",
+    "duong_dung_dang_bao_che": "Dùng ngoài với nồng độ Lindan ≤ 1%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Loperamid",
+    "ten_ngan": "Loperamid",
+    "ten_normalized": "loperamid",
+    "duong_dung_dang_bao_che": "Uống: các dạng với giới hạn hàm lượng đã chia liều Loperamid ≤ 2mg",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Loratadin đơn thành phần hoặc phối hợp Pseudoephedrin Hydrochlorid và /hoặc Paracetamol",
+    "ten_ngan": "Loratadin",
+    "ten_normalized": "loratadin",
+    "duong_dung_dang_bao_che": "Uống: các dạng với giới hạn hàm lượng như sau (tính theo dạng base): - Đã chia liều: Loratadin ≤ 10mg/đơn vị; - Chưa chia liều: Loratadin ≤ 0,1%",
+    "dieu_kien_cu_the": "Tất cả các thuốc thành phẩm có chứa Pseudoephedrin được bán không cần đơn với số lượng tối đa cho 15 ngày sử dụng. Cơ sở bán lẻ phải theo dõi tên, địa chỉ người mua trong sổ bán lẻ.",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Loxoprofen",
+    "ten_ngan": "Loxoprofen",
+    "ten_normalized": "loxoprofen",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Macrogol",
+    "ten_ngan": "Macrogol",
+    "ten_normalized": "macrogol",
+    "duong_dung_dang_bao_che": "Uống: các dạng Thuốc thụt trực tràng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Magaldrat đơn thành phần hoặc phối hợp với các hợp chất Nhôm, Magnesi, Acid Alginic (hay dạng muối Alginat).",
+    "ten_ngan": "Magaldrat",
+    "ten_normalized": "magaldrat",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Magnesi bao gồm các dạng muối, hợp chất của magnesi",
+    "ten_ngan": "Magnesi bao gồm các dạng muối, hợp chất của magnesi",
+    "ten_normalized": "magnesi bao gồm các muối hợp chất của magnesi",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "Với các chỉ định bổ sung magnesi cho cơ thể, trung hòa acid dịch vị, nhuận tràng.",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Mangiferin",
+    "ten_ngan": "Mangiferin",
+    "ten_normalized": "mangiferin",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Mebendazol",
+    "ten_ngan": "Mebendazol",
+    "ten_normalized": "mebendazol",
+    "duong_dung_dang_bao_che": "Uống: các dạng, với giới hạn hàm lượng như sau: - Dạng chia liều ≤ 500mg/đơn vị - Chưa chia liều ≤ 2%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Mebeverin",
+    "ten_ngan": "Mebeverin",
+    "ten_normalized": "mebeverin",
+    "duong_dung_dang_bao_che": "Uống: dạng chia liều ≤ 200mg/đơn vị",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Men nấm (cellulase fongique)",
+    "ten_ngan": "Men nấm",
+    "ten_normalized": "men nấm",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Men tiêu hóa dạng đơn thành phần hoặc phối hợp bao gồm phối hợp với các vitamin",
+    "ten_ngan": "Men tiêu hóa dạng",
+    "ten_normalized": "men tiêu hóa",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Menthol phối hợp với một số hoạt chất khác như hỗn hợp tinh dầu, Methyl Salycilat....",
+    "ten_ngan": "Menthol",
+    "ten_normalized": "menthol",
+    "duong_dung_dang_bao_che": "Uống: các dạng Dùng ngoài: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Mequinol",
+    "ten_ngan": "Mequinol",
+    "ten_normalized": "mequinol",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Mequitazin",
+    "ten_ngan": "Mequitazin",
+    "ten_normalized": "mequitazin",
+    "duong_dung_dang_bao_che": "Uống: các dạng Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Mercurocrom (Thuốc đỏ)",
+    "ten_ngan": "Mercurocrom",
+    "ten_normalized": "mercurocrom",
+    "duong_dung_dang_bao_che": "Dùng ngoài với quy cách đóng gói ≤ 30ml",
+    "dieu_kien_cu_the": "Bán không đơn mỗi lần không quá 2 đơn vị đóng gói",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Methyl salicylat phối hợp trong các thành phẩm viên ngậm, dùng ngoài (phối hợp với tinh dầu...)",
+    "ten_ngan": "Methyl salicylat",
+    "ten_normalized": "methyl salicylat",
+    "duong_dung_dang_bao_che": "Dùng ngoài Miếng dán Viên ngậm",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Metronidazol",
+    "ten_ngan": "Metronidazol",
+    "ten_normalized": "metronidazol",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Miconazol",
+    "ten_ngan": "Miconazol",
+    "ten_normalized": "miconazol",
+    "duong_dung_dang_bao_che": "Dùng ngoài Thuốc bôi âm đạo ≤ 2%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Miconazole phối hợp với Hydrocortison",
+    "ten_ngan": "Miconazole",
+    "ten_normalized": "miconazole",
+    "duong_dung_dang_bao_che": "Dùng ngoài Thuốc bôi âm đạo Miconazol ≤2%; Hydrocortison ≤0,05%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Minoxidil",
+    "ten_ngan": "Minoxidil",
+    "ten_normalized": "minoxidil",
+    "duong_dung_dang_bao_che": "Dùng ngoài: các dạng nồng độ ≤5%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Mometasone",
+    "ten_ngan": "Mometasone",
+    "ten_normalized": "mometasone",
+    "duong_dung_dang_bao_che": "Thuốc tra mũi: ≤ 50 mcg/lần xịt với quy cách đóng gói ≤ 200 liều/hộp; Dùng ngoài.",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Mupirocin",
+    "ten_ngan": "Mupirocin",
+    "ten_normalized": "mupirocin",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Myrtol đơn thành phần hoặc phối hợp trong các thành phẩm viên ngậm",
+    "ten_ngan": "Myrtol",
+    "ten_normalized": "myrtol",
+    "duong_dung_dang_bao_che": "Uống: các dạng Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Naphazolin đơn thành phần hoặc phối hợp trong thành phẩm thuốc mũi như Diphenylhydramin và/hoặc Procain",
+    "ten_ngan": "Naphazolin",
+    "ten_normalized": "naphazolin",
+    "duong_dung_dang_bao_che": "Thuốc tra mũi với nồng độ Naphazolin ≤ 0,05%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Naphazolin phối hợp trong thành phẩm thuốc tra mắt (Pheniramin; Vitamin glycyrhizinat, Dexpanthenol...)",
+    "ten_ngan": "Naphazolin",
+    "ten_normalized": "naphazolin",
+    "duong_dung_dang_bao_che": "Thuốc tra mắt: các dạng với nồng độ Naphazolin ≤ 0,1%,",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Naproxen",
+    "ten_ngan": "Naproxen",
+    "ten_normalized": "naproxen",
+    "duong_dung_dang_bao_che": "Uống: các dạng đã chia liều với giới hạn hàm lượng ≤ 275mg/đơn vị",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Natri benzoat đơn thành phần hoặc phối hợp",
+    "ten_ngan": "Natri benzoat",
+    "ten_normalized": "natri benzoat",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Natri bicacbonat đơn thành phần hoặc phối hợp",
+    "ten_ngan": "Natri bicacbonat",
+    "ten_normalized": "natri bicacbonat",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Natri carbonat đơn thành phần hoặc phối hợp",
+    "ten_ngan": "Natri carbonat",
+    "ten_normalized": "natri carbonat",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Natri Carboxymethylcellulose (Na CMC)",
+    "ten_ngan": "Natri Carboxymethylcellulose",
+    "ten_normalized": "natri carboxymethylcellulose",
+    "duong_dung_dang_bao_che": "Thuốc tra mắt",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Natri clorid đơn thành phần hoặc phối hợp với các muối Kali Citrat, Natri citrat...",
+    "ten_ngan": "Natri clorid",
+    "ten_normalized": "natri clorid",
+    "duong_dung_dang_bao_che": "Uống: các dạng Dùng ngoài Thuốc tra mắt, tra mũi với nồng độ 0,9%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Natri Docusat",
+    "ten_ngan": "Natri Docusat",
+    "ten_normalized": "natri docusat",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Natri Fluorid dạng phối hợp",
+    "ten_ngan": "Natri Fluorid",
+    "ten_normalized": "natri fluorid",
+    "duong_dung_dang_bao_che": "Dùng ngoài: đánh răng, súc miệng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Natri Hyaluronat (Acid Hyaluronic)",
+    "ten_ngan": "Natri Hyaluronat",
+    "ten_normalized": "natri hyaluronat",
+    "duong_dung_dang_bao_che": "Dùng ngoài Dung dịch nhỏ mắt với nồng độ ≤ 0,1%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Natri Monofluorophosphat",
+    "ten_ngan": "Natri Monofluorophosphat",
+    "ten_normalized": "natri monofluorophosphat",
+    "duong_dung_dang_bao_che": "Dùng ngoài, bao gồm các dạng làm sạch khoang miệng, niêm mạc",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Natri Salicylat dạng phối hợp",
+    "ten_ngan": "Natri Salicylat",
+    "ten_normalized": "natri salicylat",
+    "duong_dung_dang_bao_che": "Uống: dạng phối hợp trong các viên ngậm Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Neomycin sulfat phối hợp trong các thành phẩm viên ngậm (Kẽm; Bacitracin; Amylocain...), các thành phẩm dùng ngoài",
+    "ten_ngan": "Neomycin sulfat",
+    "ten_normalized": "neomycin sulfat",
+    "duong_dung_dang_bao_che": "Uống: viên ngậm Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Nguyên tố vi lượng: crôm, đồng, kali, magnesi, mangan, kẽm, …dạng đơn thành phần hoặc phối hợp, bao gồm cả các dạng phối hợp với các Vitamin.",
+    "ten_ngan": "Nguyên tố vi lượng: crôm, đồng, kali, magnesi, mangan, kẽm, …dạng",
+    "ten_normalized": "nguyên tố vi lượng crôm đồng kali magnesi mangan kẽm",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "Với chỉ định bổ sung khoáng chất cho cơ thể.",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Nhôm, magnesi, calci và các hợp chất của nhôm, magnesi, calci dạng đơn thành phần hoặc phối hợp",
+    "ten_ngan": "Nhôm, magnesi, calci và các hợp chất của nhôm, magnesi, calci dạng",
+    "ten_normalized": "nhôm magnesi calci và các hợp chất của nhôm magnesi calci",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "Với chỉ định trung hòa acid dịch vị, chữa loét dạ dày, hành tá tràng.",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Nonahydrated Natri Sulfid + Saccharomyces Cerevisiae",
+    "ten_ngan": "Nonahydrated Natri Sulfid + Saccharomyces Cerevisiae",
+    "ten_normalized": "nonahydrated natri sulfid saccharomyces cerevisiae",
+    "duong_dung_dang_bao_che": "Uống: các dạng Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Noscarpin",
+    "ten_ngan": "Noscarpin",
+    "ten_normalized": "noscarpin",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Nystatin đơn thành phần hoặc phối hợp",
+    "ten_ngan": "Nystatin",
+    "ten_normalized": "nystatin",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Omeprazol",
+    "ten_ngan": "Omeprazol",
+    "ten_normalized": "omeprazol",
+    "duong_dung_dang_bao_che": "Uống: dạng đã chia liều với hàm lượng ≤ 10mg/đơn vị",
+    "dieu_kien_cu_the": "Với chỉ định ợ nóng. Chỉ được bán tối đa 1 lần không có đơn với số lượng cho 14 ngày sử dụng và liều mỗi ngày ≤ 20mg",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Orlistat",
+    "ten_ngan": "Orlistat",
+    "ten_normalized": "orlistat",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Ossein hydroxy apatit",
+    "ten_ngan": "Ossein hydroxy apatit",
+    "ten_normalized": "ossein hydroxy apatit",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Oxeladin",
+    "ten_ngan": "Oxeladin",
+    "ten_normalized": "oxeladin",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Oxomemazin",
+    "ten_ngan": "Oxomemazin",
+    "ten_normalized": "oxomemazin",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Oxymetazolin",
+    "ten_ngan": "Oxymetazolin",
+    "ten_normalized": "oxymetazolin",
+    "duong_dung_dang_bao_che": "Thuốc tra mũi với nồng độ ≤ 0,5%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Pancreatin đơn thành phần hoặc phối hợp với Simethicon và/hoặc các men tiêu hóa và/hoặc các Vitamin nhóm B và/hoặc Azintamid",
+    "ten_ngan": "Pancreatin",
+    "ten_normalized": "pancreatin",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": ".",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Panthenol",
+    "ten_ngan": "Panthenol",
+    "ten_normalized": "panthenol",
+    "duong_dung_dang_bao_che": "Dùng ngoài Thuốc tra mắt",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Paracetamol đơn thành phần",
+    "ten_ngan": "Paracetamol",
+    "ten_normalized": "paracetamol",
+    "duong_dung_dang_bao_che": "Uống: các dạng Thuốc đặt hậu môn",
+    "dieu_kien_cu_the": "Dạng phối hợp quy định cụ thể trong danh mục",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Paracetamol phối hợp với các hoạt chất có trong Danh mục này có tác dụng chữa ho, hạ nhiệt, giảm đau, chống dị ứng",
+    "ten_ngan": "Paracetamol",
+    "ten_normalized": "paracetamol",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "Thành phẩm phối hợp có chứa các hoạt chất có quy định giới hạn hàm lượng, số lượng bán lẻ tối đa 1 lần, ghi số bán lẻ thì phải thực hiện theo quy định cụ thể đối với các hoạt chất đó",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Pentoxyverin",
+    "ten_ngan": "Pentoxyverin",
+    "ten_normalized": "pentoxyverin",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Phenylephrin Hydrochlorid",
+    "ten_ngan": "Phenylephrin Hydrochlorid",
+    "ten_normalized": "phenylephrin hydrochlorid",
+    "duong_dung_dang_bao_che": "Thuốc tra mắt, nhỏ mũi nồng độ ≤ 1%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Phenylephrin Hydrochlorid phối hợp trong các thành phẩm dùng ngoài (như Petrolatum sperti yellow; Mineral oil light; Shark liver oil...)",
+    "ten_ngan": "Phenylephrin Hydrochlorid",
+    "ten_normalized": "phenylephrin hydrochlorid",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Phenylephrin Hydrochlorid phối hợp trong các thành phẩm thuốc ho, hạ nhiệt, giảm đau",
+    "ten_ngan": "Phenylephrin Hydrochlorid",
+    "ten_normalized": "phenylephrin hydrochlorid",
+    "duong_dung_dang_bao_che": "Uống: các dạng Thuốc đặt hậu môn",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Phospholipid",
+    "ten_ngan": "Phospholipid",
+    "ten_normalized": "phospholipid",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Picloxydin",
+    "ten_ngan": "Picloxydin",
+    "ten_normalized": "picloxydin",
+    "duong_dung_dang_bao_che": "Thuốc tra mắt",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Piroxicam",
+    "ten_ngan": "Piroxicam",
+    "ten_normalized": "piroxicam",
+    "duong_dung_dang_bao_che": "Dùng ngoài: các dạng với nồng độ ≤ 1%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Policresulen (Metacresolsulphonic acid-formaldehyd)",
+    "ten_ngan": "Policresulen",
+    "ten_normalized": "policresulen",
+    "duong_dung_dang_bao_che": "Dùng ngoài Thuốc đặt trực tràng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Polyethylen glycol 400 đơn thành phần hoặc phối hợp với Propylen glycol",
+    "ten_ngan": "Polyethylen glycol 400",
+    "ten_normalized": "polyethylen glycol 400",
+    "duong_dung_dang_bao_che": "Thuốc tra mắt",
+    "dieu_kien_cu_the": ".",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Polysacharid",
+    "ten_ngan": "Polysacharid",
+    "ten_normalized": "polysacharid",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Polytar dạng đơn thành phần hoặc phối hợp trong các thành phẩm dùng ngoài (như Kẽm Pyrithion...)",
+    "ten_ngan": "Polytar dạng",
+    "ten_normalized": "polytar",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Povidon Iodin",
+    "ten_ngan": "Povidon Iodin",
+    "ten_normalized": "povidon iodin",
+    "duong_dung_dang_bao_che": "Dùng ngoài: các dạng (bao gồm dung dịch súc miệng với nồng độ ≤ 1%). Thuốc tra mắt",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Promethazin Hydrochlorid đơn thành phần hoặc phối hợp trong các thành phẩm thuốc ho, hạ nhiệt, giảm đau (với Carbocystein; Paracetamol...)",
+    "ten_ngan": "Promethazin Hydrochlorid",
+    "ten_normalized": "promethazin hydrochlorid",
+    "duong_dung_dang_bao_che": "Uống: các dạng với giới hạn hàm lượng, nồng độ Promethazin như sau (tính theo dạng base): - Đã chia liều ≤ 12,5mg/ đơn vị; - Chưa chia liều ≤ 0,1% Dùng ngoài: nồng độ ≤ 2%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Pseudoephedrin Hydrochlorid phối hợp với Cetirizin",
+    "ten_ngan": "Pseudoephedrin Hydrochlorid",
+    "ten_normalized": "pseudoephedrin hydrochlorid",
+    "duong_dung_dang_bao_che": "Uống: các dạng với giới hạn Pseudoephedrin như sau (tính theo dạng base): - Dạng chia liều ≤ 120mg/đơn vị; - Dạng chưa chia liều ≤ 0,5%",
+    "dieu_kien_cu_the": "Thành phẩm chứa Pseudoephedrin được bán không cần đơn với số lượng tối đa cho 15 ngày sử dụng. Cơ sở bán lẻ phải theo dõi tên, địa chỉ người mua trong sổ bán lẻ.",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Pseudoephedrin Hydrochlorid phối hợp trong các thành phẩm thuốc ho, hạ nhiệt, giảm đau, chống dị ứng",
+    "ten_ngan": "Pseudoephedrin Hydrochlorid",
+    "ten_normalized": "pseudoephedrin hydrochlorid",
+    "duong_dung_dang_bao_che": "Uống: các dạng với giới hạn Pseudoephedrin như sau (tính theo dạng base): - Dạng chia liều ≤120mg/ đơn vị; - Dạng chưa chia liều ≤ 0,5%",
+    "dieu_kien_cu_the": "Tất cả các thuốc thành phẩm có chứa Pseudoephedrin được bán không cần đơn với số lượng tối đa cho 15 ngày sử dụng. Cơ sở bán lẻ phải theo dõi tên, địa chỉ người mua trong sổ bán lẻ.",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Pyrantel",
+    "ten_ngan": "Pyrantel",
+    "ten_normalized": "pyrantel",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "Chỉ định trị giun",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Ranitidin",
+    "ten_ngan": "Ranitidin",
+    "ten_normalized": "ranitidin",
+    "duong_dung_dang_bao_che": "Uống: các dạng đã chia liều ≤ 75mg",
+    "dieu_kien_cu_the": "Bán tối đa không có đơn cho 15 ngày sử dụng. Chỉ định điều trị chứng ợ nóng",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Rutin đơn thành phần hoặc phối hợp với Vitamin C và/hoặc các cao, dịch chiết từ dược liệu",
+    "ten_ngan": "Rutin",
+    "ten_normalized": "rutin",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Saccharomyces boulardic",
+    "ten_ngan": "Saccharomyces boulardic",
+    "ten_normalized": "saccharomyces boulardic",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Saccharomyces cerevisiae với Trihydrat Magnesi Sulfat",
+    "ten_ngan": "Saccharomyces cerevisiae với Trihydrat Magnesi Sulfat",
+    "ten_normalized": "saccharomyces cerevisiae với trihydrat magnesi sulfat",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Sắt dạng hợp chất đơn thành phần hoặc phối hợp trong các thành phẩm chứa vitamin, khoáng chất",
+    "ten_ngan": "Sắt dạng hợp chất",
+    "ten_normalized": "sắt hợp chất",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "Với chỉ định bổ sung sắt cho cơ thể.",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Selen hữu cơ dạng phối hợp trong các thành phẩm chứa Vitamin, khoáng chất",
+    "ten_ngan": "Selen hữu cơ",
+    "ten_normalized": "selen hữu cơ",
+    "duong_dung_dang_bao_che": "Uống: các dạng với giới hạn hàm lượng như sau: - Dạng đã chia liều Selen ≤ 50mcg/ đơn vị",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Selen sulfid",
+    "ten_ngan": "Selen sulfid",
+    "ten_normalized": "selen sulfid",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Silymarin đơn thành phần hoặc phối hợp với các Vitamin và/hoặc các cao, dịch chiết từ dược liệu.",
+    "ten_ngan": "Silymarin",
+    "ten_normalized": "silymarin",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Simethicon đơn thành phần hoặc phối hợp với Pancreatin và/hoặc Acid Desoxycholic và/hoặc các Vitamin nhóm B và/hoặc các men tiêu hóa",
+    "ten_ngan": "Simethicon",
+    "ten_normalized": "simethicon",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Simethicon phối hợp với các hợp chất nhôm, magnesi, và/hoặc Dicyclomin và/hoặc than hoạt",
+    "ten_ngan": "Simethicon",
+    "ten_normalized": "simethicon",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Sorbitol đơn thành phần hoặc phối hợp",
+    "ten_ngan": "Sorbitol",
+    "ten_normalized": "sorbitol",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Sterculia (gum sterculia)",
+    "ten_ngan": "Sterculia",
+    "ten_normalized": "sterculia",
+    "duong_dung_dang_bao_che": "Uống: các dạng Thuốc thụt trực tràng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Sucralfat",
+    "ten_ngan": "Sucralfat",
+    "ten_normalized": "sucralfat",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Sulbutiamin",
+    "ten_ngan": "Sulbutiamin",
+    "ten_normalized": "sulbutiamin",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Sulfogaiacol (hoặc Sulfoguaiacol) đơn thành phần hoặc phối hợp trong các thành phẩm hạ nhiệt, giảm đau, chống ho",
+    "ten_ngan": "Sulfogaiacol",
+    "ten_normalized": "sulfogaiacol",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Terbinafin",
+    "ten_ngan": "Terbinafin",
+    "ten_normalized": "terbinafin",
+    "duong_dung_dang_bao_che": "Dùng ngoài: các dạng với nồng độ ≤ 1%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Terpin đơn thành phần hoặc phối hợp với Codein",
+    "ten_ngan": "Terpin",
+    "ten_normalized": "terpin",
+    "duong_dung_dang_bao_che": "Uống: các dạng. Dạng phối hợp Codein (tính theo dạng base) giới hạn hàm lượng như sau: - Dạng chia liều ≤ 12mg/đơn vị; - Dạng chưa chia liều ≤ 2,5%",
+    "dieu_kien_cu_the": "Thành phẩm chứa Codein được bán không cần đơn với số lượng tối đa cho 10 ngày sử dụng. Cơ sở bán lẻ phải theo dõi tên, địa chỉ người mua trong sổ bán lẻ.",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Tetrahydrozolin",
+    "ten_ngan": "Tetrahydrozolin",
+    "ten_normalized": "tetrahydrozolin",
+    "duong_dung_dang_bao_che": "Thuốc tra mũi",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Than hoạt đơn thành phần hoặc phối hợp với Simethicon",
+    "ten_ngan": "Than hoạt",
+    "ten_normalized": "than hoạt",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Tinh dầu (bao gồm nhóm các chất Menthol, Pinen, Camphor, Cineol, Fenchone, Borneol, Anethol, Eucalyptol...)",
+    "ten_ngan": "Tinh dầu",
+    "ten_normalized": "tinh dầu",
+    "duong_dung_dang_bao_che": "Uống: các dạng Dùng ngoài: thuốc bôi ngoài da Nước súc miệng, thuốc bôi niêm mạc miệng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Tioconazol đơn thành phần hoặc phối hợp với Hydrocortison",
+    "ten_ngan": "Tioconazol",
+    "ten_normalized": "tioconazol",
+    "duong_dung_dang_bao_che": "Dùng ngoài: các dạng với nồng độ như sau: - Tioconazol ≤ 1,00% - Hydrocortison ≤ 0,05%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Tolnaftat",
+    "ten_ngan": "Tolnaftat",
+    "ten_normalized": "tolnaftat",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Triclosan đơn thành phần hoặc phối hợp trong các thành phẩm dùng ngoài",
+    "ten_ngan": "Triclosan",
+    "ten_normalized": "triclosan",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Triprolidin đơn thành phần hoặc phối hợp trong các thành phẩm thuốc ho, hạ nhiệt, giảm đau.",
+    "ten_ngan": "Triprolidin",
+    "ten_normalized": "triprolidin",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "Tất cả các thuốc thành phẩm có chứa Pseudoephedrin được bán không cần đơn với số lượng tối đa cho 15 ngày sử dụng. Cơ sở bán lẻ phải theo dõi tên, địa chỉ người mua trong sổ bán lẻ.",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Trolamin đơn thành phần hoặc phối hợp trong các thành phẩm dùng ngoài (với Triclosan và/hoặc Tyrothricin)",
+    "ten_ngan": "Trolamin",
+    "ten_normalized": "trolamin",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Tyrothricin đơn thành phần hoặc phối hợp (với Benzalkonium, Benzocain, Formaldehyd, Trolamin, tinh dầu, các thành phần trong tinh dầu)",
+    "ten_ngan": "Tyrothricin",
+    "ten_normalized": "tyrothricin",
+    "duong_dung_dang_bao_che": "Uống: viên ngậm Dùng ngoài: dung dịch súc miệng, xịt miệng, bôi ngoài da",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Urea đơn thành phần hoặc phối hợp với Vitamin E và/hoặc Bifonazol và/hoặc các dược liệu không thuộc Danh mục dược liệu độc do Bộ trưởng Bộ Y tế ban hành",
+    "ten_ngan": "Urea",
+    "ten_normalized": "urea",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Vitamin A và tiền Vitamin A (Betacaroten) dạng đơn thành phân và phối hợp với các vitamin",
+    "ten_ngan": "Vitamin A và tiền Vitamin A",
+    "ten_normalized": "vitamin a và tiền vitamin a",
+    "duong_dung_dang_bao_che": "Uống: các dạng với giới hạn hàm lượng Vitamin A < 5000 IU/đơn vị Dùng ngoài Thuốc tra mắt",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Vitamin dạng đơn thành phần (trừ Vitamin D dạng đơn thành phần) hoặc dạng phối hợp các Vitamin, khoáng chất, Acid Amin, các Acid béo, Taurin, Lutein, Zeaxanthin",
+    "ten_ngan": "Vitamin dạng",
+    "ten_normalized": "vitamin",
+    "duong_dung_dang_bao_che": "Uống: các dạng Dùng ngoài Các phối hợp dạng uống có chứa Vitamin A thực hiện giới hạn hàm lượng như sau: Vitamin A ≤ 5000 IU/đơn vị chia liều",
+    "dieu_kien_cu_the": "Với tác dụng bổ sung Vitamin, khoáng chất và dinh dưỡng",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Vitamin nhóm B, Vitamin PP đơn thành phần hoặc phối hợp",
+    "ten_ngan": "Vitamin nhóm B, Vitamin PP",
+    "ten_normalized": "vitamin nhóm b vitamin pp",
+    "duong_dung_dang_bao_che": "Thuốc tra mắt",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Vi khuẩn có lợi cho đường tiêu hóa: Bacillus claussi, Bacillus subtilis, Lactobacillus acidophilus dạng đơn thành phần hoặc phối hợp, bao gồm cả dạng phối hợp với các vitamin",
+    "ten_ngan": "Vi khuẩn có lợi cho đường tiêu hóa: Bacillus claussi, Bacillus subtilis, Lactobacillus acidophilus dạng",
+    "ten_normalized": "vi khuẩn có lợi cho đường tiêu hóa bacillus claussi bacillus subtilis lactobacillus acidophilus",
+    "duong_dung_dang_bao_che": "Uống: các dạng",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Xanh Methylen",
+    "ten_ngan": "Xanh Methylen",
+    "ten_normalized": "xanh methylen",
+    "duong_dung_dang_bao_che": "Dùng ngoài",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  },
+  {
+    "ten_hoat_chat": "Xylometazolin đơn thành phần hoặc phối hợp với Benzalkonium.",
+    "ten_ngan": "Xylometazolin",
+    "ten_normalized": "xylometazolin",
+    "duong_dung_dang_bao_che": "Thuốc tra mũi với giới hạn nồng độ Xylometazolin ≤ 1%",
+    "dieu_kien_cu_the": "",
+    "otc": true,
+    "source": "TT 07/2017/TT-BYT"
+  }
+]

@@ -10,6 +10,8 @@ All factories are lazy singletons (@lru_cache).
 from __future__ import annotations
 
 import sqlite3
+import os
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -48,10 +50,77 @@ CREATE TABLE IF NOT EXISTS chat_trace (
 CREATE INDEX IF NOT EXISTS idx_chat_trace_session_created
     ON chat_trace(session_id, created_at);
 
-CREATE TABLE IF NOT EXISTS patient_profile (
-    session_id TEXT PRIMARY KEY,
-    profile_json TEXT NOT NULL,
-    updated_at REAL NOT NULL
+CREATE TABLE IF NOT EXISTS medical_profile_subject (
+    subject_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    relationship TEXT NOT NULL,
+    display_name TEXT,
+    birth_date TEXT,
+    gender TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    PRIMARY KEY (owner_id, subject_id)
+);
+CREATE INDEX IF NOT EXISTS idx_medical_profile_subject_updated
+    ON medical_profile_subject(owner_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS medical_profile_fact (
+    profile_fact_id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    section TEXT NOT NULL,
+    fact_type TEXT NOT NULL,
+    entity_type TEXT,
+    entity_id TEXT,
+    attribute TEXT NOT NULL,
+    value_json TEXT NOT NULL,
+    temporal_status TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    verification_status TEXT NOT NULL,
+    source_kind TEXT NOT NULL,
+    reporter_role TEXT,
+    valid_from REAL,
+    valid_until REAL,
+    superseded_by TEXT,
+    inactive INTEGER NOT NULL DEFAULT 0,
+    coding_system TEXT,
+    coding_code TEXT,
+    coding_display TEXT,
+    source_turn_id TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    confirmed_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_medical_profile_subject
+    ON medical_profile_fact(owner_id, subject_id);
+CREATE INDEX IF NOT EXISTS idx_medical_profile_section
+    ON medical_profile_fact(owner_id, subject_id, section);
+CREATE INDEX IF NOT EXISTS idx_medical_profile_active
+    ON medical_profile_fact(owner_id, subject_id, superseded_by, inactive);
+CREATE INDEX IF NOT EXISTS idx_medical_profile_expiry
+    ON medical_profile_fact(valid_until);
+
+CREATE TABLE IF NOT EXISTS medical_profile_section_state (
+    owner_id TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    section TEXT NOT NULL,
+    status TEXT NOT NULL,
+    reviewed_at REAL,
+    PRIMARY KEY (owner_id, subject_id, section)
+);
+
+CREATE TABLE IF NOT EXISTS medical_profile_preference (
+    owner_id TEXT NOT NULL,
+    preference TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    consented_at REAL,
+    updated_at REAL NOT NULL,
+    PRIMARY KEY (owner_id, preference)
+);
+
+CREATE TABLE IF NOT EXISTS app_schema_migration (
+    id TEXT PRIMARY KEY,
+    applied_at REAL NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS rate_limit (
@@ -167,6 +236,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_waitlist_one_per_patient_doctor
 """
 
 
+def _migrate_medical_profile_columns(conn: sqlite3.Connection) -> None:
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(medical_profile_fact)")}
+    if "confirmed_at" not in existing:
+        conn.execute("ALTER TABLE medical_profile_fact ADD COLUMN confirmed_at REAL")
+
+
 @lru_cache(maxsize=1)
 def get_redis() -> redis.Redis:
     if not REDIS_URL:
@@ -186,6 +261,10 @@ def get_sqlite() -> sqlite3.Connection:
     conn.executescript(_SQLITE_SCHEMA)
     _migrate_sqlite(conn)
     conn.commit()
+    try:
+        os.chmod(SQLITE_PATH, 0o600)
+    except OSError:
+        pass
     return conn
 
 
@@ -230,6 +309,49 @@ def _migrate_sqlite(conn: sqlite3.Connection) -> None:
     ):
         if col not in doctor_cols:
             conn.execute(ddl)
+
+    # Medical-profile fact column additions for databases created before
+    # the IPS-inspired schema was finalised.
+    _migrate_medical_profile_columns(conn)
+
+    # --- One-shot cutover: drop legacy medical / patient tables ---
+    # The IPS-inspired medical profile subsystem replaces the old medical
+    # memory store. Legacy data is intentionally not migrated.
+    if not _migration_applied(conn, "medical_profile_cutover_v1"):
+        _purge_legacy_medical_tables(conn)
+        conn.execute(
+            "INSERT INTO app_schema_migration (id, applied_at) "
+            "VALUES (?, ?)",
+            ("medical_profile_cutover_v1", time.time()),
+        )
+
+
+def _migration_applied(conn: sqlite3.Connection, migration_id: str) -> bool:
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM app_schema_migration WHERE id = ?", (migration_id,),
+        ).fetchone()
+        return bool(row)
+    except sqlite3.OperationalError:
+        # app_schema_migration does not exist yet on truly fresh DBs; the
+        # CREATE TABLE above will run before the migration is recorded.
+        return False
+
+
+def _purge_legacy_medical_tables(conn: sqlite3.Connection) -> None:
+    """Drop the legacy medical / patient tables and their indexes.
+
+    Idempotent: missing tables / indexes are silently skipped.
+    """
+    legacy_tables = (
+        "memory_fact", "memory_subject", "memory_preference",
+        "memory_user_preference", "profile_section_state", "patient_profile",
+    )
+    for table in legacy_tables:
+        try:
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        except sqlite3.Error:
+            pass
 
 
 @lru_cache(maxsize=1)

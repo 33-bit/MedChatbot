@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import time
 
 import pytest
@@ -8,6 +9,22 @@ import pytest
 from src.chat.storage import doctors
 from src.chat.storage.session import PatientSession
 from src.server.channels import telegram_doctor
+
+
+@pytest.fixture
+def profile_identity(monkeypatch):
+    from src import config
+
+    encoded = base64.b64encode(b"doctor-profile-test-key-32-bytes!").decode()
+    monkeypatch.setattr(config, "PROFILE_IDENTITY_ACTIVE_VERSION", "v1")
+    monkeypatch.setattr(config, "PROFILE_IDENTITY_HMAC_KEY", encoded)
+    monkeypatch.delenv("PROFILE_IDENTITY_KEY_V1", raising=False)
+
+    def owner_key(user_id: int | str) -> str:
+        from src.chat.security.identity import derive_owner_key
+        return derive_owner_key("telegram", user_id)
+
+    return owner_key
 
 
 def test_doctor_command_shows_tier_menu(monkeypatch):
@@ -415,6 +432,213 @@ def test_refresh_callback_rerenders_doctor_list(monkeypatch):
     callbacks = [btn["callback_data"] for row in sent_edits[0]["inline_keyboard"]["inline_keyboard"] for btn in row]
     assert f"doctor:profile:{doctor_id}:free:tim_mach" in callbacks
     assert "doctor:refresh:free:tim_mach" in callbacks
+
+
+def test_pick_with_user_identity_requires_profile_confirmation(
+    monkeypatch, profile_identity,
+):
+    from src.chat.profile import ensure_subject
+
+    patient_id = 6901
+    owner_key = profile_identity(patient_id)
+    ensure_subject(owner_key, "self", relationship="self", display_name="Lan")
+    doctor_id = doctors.create_doctor("BS Consent", "Nội", "free", 0, 16901)
+    edits: list[dict] = []
+    sent: list[dict] = []
+
+    async def fake_edit_message_text(chat_id, message_id, text, inline_keyboard=None):
+        edits.append({"text": text, "inline_keyboard": inline_keyboard})
+
+    async def fake_send_text(chat_id, text, *args, **kwargs):
+        sent.append({"chat_id": chat_id, "text": text})
+
+    async def fake_answer_callback_query(callback_query_id, text):
+        return None
+
+    monkeypatch.setattr(telegram_doctor.telegram, "_edit_message_text", fake_edit_message_text)
+    monkeypatch.setattr(telegram_doctor.telegram, "send_text", fake_send_text)
+    monkeypatch.setattr(telegram_doctor.telegram, "_answer_callback_query", fake_answer_callback_query)
+
+    handled = asyncio.run(telegram_doctor.handle_doctor_callback({
+        "id": "profile-consent",
+        "data": f"doctor:pick:{doctor_id}",
+        "from": {"id": patient_id},
+        "message": {"message_id": 41, "chat": {"id": patient_id}},
+    }))
+
+    assert handled is True
+    assert doctors.open_consultation_for_patient(patient_id) is None
+    assert sent == []
+    assert "Xác nhận chia sẻ hồ sơ" in edits[-1]["text"]
+    assert "Lan" in edits[-1]["text"]
+    callbacks = [
+        button["callback_data"]
+        for row in edits[-1]["inline_keyboard"]["inline_keyboard"]
+        for button in row
+    ]
+    assert f"doctor:share:confirm:{doctor_id}:self" in callbacks
+    assert f"doctor:share:choose:{doctor_id}" in callbacks
+
+
+def test_doctor_share_defaults_to_active_conversation_subject(
+    monkeypatch, profile_identity,
+):
+    from src.chat.context.domain import SessionState
+    from src.chat.profile import ensure_subject
+    from src.chat.security.identity import derive_request_identity
+
+    patient_id = 6910
+    owner_key = profile_identity(patient_id)
+    ensure_subject(owner_key, "self", relationship="self")
+    ensure_subject(
+        owner_key,
+        "person_mother",
+        relationship="mother",
+        display_name="Mai",
+    )
+    identity = derive_request_identity("telegram", patient_id, str(patient_id))
+    state = SessionState(
+        session_id=identity.session_key,
+        owner_id=owner_key,
+        active_subject_id="mother",
+    )
+    monkeypatch.setattr(
+        "src.chat.context.context_store.load_conversation_context",
+        lambda session_id, owner_id: (state, {}, True),
+    )
+
+    assert telegram_doctor._default_profile_subject_id(
+        patient_id,
+        patient_id,
+        owner_key,
+    ) == "person_mother"
+
+
+def test_patient_can_select_relative_and_share_only_that_profile(
+    monkeypatch, profile_identity,
+):
+    from src.chat.profile import ensure_subject, write_profile_fact
+
+    patient_id = 6902
+    owner_key = profile_identity(patient_id)
+    ensure_subject(owner_key, "self", relationship="self", display_name="Huy")
+    ensure_subject(
+        owner_key,
+        "person_mother",
+        relationship="mother",
+        display_name="Mai",
+        birth_date="1958-03-10",
+        gender="female",
+    )
+    write_profile_fact(
+        owner_id=owner_key,
+        subject_id="person_mother",
+        fact_type="allergy",
+        section="allergies",
+        value={"name": "Penicillin"},
+        entity_id="Penicillin",
+    )
+    doctor_id = doctors.create_doctor("BS Relative", "Nội", "free", 0, 16902)
+    edits: list[dict] = []
+    sent: list[dict] = []
+
+    async def fake_edit_message_text(chat_id, message_id, text, inline_keyboard=None):
+        edits.append({"text": text, "inline_keyboard": inline_keyboard})
+
+    async def fake_send_text(chat_id, text, *args, inline_keyboard=None, **kwargs):
+        sent.append({"chat_id": chat_id, "text": text, "inline_keyboard": inline_keyboard})
+
+    async def fake_answer_callback_query(callback_query_id, text):
+        return None
+
+    monkeypatch.setattr(telegram_doctor.telegram, "_edit_message_text", fake_edit_message_text)
+    monkeypatch.setattr(telegram_doctor.telegram, "send_text", fake_send_text)
+    monkeypatch.setattr(telegram_doctor.telegram, "_answer_callback_query", fake_answer_callback_query)
+
+    asyncio.run(telegram_doctor.handle_doctor_callback({
+        "id": "choose-profile",
+        "data": f"doctor:share:choose:{doctor_id}",
+        "from": {"id": patient_id},
+        "message": {"message_id": 42, "chat": {"id": patient_id}},
+    }))
+    subject_callbacks = [
+        button["callback_data"]
+        for row in edits[-1]["inline_keyboard"]["inline_keyboard"]
+        for button in row
+    ]
+    assert f"doctor:share:subject:{doctor_id}:person_mother" in subject_callbacks
+
+    asyncio.run(telegram_doctor.handle_doctor_callback({
+        "id": "preview-relative",
+        "data": f"doctor:share:subject:{doctor_id}:person_mother",
+        "from": {"id": patient_id},
+        "message": {"message_id": 42, "chat": {"id": patient_id}},
+    }))
+    assert "Mai (Mẹ)" in edits[-1]["text"]
+    assert "Penicillin" in edits[-1]["text"]
+    assert doctors.open_consultation_for_patient(patient_id) is None
+
+    asyncio.run(telegram_doctor.handle_doctor_callback({
+        "id": "confirm-relative",
+        "data": f"doctor:share:confirm:{doctor_id}:person_mother",
+        "from": {"id": patient_id},
+        "message": {"message_id": 42, "chat": {"id": patient_id}},
+    }))
+
+    pending = doctors.open_consultation_for_patient(patient_id)
+    assert pending is not None and pending["doctor_id"] == doctor_id
+    doctor_message = next(message for message in sent if message["chat_id"] == 16902)
+    assert "đã xem và đồng ý chia sẻ" in doctor_message["text"]
+    assert "Mai (Mẹ)" in doctor_message["text"]
+    assert "Penicillin" in doctor_message["text"]
+    assert "Huy (Bạn)" not in doctor_message["text"]
+    assert owner_key not in doctor_message["text"]
+    assert "person_mother" not in doctor_message["text"]
+
+
+def test_profile_share_rejects_subject_owned_by_another_user(
+    monkeypatch, profile_identity,
+):
+    from src.chat.profile import ensure_subject
+
+    patient_id = 6903
+    other_id = 6904
+    owner_key = profile_identity(patient_id)
+    other_owner_key = profile_identity(other_id)
+    ensure_subject(owner_key, "self", relationship="self")
+    ensure_subject(
+        other_owner_key,
+        "private_relative",
+        relationship="relative",
+        display_name="Không được chia sẻ",
+    )
+    doctor_id = doctors.create_doctor("BS Isolation", "Nội", "free", 0, 16903)
+    edits: list[str] = []
+    sent: list[str] = []
+
+    async def fake_edit_message_text(chat_id, message_id, text, inline_keyboard=None):
+        edits.append(text)
+
+    async def fake_send_text(chat_id, text, *args, **kwargs):
+        sent.append(text)
+
+    async def fake_answer_callback_query(callback_query_id, text):
+        return None
+
+    monkeypatch.setattr(telegram_doctor.telegram, "_edit_message_text", fake_edit_message_text)
+    monkeypatch.setattr(telegram_doctor.telegram, "send_text", fake_send_text)
+    monkeypatch.setattr(telegram_doctor.telegram, "_answer_callback_query", fake_answer_callback_query)
+
+    asyncio.run(telegram_doctor.handle_doctor_callback({
+        "id": "forged-profile",
+        "data": f"doctor:share:confirm:{doctor_id}:private_relative",
+        "from": {"id": patient_id},
+        "message": {"message_id": 43, "chat": {"id": patient_id}},
+    }))
+
+    assert doctors.open_consultation_for_patient(patient_id) is None
+    assert sent == []
+    assert "không còn tồn tại" in edits[-1].lower()
 
 
 

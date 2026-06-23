@@ -174,6 +174,12 @@ ${NGROK_URL}/webhook/messenger
 The `telegram-webhook` and `zalo-webhook` containers exit after registering
 webhooks; this is expected. Keep the `api` and `ngrok` containers running.
 
+Telegram users can open `/menu`, choose **Đọc câu trả lời**, and turn Vietnamese
+voice replies on or off for their chat. TTS uses VieNeu-TTS locally; the first
+enabled reply downloads its model files into the Hugging Face cache, so the
+first synthesis is slower and requires outbound network access. Later replies
+run from the local cache. Text replies are still sent if synthesis fails.
+
 
 ## Data and RAG pipeline
 
@@ -183,9 +189,19 @@ Typical responsibilities:
 
 - `src/processing/bachmai/` extracts and finalizes Bạch Mai disease guideline documents.
 - `src/processing/drugs/` scrapes, parses, and extracts OTC drug entities.
+- `src/processing/health_insurance/` extracts the consolidated Health Insurance Law.
 - `src/processing/symptom_canon.py` builds canonical symptom data.
 - `src/rag/build_qdrant.py` builds Qdrant vector collections.
 - `src/rag/kg_builder.py` builds the Neo4j graph.
+
+To build the lightweight health-insurance collection, place
+`22-VBHN-VPQH.pdf` at `documents/health_insurance/22-VBHN-VPQH.pdf`, then run:
+
+```bash
+python -m src.processing.health_insurance.parse
+python -m src.rag.chunker --source health_insurance
+python -m src.rag.build_qdrant --health-insurance --reset
+```
 
 Prefer dry-run, prepare, or status modes for processing workflows. Do not run live scraping, batch submission, webhook setup, or external service mutation unless you explicitly intend to affect external systems.
 

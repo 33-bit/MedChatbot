@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from src.chat.context.resolver import format_subject_address
 from src.chat.storage.session import PatientSession
 
 _DETAIL_LABELS = {
@@ -36,7 +37,11 @@ def candidate_names(session: PatientSession, limit: int = 5) -> list[str]:
     return [c.get("name", "") for c in session.candidate_diseases[:limit] if c.get("name")]
 
 
-def build_general_triage_prompt(session: PatientSession) -> str:
+def build_general_triage_prompt(
+    session: PatientSession,
+    subject: dict | None = None,
+) -> str:
+    subject_label = format_subject_address(subject)
     symptoms = ", ".join(symptom_names(session)) or "triệu chứng này"
     symptoms_lower = symptoms.lower()
     if "đau bụng" in symptoms_lower:
@@ -47,15 +52,16 @@ def build_general_triage_prompt(session: PatientSession) -> str:
             "hoặc bệnh lý bụng cấp nếu đau tăng dần hoặc khu trú rõ."
         )
         interim_care = (
-            "Trong lúc theo dõi, bạn nên nghỉ ngơi, uống từng ngụm nước nhỏ nếu buồn nôn, "
+            f"Trong lúc theo dõi, {subject_label} nên nghỉ ngơi, uống từng ngụm "
+            "nước nhỏ nếu buồn nôn, "
             "ăn nhẹ thức ăn mềm nếu thấy đói và tránh đồ nhiều dầu mỡ/rượu bia. "
             "Không nên tự uống thuốc giảm đau mạnh, thuốc cầm tiêu chảy hoặc kháng sinh "
             "khi chưa rõ nguyên nhân."
         )
         red_flags = (
             "Nếu đau dữ dội tăng nhanh, bụng cứng, ngất/choáng, nôn liên tục, "
-            "đi ngoài ra máu, sốt cao, khó thở, đau ngực, lơ mơ, hoặc bạn đang "
-            "mang thai, hãy đi cấp cứu ngay."
+            "đi ngoài ra máu, sốt cao, khó thở, đau ngực, lơ mơ, hoặc có khả năng "
+            "đang mang thai, hãy đi cấp cứu ngay."
         )
     else:
         possible_causes = (
@@ -65,7 +71,8 @@ def build_general_triage_prompt(session: PatientSession) -> str:
             "triệu chứng nặng lên hoặc kéo dài."
         )
         interim_care = (
-            "Trong lúc theo dõi, bạn nên nghỉ ngơi, uống đủ nước, ăn uống nhẹ nếu phù hợp "
+            f"Trong lúc theo dõi, {subject_label} nên nghỉ ngơi, uống đủ nước, "
+            "ăn uống nhẹ nếu phù hợp "
             "và tránh tự dùng kháng sinh hoặc thuốc mạnh khi chưa rõ nguyên nhân."
         )
         red_flags = (
@@ -75,7 +82,7 @@ def build_general_triage_prompt(session: PatientSession) -> str:
         )
 
     return (
-        f"Tôi hiểu bạn đang bị {symptoms}. Triệu chứng này có nhiều nguyên nhân, "
+        f"Tôi hiểu {subject_label} đang bị {symptoms}. Triệu chứng này có nhiều nguyên nhân, "
         "nên trước hết tôi cần vài thông tin chung để xem có dấu hiệu cần đi khám gấp không.\n\n"
         f"{possible_causes}\n\n"
         f"{interim_care}\n\n"

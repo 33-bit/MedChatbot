@@ -10,15 +10,17 @@ import json
 import logging
 import re
 import time
+from urllib.parse import quote
 
 from src.chat.clients import get_openai
 from src.chat.llm.mini import chat_completion_extra_kwargs, message_text
+from src.chat.context.resolver import format_subject_address
 from src.chat.prompts import GENERATOR_SYSTEM
 from src.chat.replies import TECHNICAL_ERROR_REPLY
 from src.chat.retrieval.types import Hit
 from src.chat.storage.seed_doctors import SPECIALTIES
 from src.chat.timing import elapsed_ms
-from src.config import BASE_URL, MODEL, MODEL_MAX_TOKENS
+from src.config import BASE_URL, MODEL, MODEL_MAX_TOKENS, PUBLIC_BASE_URL
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +33,12 @@ _DOCTOR_SPECIALTY_OPTIONS = ", ".join(SPECIALTIES)
 
 
 def _source_key(h: Hit) -> tuple:
+    if h.source_type == "health_insurance":
+        return (
+            h.source_type,
+            h.source_slug,
+            (h.metadata or {}).get("article_number", ""),
+        )
     return (h.source_type, h.source_slug)
 
 
@@ -54,10 +62,32 @@ def _drug_label(h: Hit) -> str:
 
 def _disease_label(h: Hit) -> str:
     chapter = (h.metadata or {}).get("chapter", "")
-    return (
+    label = (
         "Hướng dẫn chẩn đoán và điều trị - Bệnh viện Bạch Mai - "
         f"{chapter} - {h.source_name}".rstrip(" -")
     )
+    if not h.source_slug:
+        return label
+    path = f"/sources/bachmai/{quote(h.source_slug, safe='')}.pdf"
+    url = f"{PUBLIC_BASE_URL.rstrip('/')}{path}" if PUBLIC_BASE_URL else path
+    return f"[{label}]({url})"
+
+
+def _health_insurance_label(h: Hit) -> str:
+    metadata = h.metadata or {}
+    article_number = metadata.get("article_number", "")
+    article_title = metadata.get("article_title", "")
+    label = "Luật Bảo hiểm y tế - 22/VBHN-VPQH"
+    if article_number:
+        label += f" - Điều {article_number}"
+    if article_title:
+        label += f". {article_title}"
+    path = "/sources/health-insurance/22-vbhn-vpqh.pdf"
+    page = metadata.get("page_start")
+    if page:
+        path += f"#page={page}"
+    url = f"{PUBLIC_BASE_URL.rstrip('/')}{path}" if PUBLIC_BASE_URL else path
+    return f"[{label}]({url})"
 
 
 def _format_context(hits: list[Hit], cite_idx: list[int]) -> str:
@@ -96,7 +126,12 @@ def _format_sources(unique: list[Hit], source_numbers: list[int] | None = None) 
     numbers = source_numbers or list(range(1, len(unique) + 1))
     for i in numbers:
         h = unique[i - 1]
-        label = _drug_label(h) if h.source_type == "drug" else _disease_label(h)
+        if h.source_type == "drug":
+            label = _drug_label(h)
+        elif h.source_type == "health_insurance":
+            label = _health_insurance_label(h)
+        else:
+            label = _disease_label(h)
         lines.append(f"[{i}] {label}")
     return "\n".join(lines)
 
@@ -105,6 +140,12 @@ def _format_patient(patient: dict | None) -> str:
     """Format patient session state for prompt."""
     if not patient:
         return ""
+    if "safety_profile" in patient or "relevant_facts" in patient:
+        return _format_context_bundle(patient)
+    # IPS-inspired medical profile: when present, prefer the cautious text
+    # the projection emitted. Falls back to the legacy session formatter.
+    if isinstance(patient, dict) and patient.get("medical_profile_text"):
+        return str(patient["medical_profile_text"])
     parts = []
     if patient.get("symptoms"):
         lines = []
@@ -122,6 +163,63 @@ def _format_patient(patient: dict | None) -> str:
         names = [d.get("name", "") for d in patient["candidate_diseases"][:5]]
         parts.append("Bệnh nghi ngờ (shortlist): " + ", ".join(filter(None, names)))
     return "\n\n".join(parts)
+
+
+def _format_context_bundle(bundle: dict) -> str:
+    parts: list[str] = []
+    subject = bundle.get("subject")
+    if isinstance(subject, dict) and subject.get("id"):
+        subject_label = format_subject_address(subject)
+        parts.append(
+            f"Chủ thể y tế: {subject_label}. Luôn gọi đúng người này trong câu trả lời."
+        )
+
+    safety = bundle.get("safety_profile") or []
+    if safety:
+        parts.append("Hồ sơ an toàn:\n" + "\n".join(
+            f"- {_format_profile_fact(fact)}" for fact in safety[:8]
+        ))
+    relevant = bundle.get("relevant_facts") or []
+    if relevant:
+        parts.append("Dữ kiện liên quan:\n" + "\n".join(
+            f"- {_format_profile_fact(fact)}" for fact in relevant[:12]
+        ))
+
+    active_case = bundle.get("active_case")
+    if isinstance(active_case, dict) and active_case.get("symptoms"):
+        symptoms = [
+            symptom.get("name") or symptom.get("symptom_id")
+            for symptom in active_case["symptoms"]
+            if isinstance(symptom, dict)
+        ]
+        if symptoms:
+            parts.append("Triệu chứng trong ca hiện tại: " + ", ".join(symptoms))
+
+    reference_turns = bundle.get("reference_turns") or []
+    if reference_turns:
+        lines = [
+            f"- {turn.get('role', '')}: {turn.get('content', '')}"
+            for turn in reference_turns[-5:]
+            if isinstance(turn, dict) and turn.get("content")
+        ]
+        if lines:
+            parts.append("Lượt hội thoại tham chiếu:\n" + "\n".join(lines))
+    return "\n\n".join(parts)
+
+
+def _format_profile_fact(fact: object) -> str:
+    if not isinstance(fact, dict):
+        return str(fact)
+    entity = fact.get("entity_id") or fact.get("fact_type") or "dữ kiện"
+    attribute = fact.get("attribute") or "value"
+    value = fact.get("value")
+    if isinstance(value, dict):
+        value_text = ", ".join(f"{key}={item}" for key, item in value.items())
+    else:
+        value_text = str(value)
+    temporal = fact.get("temporal_status")
+    suffix = f" ({temporal})" if temporal else ""
+    return f"{entity}: {attribute}={value_text}{suffix}"
 
 
 def _extract_usage(response) -> dict | None:

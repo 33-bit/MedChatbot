@@ -8,6 +8,63 @@ from src.chat.llm.mini import call_mini
 log = logging.getLogger(__name__)
 TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 
+_DIRECT_REMINDER_PATTERNS = (
+    r"^\s*/remind(?:@\w+)?\s+add\b",
+    r"\b(?:đặt|tạo)\s+(?:lịch|nhắc(?:\s*nhở)?)\b",
+    r"\bnhắc(?:\s*nhở)?\s+(?:cho\s+)?(?:tôi|mình|em|anh|chị)\b",
+    r"\bremind\s+me\b",
+    r"\b(?:set|create|add)\s+(?:a\s+)?reminder\b",
+)
+
+
+def is_explicit_reminder_request(text: str) -> bool:
+    """Recognize direct reminder commands without relying on LLM output."""
+    return any(
+        re.search(pattern, text or "", flags=re.IGNORECASE)
+        for pattern in _DIRECT_REMINDER_PATTERNS
+    )
+
+
+def direct_reminder_fallback(text: str) -> dict:
+    """Build a safe partial request when reminder parsing fails."""
+    normalized = (text or "").lower()
+    medication = bool(re.search(r"\b(?:uống|thuốc|medicine|medication|pill)\b", normalized))
+    clinic = bool(re.search(r"\b(?:khám|bác\s*sĩ|clinic|doctor|appointment)\b", normalized))
+
+    if medication and not clinic:
+        medical_type = "medication"
+        reminder_text = "Uống thuốc"
+        missing_fields = ["schedule"]
+        prompt = "Bạn muốn được nhắc uống thuốc vào ngày và giờ nào?"
+    elif clinic and not medication:
+        medical_type = "clinic"
+        reminder_text = "Đi khám"
+        missing_fields = ["schedule"]
+        prompt = "Bạn muốn được nhắc đi khám vào ngày và giờ nào?"
+    else:
+        medical_type = None
+        reminder_text = None
+        missing_fields = ["medical_type", "reminder_text", "schedule"]
+        prompt = "Bạn muốn được nhắc việc gì, vào ngày và giờ nào?"
+
+    return {
+        "is_relevant_followup": True,
+        "is_canceled": False,
+        "is_direct_request": True,
+        "is_ordinary_mention": False,
+        "merged_fields": {
+            "medical_type": medical_type,
+            "reminder_text": reminder_text,
+            "schedule": None,
+            "end_date": None,
+        },
+        "missing_fields": missing_fields,
+        "is_complete": False,
+        "is_ambiguous": False,
+        "is_past": False,
+        "clarification_prompt": prompt,
+    }
+
 def check_reminder_prefilter(text: str) -> bool:
     text_lower = (text or "").lower()
     keywords = [

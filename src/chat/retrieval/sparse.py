@@ -14,12 +14,17 @@ from functools import lru_cache
 
 from rank_bm25 import BM25Okapi
 
-from src.chat.retrieval.types import Hit
+from src.chat.retrieval.types import Hit, RetrievalScope
 from src.config import OUTPUT_DIR
 
 CHUNKS_DIR = OUTPUT_DIR / "chunks"
 DISEASE_CHUNKS = CHUNKS_DIR / "disease_chunks.jsonl"
 DRUG_CHUNKS = CHUNKS_DIR / "drug_chunks.jsonl"
+HEALTH_INSURANCE_CHUNKS = CHUNKS_DIR / "health_insurance_chunks.jsonl"
+_CHUNKS_BY_SCOPE: dict[RetrievalScope, tuple] = {
+    "medical": (DISEASE_CHUNKS, DRUG_CHUNKS),
+    "health_insurance": (HEALTH_INSURANCE_CHUNKS,),
+}
 
 _TOKEN_RE = re.compile(r"[a-zA-Zàáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ]+", re.IGNORECASE)
 
@@ -28,9 +33,9 @@ def _tokenize(text: str) -> list[str]:
     return _TOKEN_RE.findall(text.lower())
 
 
-def _load_chunks() -> list[dict]:
+def _load_chunks(scope: RetrievalScope = "medical") -> list[dict]:
     chunks = []
-    for path in (DISEASE_CHUNKS, DRUG_CHUNKS):
+    for path in _CHUNKS_BY_SCOPE[scope]:
         if not path.exists():
             continue
         with open(path, encoding="utf-8") as f:
@@ -72,11 +77,15 @@ class BM25Index:
         return results
 
 
-@lru_cache(maxsize=1)
-def _index() -> BM25Index:
-    chunks = _load_chunks()
+@lru_cache(maxsize=2)
+def _index(scope: RetrievalScope = "medical") -> BM25Index:
+    chunks = _load_chunks(scope)
     return BM25Index(chunks)
 
 
-def bm25_search(query: str, top_k: int = 20) -> list[Hit]:
-    return _index().search(query, top_k)
+def bm25_search(
+    query: str,
+    top_k: int = 20,
+    scope: RetrievalScope = "medical",
+) -> list[Hit]:
+    return _index(scope).search(query, top_k)

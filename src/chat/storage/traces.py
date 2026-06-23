@@ -6,6 +6,7 @@ from threading import RLock
 from typing import Any
 
 from src.chat.clients import get_sqlite
+from src.chat.security.identity import is_session_key
 
 _SQLITE_LOCK = RLock()
 
@@ -59,8 +60,15 @@ def save_chat_trace(
     meta: dict[str, Any],
     created_at: float | None = None,
 ) -> dict[str, Any]:
+    if (
+        not is_session_key(session_id)
+        or not is_session_key(internal_session_id)
+        or session_id != internal_session_id
+    ):
+        raise ValueError("Trace persistence requires a pseudonymous session key")
     created = time.time() if created_at is None else created_at
-    meta_json = json.dumps(meta, ensure_ascii=False)
+    safe_meta = _remove_owner_identifiers(meta)
+    meta_json = json.dumps(safe_meta, ensure_ascii=False)
     with _SQLITE_LOCK:
         conn = get_sqlite()
         conn.execute(
@@ -87,8 +95,22 @@ def save_chat_trace(
         "question": question,
         "answer": answer,
         "created_at": created,
-        "meta": meta,
+        "meta": safe_meta,
     }
+
+
+def _remove_owner_identifiers(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _remove_owner_identifiers(item)
+            for key, item in value.items()
+            if key not in {"owner_id", "owner_key"}
+        }
+    if isinstance(value, list):
+        return [_remove_owner_identifiers(item) for item in value]
+    if isinstance(value, tuple):
+        return [_remove_owner_identifiers(item) for item in value]
+    return value
 
 
 def get_chat_trace(trace_id: str, *, internal_session_id: str) -> dict[str, Any] | None:

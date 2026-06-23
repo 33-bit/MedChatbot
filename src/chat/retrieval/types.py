@@ -8,6 +8,10 @@ from depending on each other).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
+
+
+RetrievalScope = Literal["medical", "health_insurance"]
 
 
 @dataclass
@@ -21,7 +25,7 @@ class Hit:
 
     text: str
     score: float
-    source_type: str        # "disease" | "drug"
+    source_type: str        # "disease" | "drug" | "health_insurance"
     source_name: str
     heading_path: str
     source_slug: str = ""

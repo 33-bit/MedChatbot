@@ -21,6 +21,7 @@ from src.config import (
     DRUGS_COLLECTION,
     E5_QUERY_PREFIX,
     EMBED_MODEL,
+    HEALTH_INSURANCE_COLLECTION,
     HYBRID_CANDIDATE_K,
     QDRANT_API_KEY,
     QDRANT_URL,
@@ -29,13 +30,16 @@ from sentence_transformers import SentenceTransformer
 
 from src.chat.errors import QdrantUnavailable
 from src.chat.retrieval.rerank import preload_reranker
-from src.chat.retrieval.types import Hit
+from src.chat.retrieval.types import Hit, RetrievalScope
 from src.chat.timing import log_stage_timing
 
 log = logging.getLogger(__name__)
-_COLLECTIONS = (DISEASES_COLLECTION, DRUGS_COLLECTION)
+_COLLECTIONS_BY_SCOPE: dict[RetrievalScope, tuple[str, ...]] = {
+    "medical": (DISEASES_COLLECTION, DRUGS_COLLECTION),
+    "health_insurance": (HEALTH_INSURANCE_COLLECTION,),
+}
 _COLLECTION_CACHE_TTL_SECONDS = 300
-_collection_cache: tuple[float, tuple[str, ...]] | None = None
+_collection_cache: dict[RetrievalScope, tuple[float, tuple[str, ...]]] | None = {}
 _collection_cache_lock = Lock()
 
 
@@ -57,18 +61,20 @@ def preload_models() -> None:
     preload_reranker()
 
 
-def _available_collections() -> tuple[str, ...]:
+def _available_collections(scope: RetrievalScope = "medical") -> tuple[str, ...]:
     """Cache Qdrant collection existence checks briefly to avoid per-turn HEAD calls."""
     global _collection_cache
 
+    configured = _COLLECTIONS_BY_SCOPE[scope]
     now = time.monotonic()
     with _collection_cache_lock:
-        if _collection_cache and now - _collection_cache[0] < _COLLECTION_CACHE_TTL_SECONDS:
-            return _collection_cache[1]
+        cached = (_collection_cache or {}).get(scope)
+        if cached and now - cached[0] < _COLLECTION_CACHE_TTL_SECONDS:
+            return cached[1]
 
     client = _qdrant()
     available: list[str] = []
-    for collection in _COLLECTIONS:
+    for collection in configured:
         stage_start = time.perf_counter()
         try:
             exists = client.collection_exists(collection)
@@ -87,14 +93,16 @@ def _available_collections() -> tuple[str, ...]:
         if exists:
             available.append(collection)
 
-    missing = [collection for collection in _COLLECTIONS if collection not in available]
+    missing = [collection for collection in configured if collection not in available]
     if missing:
         raise QdrantUnavailable(
             "Missing configured Qdrant collections: " + ", ".join(missing)
         )
     collections = tuple(available)
     with _collection_cache_lock:
-        _collection_cache = (now, collections)
+        if _collection_cache is None:
+            _collection_cache = {}
+        _collection_cache[scope] = (now, collections)
     return collections
 
 
@@ -118,15 +126,19 @@ def _to_hit(point) -> Hit:
     )
 
 
-def dense_search(query: str, top_k: int = HYBRID_CANDIDATE_K) -> list[Hit]:
-    """Vector search both collections, merge and sort by score desc."""
+def dense_search(
+    query: str,
+    top_k: int = HYBRID_CANDIDATE_K,
+    scope: RetrievalScope = "medical",
+) -> list[Hit]:
+    """Vector search collections for the requested retrieval scope."""
     stage_start = time.perf_counter()
     qvec = _embed(query)
     log_stage_timing(log, "retrieval", "embed", stage_start)
 
     client = _qdrant()
     results: list[Hit] = []
-    for collection in _available_collections():
+    for collection in _available_collections(scope):
         stage_start = time.perf_counter()
         try:
             response = client.query_points(

@@ -8,6 +8,7 @@ Cách dùng:
     python -m src.rag.build_qdrant --reset           # xóa collection cũ
     python -m src.rag.build_qdrant --drugs           # chỉ index thuốc OTC
     python -m src.rag.build_qdrant --diseases        # chỉ index bệnh
+    python -m src.rag.build_qdrant --health-insurance # chỉ index Luật BHYT
 
 Yêu cầu:
     pip install qdrant-client sentence-transformers
@@ -30,6 +31,7 @@ from src.config import (
     DISEASES_COLLECTION,
     DRUGS_COLLECTION,
     EMBED_MODEL,
+    HEALTH_INSURANCE_COLLECTION,
     OUTPUT_DIR,
     QDRANT_API_KEY,
     QDRANT_URL,
@@ -41,6 +43,7 @@ from sentence_transformers import SentenceTransformer
 CHUNKS_DIR = OUTPUT_DIR / "chunks"
 DISEASE_CHUNKS = CHUNKS_DIR / "disease_chunks.jsonl"
 DRUG_CHUNKS = CHUNKS_DIR / "drug_chunks.jsonl"
+HEALTH_INSURANCE_CHUNKS = CHUNKS_DIR / "health_insurance_chunks.jsonl"
 
 EMBED_BATCH = 64
 E5_PASSAGE_PREFIX = "passage: "
@@ -122,10 +125,13 @@ def main() -> None:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--drugs", action="store_true")
     mode.add_argument("--diseases", action="store_true")
+    mode.add_argument("--health-insurance", action="store_true")
     args = parser.parse_args()
 
-    do_diseases = args.diseases or (not args.drugs and not args.diseases)
-    do_drugs = args.drugs or (not args.drugs and not args.diseases)
+    explicit_mode = args.drugs or args.diseases or args.health_insurance
+    do_diseases = args.diseases or not explicit_mode
+    do_drugs = args.drugs or not explicit_mode
+    do_health_insurance = args.health_insurance
 
     print(f"Kết nối Qdrant Cloud tại {QDRANT_URL} ...")
     qclient = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY or None)
@@ -160,6 +166,39 @@ def main() -> None:
         upsert_chunks(qclient, DRUGS_COLLECTION, drug_chunks, drug_embeds)
         info = qclient.get_collection(DRUGS_COLLECTION)
         print(f"Collection '{DRUGS_COLLECTION}': {info.points_count} points\n")
+
+    if do_health_insurance:
+        if not HEALTH_INSURANCE_CHUNKS.exists():
+            raise SystemExit(
+                f"Không tìm thấy {HEALTH_INSURANCE_CHUNKS}. "
+                "Chạy `python -m src.rag.chunker --source health_insurance` trước."
+            )
+        health_insurance_chunks = load_chunks(HEALTH_INSURANCE_CHUNKS)
+        print(f"[Health Insurance] {len(health_insurance_chunks)} chunks")
+        print("Đang embed ...")
+        health_insurance_embeds = embed_chunks(
+            st_model,
+            health_insurance_chunks,
+            args.model,
+        )
+
+        create_collection(
+            qclient,
+            HEALTH_INSURANCE_COLLECTION,
+            dim,
+            args.reset,
+        )
+        upsert_chunks(
+            qclient,
+            HEALTH_INSURANCE_COLLECTION,
+            health_insurance_chunks,
+            health_insurance_embeds,
+        )
+        info = qclient.get_collection(HEALTH_INSURANCE_COLLECTION)
+        print(
+            f"Collection '{HEALTH_INSURANCE_COLLECTION}': "
+            f"{info.points_count} points\n"
+        )
 
     print("Xong.")
 

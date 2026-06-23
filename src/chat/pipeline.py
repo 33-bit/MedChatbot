@@ -6,7 +6,7 @@ Orchestration per user turn.
 Phases (short-circuit on the first failure):
   A. Input validation      — rate limit, guardrail, LLM quota
   B. State load            — load session from Redis, classify turn, extract entities
-  C. Route                 — greeting / clarification_answer / diagnostic / informational
+  C. Route                 — greeting / emergency / clarification / diagnostic / informational
   D. Persist               — save session, profile, log consultation
 """
 
@@ -38,10 +38,19 @@ from src.chat.diagnosis.differential import (
 )
 from src.chat.diagnosis.entities import normalize_entities
 from src.chat.diagnosis.flow import build_general_triage_prompt, direct_diagnostic_prompt
+from src.chat.guards.drug_policy import OTC_ONLY_REPLY, evaluate_drug_policy
 from src.chat.guards.guardrail import VERDICT_REPLIES, regex_check
 from src.chat.guards.quota import check_both as check_llm_quota
 from src.chat.llm.analyzer import analyze_turn
 from src.chat.llm.generator import generate
+from src.chat.context.domain import ClinicalCase, ConversationContextBundle
+from src.chat.context.resolver import format_subject_address
+from src.chat.profile.runtime import (
+    ConversationContextRuntime,
+    persist_context_runtime,
+    prepare_context_runtime,
+)
+from src.chat.security.identity import is_owner_key
 from src.chat.mode_policy import (
     ModeDecision,
     apply_mode_policy,
@@ -49,9 +58,10 @@ from src.chat.mode_policy import (
     normalize_mode,
 )
 from src.chat.preflight import RATE_LIMIT_MSG, preflight
-from src.chat.replies import ChatReply, TECHNICAL_ERROR_REPLY
+from src.chat.replies import ChatReply, TECHNICAL_ERROR_REPLY, emergency_reply
 from src.chat.retrieval import (
     Hit,
+    RetrievalScope,
     format_kg_context,
     hybrid_search,
     hybrid_search_with_debug,
@@ -65,8 +75,9 @@ from src.chat.storage.session import (
     save_profile,
     save_session,
 )
+from src.chat.context.context_store import load_conversation_context
 from src.chat.timing import elapsed_ms, log_trace_timing
-from src.config import RERANK_TOP_K
+from src.config import CONVERSATION_CONTEXT_ENABLED, RERANK_TOP_K
 
 GREETING_REPLY = ("Xin chào! Tôi là trợ lý y tế. Bạn có thể mô tả triệu chứng "
                   "hoặc hỏi về bệnh/thuốc cụ thể.")
@@ -439,6 +450,17 @@ def _append_detail_answer(existing: Any, answer: str) -> Any:
     return [existing, answer]
 
 
+def _reset_diagnostic_workflow(session: PatientSession) -> None:
+    """Fail closed when a subject switch cannot use subject-aware state."""
+    session.symptoms = []
+    session.medications = []
+    session.candidate_diseases = []
+    session.answered_questions = []
+    session.clarification_queue = []
+    session.clarification_plan_started = False
+    session.clarification_parse_failures = 0
+
+
 def _is_pending_clarification_choice(session: PatientSession, text: str) -> bool:
     if not session.answered_questions:
         return False
@@ -562,9 +584,16 @@ def _load_kg_context(question: str, trace_id: str) -> str:
     return kg_text
 
 
-def _load_hybrid_hits(question: str, trace_id: str) -> list[Hit]:
+def _load_hybrid_hits(
+    question: str,
+    trace_id: str,
+    scope: RetrievalScope = "medical",
+) -> list[Hit]:
     stage_start = time.perf_counter()
-    hits = hybrid_search(question, top_k=RERANK_TOP_K)
+    if scope == "medical":
+        hits = hybrid_search(question, top_k=RERANK_TOP_K)
+    else:
+        hits = hybrid_search(question, top_k=RERANK_TOP_K, scope=scope)
     _log_timing(trace_id, "hybrid_search", stage_start, hits=len(hits))
     return hits
 
@@ -586,17 +615,26 @@ def _load_kg_context_with_debug(
 def _load_hybrid_hits_with_debug(
     question: str,
     trace_id: str,
+    scope: RetrievalScope = "medical",
 ) -> tuple[list[Hit], dict[str, Any]]:
     stage_start = time.perf_counter()
 
     def _on_stage(stage, status, ms):
         _emit_node_event(stage, status, ms)
 
-    hits, retrieval_debug = hybrid_search_with_debug(
-        question,
-        top_k=RERANK_TOP_K,
-        on_stage=_on_stage,
-    )
+    if scope == "medical":
+        hits, retrieval_debug = hybrid_search_with_debug(
+            question,
+            top_k=RERANK_TOP_K,
+            on_stage=_on_stage,
+        )
+    else:
+        hits, retrieval_debug = hybrid_search_with_debug(
+            question,
+            top_k=RERANK_TOP_K,
+            scope=scope,
+            on_stage=_on_stage,
+        )
     _log_timing(trace_id, "hybrid_search", stage_start, hits=len(hits))
     return hits, retrieval_debug
 
@@ -646,7 +684,9 @@ def _handle_diagnostic(
     if not force_answer and not session.answered_questions:
         session.answered_questions.append(GENERAL_TRIAGE_MARKER)
         _log_timing(trace_id, "diagnostic_general_triage", time.perf_counter())
-        return build_general_triage_prompt(session)
+        bundle = getattr(_META_LOCAL, "context_bundle", None)
+        subject = bundle.subject if isinstance(bundle, ConversationContextBundle) else None
+        return build_general_triage_prompt(session, subject)
 
     stage_start = time.perf_counter()
     if not force_answer:
@@ -892,7 +932,32 @@ def _handle_informational(
     _record_hits(hits)
     _record_latency("retrieval", elapsed_ms(stage_start))
 
-    patient_dict = asdict(session) if use_patient_context else None
+    patient_dict = None
+    profile_text = ""
+    if use_patient_context:
+        if CONVERSATION_CONTEXT_ENABLED:
+            bundle = getattr(_META_LOCAL, "context_bundle", None)
+            if isinstance(bundle, ConversationContextBundle) and bundle.excluded_reason is None:
+                if session.symptoms and bundle.subject:
+                    existing_case = bundle.active_case
+                    bundle.active_case = ClinicalCase(
+                        case_id=(existing_case.case_id if existing_case else "current_turn"),
+                        subject_id=str(bundle.subject["id"]),
+                        symptoms=list(session.symptoms),
+                        candidate_diseases=list(session.candidate_diseases),
+                        answered_questions=list(session.answered_questions),
+                        clarification_queue=list(session.clarification_queue),
+                        created_at=(existing_case.created_at if existing_case else time.time()),
+                        updated_at=time.time(),
+                    )
+                patient_dict = bundle.to_prompt_dict()
+                runtime = getattr(_META_LOCAL, "context_runtime", None)
+                if runtime is not None and getattr(runtime, "profile_text", ""):
+                    profile_text = runtime.profile_text
+                    if isinstance(patient_dict, dict):
+                        patient_dict["medical_profile_text"] = profile_text
+        else:
+            patient_dict = asdict(session)
     stage_start = time.perf_counter()
     try:
         if _meta() is not None:
@@ -912,6 +977,55 @@ def _handle_informational(
     return reply
 
 
+def _handle_health_insurance(question: str, trace_id: str) -> str:
+    stage_start = time.perf_counter()
+    active_meta = _meta()
+    collect_debug = bool(
+        active_meta is not None and active_meta.get("_collect_graph")
+    )
+    if collect_debug:
+        hits_result, hits_elapsed = _call_with_elapsed(
+            _load_hybrid_hits_with_debug,
+            question,
+            trace_id,
+            "health_insurance",
+        )
+        hits, retrieval_debug = hits_result
+        if active_meta is not None:
+            active_meta["retrieval_debug"] = retrieval_debug
+    else:
+        hits, hits_elapsed = _call_with_elapsed(
+            _load_hybrid_hits,
+            question,
+            trace_id,
+            "health_insurance",
+        )
+
+    _record_timing("hybrid_search", hits_elapsed, {"hits": len(hits)})
+    _record_hits(hits)
+    _record_latency("retrieval", elapsed_ms(stage_start))
+
+    stage_start = time.perf_counter()
+    try:
+        if active_meta is not None:
+            reply, gen_meta = generate(question, hits, return_meta=True)
+            _record_usage(
+                "generator",
+                gen_meta.get("usage"),
+                model=gen_meta.get("model"),
+            )
+            active_meta["doctor_offer"] = False
+            active_meta["doctor_specialty"] = None
+        else:
+            reply = generate(question, hits)
+    except Exception:
+        _log_failed_timing(trace_id, "generate", stage_start)
+        raise
+    _log_timing(trace_id, "generate", stage_start, chars=len(reply))
+    _record_latency("generator", elapsed_ms(stage_start))
+    return reply
+
+
 def _route(
     label: str,
     session: PatientSession,
@@ -920,7 +1034,12 @@ def _route(
     force_answer: bool,
     trace_id: str,
     use_patient_context_override: bool | None = None,
+    emergency_subject: str = "bạn",
 ) -> str:
+    if label == "emergency":
+        return emergency_reply(emergency_subject)
+    if label == "health_insurance":
+        return _handle_health_insurance(rewritten, trace_id)
     if label == "clarification_answer":
         return _handle_clarification_answer(session, question, trace_id, force_answer)
     if label == "diagnostic":
@@ -948,16 +1067,31 @@ def _persist_final_turn(
     question: str,
     reply: str,
     trace_id: str,
+    context_runtime: ConversationContextRuntime | None = None,
+    analysis: dict | None = None,
 ) -> None:
     stage_start = time.perf_counter()
     try:
         save_session(session)
-        save_profile(session)
         log_consultation(session_id, question, reply)
     except Exception:
-        log.exception("Pipeline persist failed trace=%s session=%s", trace_id, session_id)
+        log.exception("Pipeline persist failed trace=%s", trace_id)
         _log_timing(trace_id, "persist", stage_start, failed=True)
         return
+    if context_runtime is not None:
+        try:
+            persist_context_runtime(
+                context_runtime,
+                session,
+                question=question,
+                reply=reply,
+                analysis=analysis or {"analysis_succeeded": False},
+            )
+        except Exception:
+            log.exception(
+                "Conversation context persistence failed trace=%s",
+                trace_id,
+            )
     _log_timing(trace_id, "persist", stage_start)
 
 
@@ -1000,12 +1134,15 @@ def _answer_inner(
     session_id: str,
     trace_id: str,
     request_start: float,
+    owner_id: str | None = None,
+    previous_owner_ids: tuple[str, ...] = (),
     mode: str = "auto",
 ) -> str:
     question = (question or "").strip()
     if not question:
         return "Bạn hãy đặt câu hỏi cụ thể nhé."
     mode = normalize_mode(mode)
+    _META_LOCAL.context_bundle = None
     _emit_node_event("input", "ok", 0.0)
 
     stage_start = time.perf_counter()
@@ -1015,6 +1152,10 @@ def _answer_inner(
         _log_failed_timing(trace_id, "load_session", stage_start)
         raise
     _log_timing(trace_id, "load_session", stage_start)
+
+    preloaded_context = None
+    if CONVERSATION_CONTEXT_ENABLED:
+        preloaded_context = load_conversation_context(session_id, owner_id)
 
     is_clarification_choice = _is_pending_clarification_choice(session, question)
     regex_check_for_turn = (lambda text: None) if is_clarification_choice else regex_check
@@ -1063,13 +1204,30 @@ def _answer_inner(
 
     stage_start = time.perf_counter()
     try:
-        if is_clarification_choice:
+        if is_clarification_choice and not CONVERSATION_CONTEXT_ENABLED:
             analysis = _clarification_choice_analysis(question)
         else:
             analysis = analyze_turn(
                 question,
                 last_bot_message=_last_bot_message(session),
                 history=session.conversation,
+                session_context=(
+                    {
+                        "active_subject_id": preloaded_context[0].active_subject_id,
+                        "active_entity_refs": [
+                            reference.__dict__
+                            for reference in preloaded_context[0].active_entity_refs
+                        ],
+                        "active_case_id": preloaded_context[0].active_case_id,
+                        "pending_clarification": (
+                            preloaded_context[0].pending_clarification.__dict__
+                            if preloaded_context[0].pending_clarification
+                            else None
+                        ),
+                    }
+                    if preloaded_context is not None
+                    else None
+                ),
             )
     except Exception:
         _log_failed_timing(trace_id, "turn_analysis", stage_start)
@@ -1088,6 +1246,9 @@ def _answer_inner(
     turn = analysis["turn"]
     label = turn["label"]
     intent = normalize_intent(turn.get("intent"), label)
+    context = analysis.get("context") if isinstance(analysis.get("context"), dict) else {}
+    if not CONVERSATION_CONTEXT_ENABLED and context.get("relation") == "switch_subject":
+        _reset_diagnostic_workflow(session)
     direct_answer_for_log = (
         turn["direct_answer_requested"] if guard["verdict"] == "allow" else False
     )
@@ -1110,10 +1271,108 @@ def _answer_inner(
         _log_timing(trace_id, "total", request_start, outcome="guardrail")
         return reply
 
+    stage_start = time.perf_counter()
+    drug_policy = evaluate_drug_policy(question, analysis)
+    _log_timing(
+        trace_id,
+        "drug_policy",
+        stage_start,
+        is_drug_question=drug_policy.is_drug_question,
+        allowed=drug_policy.allowed,
+        reason=drug_policy.reason,
+    )
+    if meta is not None:
+        meta["drug_policy"] = {
+            "is_drug_question": drug_policy.is_drug_question,
+            "allowed": drug_policy.allowed,
+            "reason": drug_policy.reason,
+            "matched_otc_names": list(drug_policy.matched_otc_names),
+        }
+    if drug_policy.is_drug_question and not drug_policy.allowed:
+        session.add_message("user", question)
+        session.add_message("assistant", OTC_ONLY_REPLY)
+        _persist_final_turn(
+            session,
+            session_id,
+            question,
+            OTC_ONLY_REPLY,
+            trace_id,
+            analysis=analysis,
+        )
+        _log_timing(trace_id, "total", request_start, outcome="drug_policy")
+        return OTC_ONLY_REPLY
+
+    context_runtime = None
+    if CONVERSATION_CONTEXT_ENABLED and intent != "emergency":
+        try:
+            context_runtime = prepare_context_runtime(
+                session_id,
+                session,
+                analysis,
+                owner_key=owner_id,
+                profile_persistence_allowed=is_owner_key(owner_id),
+                previous_owner_keys=previous_owner_ids,
+                preloaded=preloaded_context,
+            )
+            _META_LOCAL.context_bundle = context_runtime.bundle
+            _META_LOCAL.context_runtime = context_runtime
+            if meta is not None:
+                meta["context_bundle"] = context_runtime.bundle.to_prompt_dict()
+                meta["profile_selection_reasons"] = context_runtime.bundle.selection_reasons
+        except Exception:
+            log.exception(
+                "Conversation context preparation failed trace=%s",
+                trace_id,
+            )
+            _META_LOCAL.context_bundle = ConversationContextBundle(
+                subject=None,
+                safety_profile=[],
+                relevant_facts=[],
+                active_case=None,
+                reference_turns=[],
+                excluded_reason="storage_failure",
+            )
+
     direct_answer_requested = turn["direct_answer_requested"]
     session.add_message("user", question)
 
-    if label == "greeting_other":
+    if context_runtime is not None and context_runtime.resolution.ambiguous:
+        clarification = context_runtime.resolution.clarification
+        session.add_message("assistant", clarification)
+        _persist_final_turn(
+            session,
+            session_id,
+            question,
+            clarification,
+            trace_id,
+            context_runtime=context_runtime,
+            analysis=analysis,
+        )
+        _log_timing(trace_id, "total", request_start, outcome="subject_clarification")
+        return clarification
+
+    if (
+        context_runtime is not None
+        and context_runtime.bundle.excluded_reason == "conflicting_facts"
+    ):
+        if analysis.get("profile_candidates"):
+            context_runtime.state.pending_clarification = None
+        else:
+            clarification = context_runtime.state.pending_clarification.question
+            session.add_message("assistant", clarification)
+            _persist_final_turn(
+                session,
+                session_id,
+                question,
+                clarification,
+                trace_id,
+                context_runtime=context_runtime,
+                analysis=analysis,
+            )
+            _log_timing(trace_id, "total", request_start, outcome="profile_clarification")
+            return clarification
+
+    if label == "greeting_other" and intent != "emergency":
         session.add_message("assistant", GREETING_REPLY)
         stage_start = time.perf_counter()
         try:
@@ -1125,7 +1384,7 @@ def _answer_inner(
         _log_timing(trace_id, "total", request_start, outcome="greeting")
         return GREETING_REPLY
 
-    if label != "clarification_answer":
+    if label != "clarification_answer" and intent != "emergency":
         rewrite = analysis["rewrite"]
         rewritten = rewrite["rewritten"]
         clarification = rewrite["clarification"] if not rewrite["confident"] else ""
@@ -1140,8 +1399,10 @@ def _answer_inner(
             _log_timing(trace_id, "persist", stage_start)
             _log_timing(trace_id, "total", request_start, outcome="clarify_question")
             return clarification
-    else:
+    elif label == "clarification_answer":
         rewritten = question
+    else:
+        rewritten = analysis["rewrite"]["rewritten"]
 
     active_flow = bool(session.answered_questions or session.clarification_queue)
     route_stage_start = time.perf_counter()
@@ -1168,7 +1429,15 @@ def _answer_inner(
         reply = decision.reply or ""
         session.add_message("assistant", reply)
         _log_timing(trace_id, "route", route_stage_start, label=route_label)
-        _persist_final_turn(session, session_id, question, reply, trace_id)
+        _persist_final_turn(
+            session,
+            session_id,
+            question,
+            reply,
+            trace_id,
+            context_runtime=context_runtime,
+            analysis=analysis,
+        )
         _log_timing(
             trace_id,
             "total",
@@ -1178,7 +1447,10 @@ def _answer_inner(
         return reply
 
     _emit_node_event("route", "ok", None)
-    if label in ("diagnostic", "informational", "clarification_answer"):
+    if (
+        route_label != "emergency"
+        and label in ("diagnostic", "informational", "clarification_answer")
+    ):
         stage_start = time.perf_counter()
         try:
             _ingest_entities(analysis["entities"], session)
@@ -1200,6 +1472,9 @@ def _answer_inner(
         if decision.force_answer is not None
         else direct_answer_requested
     )
+    use_patient_context_override = decision.use_patient_context
+    if CONVERSATION_CONTEXT_ENABLED and context_runtime is not None:
+        use_patient_context_override = context_runtime.bundle.excluded_reason is None
     try:
         reply = _route(
             route_label,
@@ -1208,10 +1483,13 @@ def _answer_inner(
             rewritten,
             force_answer,
             trace_id,
-            use_patient_context_override=decision.use_patient_context,
+            use_patient_context_override=use_patient_context_override,
+            emergency_subject=format_subject_address(
+                (analysis.get("context") or {}).get("subject")
+            ),
         )
     except Exception:
-        log.exception("Pipeline route failed trace=%s session=%s", trace_id, session_id)
+        log.exception("Pipeline route failed trace=%s", trace_id)
         meta = _meta()
         if meta is not None and meta.get("_graph_error_stage"):
             _log_timing(trace_id, "route", route_stage_start, label=route_label)
@@ -1220,24 +1498,51 @@ def _answer_inner(
         if meta is not None:
             meta["error"] = "technical_error"
         session.add_message("assistant", TECHNICAL_ERROR_REPLY)
-        _persist_final_turn(session, session_id, question, TECHNICAL_ERROR_REPLY, trace_id)
+        _persist_final_turn(
+            session,
+            session_id,
+            question,
+            TECHNICAL_ERROR_REPLY,
+            trace_id,
+            context_runtime=context_runtime,
+        )
         _log_timing(trace_id, "total", request_start, outcome="technical_error")
         return TECHNICAL_ERROR_REPLY
     _log_timing(trace_id, "route", route_stage_start, label=route_label)
 
     session.add_message("assistant", reply)
-    _persist_final_turn(session, session_id, question, reply, trace_id)
+    _persist_final_turn(
+        session,
+        session_id,
+        question,
+        reply,
+        trace_id,
+        context_runtime=context_runtime,
+        analysis=analysis,
+    )
     _log_timing(trace_id, "total", request_start, outcome=route_label)
     return reply
 
 
-def answer(question: str, session_id: str = "default", mode: str = "auto") -> str:
+def answer(
+    question: str,
+    session_id: str = "default",
+    owner_id: str | None = None,
+    mode: str = "auto",
+) -> str:
     trace_id = uuid.uuid4().hex[:8]
     request_start = time.perf_counter()
     try:
-        return _answer_inner(question, session_id, trace_id, request_start, mode=mode)
+        return _answer_inner(
+            question,
+            session_id,
+            trace_id,
+            request_start,
+            owner_id=owner_id,
+            mode=mode,
+        )
     except Exception:
-        log.exception("Pipeline failed trace=%s session=%s", trace_id, session_id)
+        log.exception("Pipeline failed trace=%s", trace_id)
         _log_timing(trace_id, "total", request_start, outcome="technical_error")
         return TECHNICAL_ERROR_REPLY
 
@@ -1245,16 +1550,20 @@ def answer(question: str, session_id: str = "default", mode: str = "auto") -> st
 def answer_with_choices(
     question: str,
     session_id: str = "default",
+    owner_id: str | None = None,
     mode: str = "auto",
 ) -> ChatReply:
     meta: dict[str, Any] = {}
     previous_meta = _meta()
     _META_LOCAL.current = meta
     try:
+        answer_kwargs = {"session_id": session_id}
+        if owner_id:
+            answer_kwargs["owner_id"] = owner_id
         if normalize_mode(mode) == "auto":
-            reply = answer(question, session_id=session_id)
+            reply = answer(question, **answer_kwargs)
         else:
-            reply = answer(question, session_id=session_id, mode=mode)
+            reply = answer(question, mode=mode, **answer_kwargs)
     finally:
         _META_LOCAL.current = previous_meta
     choices = suggested_choices(reply)
@@ -1525,6 +1834,7 @@ def _build_graph_nodes(
 def answer_with_meta(
     question: str,
     session_id: str = "default",
+    owner_id: str | None = None,
     mode: str = "auto",
 ) -> tuple[str, dict[str, Any]]:
     """Like `answer`, but also returns a meta dict capturing usage, retrieved
@@ -1537,9 +1847,16 @@ def answer_with_meta(
     _META_LOCAL.current = meta
     try:
         try:
-            reply = _answer_inner(question, session_id, trace_id, request_start, mode=mode)
+            reply = _answer_inner(
+                question,
+                session_id,
+                trace_id,
+                request_start,
+                owner_id=owner_id,
+                mode=mode,
+            )
         except Exception:
-            log.exception("Pipeline failed trace=%s session=%s", trace_id, session_id)
+            log.exception("Pipeline failed trace=%s", trace_id)
             _log_timing(trace_id, "total", request_start, outcome="technical_error")
             reply = TECHNICAL_ERROR_REPLY
             meta["error"] = "technical_error"

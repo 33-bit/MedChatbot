@@ -20,13 +20,13 @@ def load_session(session_id: str) -> PatientSession:
     try:
         raw = get_redis().get(_session_key(session_id))
     except (RuntimeError, redis.RedisError) as e:
-        log.warning("Redis load failed for %s: %s", session_id, e)
+        log.warning("Redis load failed: %s", e)
         return PatientSession(session_id=session_id)
     if raw:
         try:
             return PatientSession.from_json(raw)
         except (json.JSONDecodeError, TypeError) as e:
-            log.warning("Session JSON parse failed for %s: %s", session_id, e)
+            log.warning("Session JSON parse failed: %s", e)
     return PatientSession(session_id=session_id)
 
 
@@ -38,11 +38,17 @@ def save_session(session: PatientSession) -> None:
             session.to_json(),
         )
     except (RuntimeError, redis.RedisError) as e:
-        log.warning("Redis save failed for %s: %s", session.session_id, e)
+        log.warning("Redis save failed: %s", e)
 
 
 def clear_session(session_id: str) -> None:
     try:
-        get_redis().delete(_session_key(session_id))
+        client = get_redis()
+        client.delete(_session_key(session_id))
+        # Best-effort cleanup of legacy conversation-context keys; they
+        # are unreachable from the new namespace and would otherwise just
+        # expire under their existing TTLs.
+        for legacy_suffix in (session_id, f"{session_id}:cases", f"{session_id}:state"):
+            client.delete(f"conversation_context:v1:{legacy_suffix}")
     except (RuntimeError, redis.RedisError) as e:
-        log.warning("Redis delete failed for %s: %s", session_id, e)
+        log.warning("Redis delete failed: %s", e)

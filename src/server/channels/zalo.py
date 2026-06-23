@@ -24,6 +24,7 @@ import httpx
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
 from src.config import ZALO_BOT_TOKEN, ZALO_WEBHOOK_SECRET
+from src.chat.security.identity import derive_request_identity
 from src.server.channels.common import answer_and_send
 
 logger = logging.getLogger(__name__)
@@ -76,14 +77,15 @@ async def send_text(chat_id: str, text: str, choices: list[str] | tuple[str, ...
                 payload["reply_markup"] = _choice_keyboard(choices)
             r = await client.post(_api_url("sendMessage"), json=payload)
             if r.status_code >= 400 and payload.get("reply_markup"):
-                logger.info("Zalo choices rejected; retrying without reply_markup → %s %s",
-                            r.status_code, r.text[:200])
+                logger.info(
+                    "Zalo choices rejected; retrying without reply_markup status=%s",
+                    r.status_code,
+                )
                 payload.pop("reply_markup", None)
                 r = await client.post(_api_url("sendMessage"), json=payload)
             logger.info(
-                "Zalo send → %s %s chunk=%d/%d chars=%d",
+                "Zalo send status=%s chunk=%d/%d chars=%d",
                 r.status_code,
-                r.text[:200],
                 idx,
                 len(chunks),
                 len(chunk),
@@ -105,12 +107,16 @@ async def _handle_event(body: dict, background_tasks: BackgroundTasks) -> None:
     text = message.get("text", "")
     if not chat_id or not text:
         return
+    # The current Zalo Bot payload exposes chat identity but no independently
+    # verified sender identity. Keep the medical profile disabled for this channel.
+    identity = derive_request_identity("zalo", None, chat_id)
     background_tasks.add_task(
         answer_and_send,
         text,
         chat_id,
-        f"zalo:{chat_id}",
+        identity.session_key,
         send_text,
+        owner_id=None,
         logger=logger,
         channel="Zalo",
     )
