@@ -38,11 +38,20 @@ from src.chat.diagnosis.differential import (
 )
 from src.chat.diagnosis.entities import normalize_entities
 from src.chat.diagnosis.flow import build_general_triage_prompt, direct_diagnostic_prompt
+from src.chat.evidence_plan import (
+    fallback_domain_for_intent,
+    normalize_evidence_plan,
+    plan_answer_domain,
+    plan_required_facts,
+    plan_targets,
+    should_run_evidence_planner,
+)
 from src.chat.guards.drug_policy import OTC_ONLY_REPLY, evaluate_drug_policy
 from src.chat.guards.guardrail import VERDICT_REPLIES, regex_check
 from src.chat.health_insurance import is_health_insurance_query
 from src.chat.guards.quota import check_both as check_llm_quota
 from src.chat.llm.analyzer import analyze_turn
+from src.chat.llm.evidence_planner import plan_evidence
 from src.chat.llm.generator import AnswerDomain, generate
 from src.chat.context.domain import ClinicalCase, ConversationContextBundle
 from src.chat.context.resolver import format_subject_address
@@ -498,6 +507,62 @@ def _infer_answer_domain(
     return "symptom_or_care"
 
 
+def _prepare_evidence_plan(
+    question: str,
+    analysis: dict[str, Any],
+    label: str,
+    intent: str,
+    trace_id: str,
+) -> dict[str, Any]:
+    fallback_domain = fallback_domain_for_intent(intent, label)
+    raw_plan = analysis.get("evidence_plan")
+    analysis_succeeded = analysis.get("analysis_succeeded")
+    plan_is_active = isinstance(raw_plan, dict) and analysis_succeeded is not False
+    if analysis_succeeded is False:
+        raw_plan = None
+    plan = normalize_evidence_plan(raw_plan, fallback_domain=fallback_domain)
+    plan_lacks_scope = not plan_targets(plan) and not plan_required_facts(plan)
+    planner_needed = should_run_evidence_planner(plan) or (
+        fallback_domain in {"disease_info", "drug_info"}
+        and (
+            analysis_succeeded is False
+            or (plan_is_active and plan_lacks_scope)
+        )
+    )
+    planner_used = False
+    if planner_needed:
+        stage_start = time.perf_counter()
+        try:
+            plan = plan_evidence(
+                question,
+                analysis=analysis,
+                fallback_domain=fallback_domain,
+            )
+            planner_used = True
+        except Exception:
+            log.exception("Evidence planner fallback failed trace=%s", trace_id)
+            plan = normalize_evidence_plan(
+                raw_plan,
+                fallback_domain=fallback_domain,
+            )
+        _log_timing(
+            trace_id,
+            "evidence_plan",
+            stage_start,
+            fallback=True,
+            domain=plan.get("domain"),
+            source_type=plan.get("source_type"),
+            answer_slot=plan.get("answer_slot"),
+        )
+    if planner_used and (plan_targets(plan) or plan_required_facts(plan)):
+        plan_is_active = True
+    analysis["evidence_plan"] = plan
+    meta = _meta()
+    if meta is not None:
+        meta["evidence_plan"] = plan
+    return plan if plan_is_active else None
+
+
 def _question_variants(value: Any) -> list[str]:
     if not value:
         return []
@@ -758,12 +823,28 @@ def _load_hybrid_hits(
     question: str,
     trace_id: str,
     scope: RetrievalScope = "medical",
+    evidence_plan: dict[str, Any] | None = None,
 ) -> list[Hit]:
     stage_start = time.perf_counter()
     if scope == "medical":
-        hits = hybrid_search(question, top_k=RERANK_TOP_K)
+        if evidence_plan is None:
+            hits = hybrid_search(question, top_k=RERANK_TOP_K)
+        else:
+            hits = hybrid_search(
+                question,
+                top_k=RERANK_TOP_K,
+                evidence_plan=evidence_plan,
+            )
     else:
-        hits = hybrid_search(question, top_k=RERANK_TOP_K, scope=scope)
+        if evidence_plan is None:
+            hits = hybrid_search(question, top_k=RERANK_TOP_K, scope=scope)
+        else:
+            hits = hybrid_search(
+                question,
+                top_k=RERANK_TOP_K,
+                scope=scope,
+                evidence_plan=evidence_plan,
+            )
     _log_timing(trace_id, "hybrid_search", stage_start, hits=len(hits))
     return hits
 
@@ -786,6 +867,7 @@ def _load_hybrid_hits_with_debug(
     question: str,
     trace_id: str,
     scope: RetrievalScope = "medical",
+    evidence_plan: dict[str, Any] | None = None,
 ) -> tuple[list[Hit], dict[str, Any]]:
     stage_start = time.perf_counter()
 
@@ -793,18 +875,35 @@ def _load_hybrid_hits_with_debug(
         _emit_node_event(stage, status, ms)
 
     if scope == "medical":
-        hits, retrieval_debug = hybrid_search_with_debug(
-            question,
-            top_k=RERANK_TOP_K,
-            on_stage=_on_stage,
-        )
+        if evidence_plan is None:
+            hits, retrieval_debug = hybrid_search_with_debug(
+                question,
+                top_k=RERANK_TOP_K,
+                on_stage=_on_stage,
+            )
+        else:
+            hits, retrieval_debug = hybrid_search_with_debug(
+                question,
+                top_k=RERANK_TOP_K,
+                on_stage=_on_stage,
+                evidence_plan=evidence_plan,
+            )
     else:
-        hits, retrieval_debug = hybrid_search_with_debug(
-            question,
-            top_k=RERANK_TOP_K,
-            scope=scope,
-            on_stage=_on_stage,
-        )
+        if evidence_plan is None:
+            hits, retrieval_debug = hybrid_search_with_debug(
+                question,
+                top_k=RERANK_TOP_K,
+                scope=scope,
+                on_stage=_on_stage,
+            )
+        else:
+            hits, retrieval_debug = hybrid_search_with_debug(
+                question,
+                top_k=RERANK_TOP_K,
+                scope=scope,
+                on_stage=_on_stage,
+                evidence_plan=evidence_plan,
+            )
     _log_timing(trace_id, "hybrid_search", stage_start, hits=len(hits))
     return hits, retrieval_debug
 
@@ -1001,6 +1100,7 @@ def _handle_informational(
     retrieval_question: str | None = None,
     turn_intent: str = "",
     answer_domain: AnswerDomain | None = None,
+    evidence_plan: dict[str, Any] | None = None,
 ) -> str:
     stage_start = time.perf_counter()
     search_question = retrieval_question or question
@@ -1025,7 +1125,22 @@ def _handle_informational(
 
     with ThreadPoolExecutor(max_workers=2, thread_name_prefix="retrieval") as executor:
         kg_future = executor.submit(_with_sink, kg_loader, search_question, trace_id)
-        hits_future = executor.submit(_with_sink, hits_loader, search_question, trace_id)
+        if evidence_plan is None:
+            hits_future = executor.submit(
+                _with_sink,
+                hits_loader,
+                search_question,
+                trace_id,
+            )
+        else:
+            hits_future = executor.submit(
+                _with_sink,
+                hits_loader,
+                search_question,
+                trace_id,
+                "medical",
+                evidence_plan,
+            )
         done, pending = wait((kg_future, hits_future), return_when=FIRST_EXCEPTION)
         failures: dict[Any, BaseException] = {}
         for future in done:
@@ -1110,7 +1225,8 @@ def _handle_informational(
                 hits=len(hits), kg_chars=len(kg_text))
     _record_hits(hits)
     _record_latency("retrieval", elapsed_ms(stage_start))
-    answer_domain = answer_domain or _infer_answer_domain(
+    planned_domain = plan_answer_domain(evidence_plan, "") if evidence_plan else ""
+    answer_domain = answer_domain or planned_domain or _infer_answer_domain(
         search_question,
         hits,
         turn_intent,
@@ -1154,6 +1270,7 @@ def _handle_informational(
                 kg_text=kg_text,
                 patient=patient_dict,
                 answer_domain=answer_domain,
+                evidence_plan=evidence_plan,
                 return_meta=True,
             )
             _record_usage("generator", gen_meta.get("usage"), model=gen_meta.get("model"))
@@ -1166,6 +1283,7 @@ def _handle_informational(
                 kg_text=kg_text,
                 patient=patient_dict,
                 answer_domain=answer_domain,
+                evidence_plan=evidence_plan,
             )
     except Exception:
         _log_failed_timing(trace_id, "generate", stage_start)
@@ -1175,29 +1293,51 @@ def _handle_informational(
     return reply
 
 
-def _handle_health_insurance(question: str, trace_id: str) -> str:
+def _handle_health_insurance(
+    question: str,
+    trace_id: str,
+    evidence_plan: dict[str, Any] | None = None,
+) -> str:
     stage_start = time.perf_counter()
     active_meta = _meta()
     collect_debug = bool(
         active_meta is not None and active_meta.get("_collect_graph")
     )
     if collect_debug:
-        hits_result, hits_elapsed = _call_with_elapsed(
-            _load_hybrid_hits_with_debug,
-            question,
-            trace_id,
-            "health_insurance",
-        )
+        if evidence_plan is None:
+            hits_result, hits_elapsed = _call_with_elapsed(
+                _load_hybrid_hits_with_debug,
+                question,
+                trace_id,
+                "health_insurance",
+            )
+        else:
+            hits_result, hits_elapsed = _call_with_elapsed(
+                _load_hybrid_hits_with_debug,
+                question,
+                trace_id,
+                "health_insurance",
+                evidence_plan,
+            )
         hits, retrieval_debug = hits_result
         if active_meta is not None:
             active_meta["retrieval_debug"] = retrieval_debug
     else:
-        hits, hits_elapsed = _call_with_elapsed(
-            _load_hybrid_hits,
-            question,
-            trace_id,
-            "health_insurance",
-        )
+        if evidence_plan is None:
+            hits, hits_elapsed = _call_with_elapsed(
+                _load_hybrid_hits,
+                question,
+                trace_id,
+                "health_insurance",
+            )
+        else:
+            hits, hits_elapsed = _call_with_elapsed(
+                _load_hybrid_hits,
+                question,
+                trace_id,
+                "health_insurance",
+                evidence_plan,
+            )
 
     _record_timing("hybrid_search", hits_elapsed, {"hits": len(hits)})
     _record_hits(hits)
@@ -1212,6 +1352,7 @@ def _handle_health_insurance(question: str, trace_id: str) -> str:
                 question,
                 hits,
                 answer_domain="health_insurance_info",
+                evidence_plan=evidence_plan,
                 return_meta=True,
             )
             _record_usage(
@@ -1226,6 +1367,7 @@ def _handle_health_insurance(question: str, trace_id: str) -> str:
                 question,
                 hits,
                 answer_domain="health_insurance_info",
+                evidence_plan=evidence_plan,
             )
     except Exception:
         _log_failed_timing(trace_id, "generate", stage_start)
@@ -1249,6 +1391,7 @@ def _route(
     on_preliminary_reply: Callable[[str], None] | None = None,
     use_emergency_rag: bool | None = None,
     turn_intent: str = "",
+    evidence_plan: dict[str, Any] | None = None,
 ) -> str:
     if label == "emergency":
         emergency_question = question if rewritten == question else f"{question}\n{rewritten}"
@@ -1292,7 +1435,11 @@ def _route(
             log.exception("Emergency RAG failed trace=%s", trace_id)
             return fast
     if label == "health_insurance":
-        return _handle_health_insurance(rewritten, trace_id)
+        return _handle_health_insurance(
+            rewritten,
+            trace_id,
+            evidence_plan=evidence_plan,
+        )
     if label == "clarification_answer":
         return _handle_clarification_answer(session, question, trace_id, force_answer)
     if label == "diagnostic":
@@ -1312,6 +1459,7 @@ def _route(
         trace_id,
         use_patient_context=use_patient_context,
         turn_intent=turn_intent,
+        evidence_plan=evidence_plan,
     )
 
 
@@ -1520,6 +1668,18 @@ def _answer_inner(
         rewrite.setdefault("rewritten", question)
         rewrite.setdefault("confident", True)
         rewrite.setdefault("clarification", "")
+        analysis["evidence_plan"] = normalize_evidence_plan(
+            {
+                "domain": "health_insurance_info",
+                "source_type": "health_insurance",
+                "answer_slot": "insurance_rule",
+                "safety_mode": "factual_info",
+                "answer_style": "short_explanation",
+                "confidence": 1.0,
+                "needs_fallback": False,
+            },
+            fallback_domain="health_insurance_info",
+        )
         if meta is not None:
             meta["health_insurance_detector"] = "forced"
     toxicology_detected = (
@@ -1574,17 +1734,48 @@ def _answer_inner(
             intent = "pure_info"
             turn["label"] = label
             turn["intent"] = intent
+        analysis["evidence_plan"] = normalize_evidence_plan(
+            {
+                "domain": "disease_info",
+                "source_type": "disease",
+                "answer_slot": "first_aid",
+                "safety_mode": "factual_info",
+                "answer_style": "short_explanation",
+                "confidence": 0.8,
+                "needs_fallback": False,
+            },
+            fallback_domain="disease_info",
+        )
         if meta is not None:
             meta["emergency_intent_topic_info"] = emergency_intent
     elif emergency_action_needed:
         label = "emergency"
         intent = "emergency"
         triage["urgency"] = "emergency"
+        analysis["evidence_plan"] = normalize_evidence_plan(
+            {
+                "domain": "symptom_or_care",
+                "source_type": "medical",
+                "answer_slot": "first_aid",
+                "safety_mode": "emergency_action",
+                "answer_style": "stepwise",
+                "confidence": 1.0,
+                "needs_fallback": False,
+            },
+            fallback_domain="symptom_or_care",
+        )
         meta = _meta()
         if meta is not None:
             meta["emergency_intent_override"] = emergency_intent
     if not CONVERSATION_CONTEXT_ENABLED and context.get("relation") == "switch_subject":
         _reset_diagnostic_workflow(session)
+    evidence_plan = _prepare_evidence_plan(
+        question,
+        analysis,
+        label,
+        intent,
+        trace_id,
+    )
     direct_answer_for_log = (
         turn["direct_answer_requested"] if guard["verdict"] == "allow" else False
     )
@@ -1798,6 +1989,11 @@ def _answer_inner(
     if (
         route_label != "emergency"
         and label in ("diagnostic", "informational", "clarification_answer")
+        and not (
+            label == "informational"
+            and intent == "pure_info"
+            and drug_policy.reason == "source_grounded_drug_info"
+        )
     ):
         stage_start = time.perf_counter()
         try:
@@ -1840,6 +2036,7 @@ def _answer_inner(
             on_preliminary_reply=on_preliminary_reply,
             use_emergency_rag=use_emergency_rag,
             turn_intent=intent,
+            evidence_plan=evidence_plan,
         )
     except Exception:
         log.exception("Pipeline route failed trace=%s", trace_id)

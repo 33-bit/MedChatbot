@@ -67,6 +67,63 @@ def _patch_persistence_noop(monkeypatch, session: PatientSession | None = None) 
     return current
 
 
+def test_prepare_evidence_plan_falls_back_for_unscoped_disease_info(monkeypatch):
+    calls: list[dict] = []
+
+    def fake_plan_evidence(question, *, analysis, fallback_domain):
+        calls.append({"question": question, "fallback_domain": fallback_domain})
+        return {
+            "domain": "disease_info",
+            "source_type": "disease",
+            "entity": "Basedow",
+            "answer_slot": "definition",
+            "safety_mode": "factual_info",
+            "target_heading_paths": ["Đại cương"],
+            "required_facts": ["bản chất bệnh"],
+            "answer_style": "short_explanation",
+            "confidence": 0.9,
+            "needs_fallback": False,
+        }
+
+    monkeypatch.setattr(pipeline, "plan_evidence", fake_plan_evidence)
+    analysis = _analysis(intent="pure_info", rewritten="Basedow là gì?")
+    analysis["analysis_succeeded"] = False
+
+    plan = pipeline._prepare_evidence_plan(
+        "Basedow là gì?",
+        analysis,
+        "informational",
+        "pure_info",
+        "trace",
+    )
+
+    assert calls == [{"question": "Basedow là gì?", "fallback_domain": "disease_info"}]
+    assert plan is not None
+    assert plan["target_heading_paths"] == ["Đại cương"]
+    assert analysis["evidence_plan"]["entity"] == "Basedow"
+
+
+def test_prepare_evidence_plan_does_not_fallback_for_health_insurance(monkeypatch):
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        pipeline,
+        "plan_evidence",
+        lambda *args, **kwargs: calls.append(kwargs) or {},
+    )
+    analysis = _analysis(intent="health_insurance_info")
+
+    plan = pipeline._prepare_evidence_plan(
+        "Thẻ bảo hiểm y tế được cấp thế nào?",
+        analysis,
+        "informational",
+        "health_insurance_info",
+        "trace",
+    )
+
+    assert plan is None
+    assert calls == []
+
+
 def test_answer_empty_question_short_circuits():
     assert pipeline.answer("", session_id="s") == "Bạn hãy đặt câu hỏi cụ thể nhé."
 

@@ -7,6 +7,8 @@ from src.chat import prompts
 from src.chat.diagnosis import differential
 from src.chat.diagnosis.flow import direct_diagnostic_prompt
 from src.chat.llm import analyzer
+from src.chat.llm import answer_verifier
+from src.chat.llm import evidence_brief
 from src.chat.llm import generator
 from src.chat.llm import mini
 from src.chat.guards.guardrail import VALID_VERDICTS, VERDICT_REPLIES
@@ -116,6 +118,44 @@ def test_analyzer_preserves_refined_intent_from_one_shot_llm(monkeypatch):
 
     assert result["turn"]["label"] == "diagnostic"
     assert result["turn"]["intent"] == "contextual_drug_info"
+
+
+def test_analyzer_preserves_semantic_evidence_plan(monkeypatch):
+    monkeypatch.setattr(
+        analyzer,
+        "call_mini",
+        lambda *args, **kwargs: {
+            "guardrail": {"verdict": "allow"},
+            "turn": {
+                "label": "informational",
+                "intent": "contextual_drug_info",
+                "direct_answer_requested": False,
+            },
+            "rewrite": {
+                "rewritten": "Almagate uống thế nào?",
+                "confident": True,
+            },
+            "entities": {"symptoms": [], "medications": ["Almagate"]},
+            "evidence_plan": {
+                "domain": "drug_info",
+                "source_type": "drug",
+                "entity": "Almagate",
+                "answer_slot": "dose",
+                "safety_mode": "factual_info",
+                "target_heading_paths": ["Liều dùng và cách dùng"],
+                "required_facts": ["liều", "đường dùng"],
+                "answer_style": "exact_list",
+                "confidence": 0.9,
+            },
+        },
+    )
+
+    result = analyzer.analyze_turn("Almagate uống thế nào?")
+
+    assert result["evidence_plan"]["domain"] == "drug_info"
+    assert result["evidence_plan"]["source_type"] == "drug"
+    assert result["evidence_plan"]["answer_slot"] == "dose"
+    assert result["evidence_plan"]["target_heading_paths"] == ["Liều dùng và cách dùng"]
 
 
 def test_analyzer_routes_emergency_urgency_independently_of_turn_intent(monkeypatch):
@@ -246,6 +286,15 @@ def test_turn_analysis_prompt_assesses_urgency_independently_of_intent():
     assert "TOÀN BỘ cụm triệu chứng và ngữ cảnh" in text
 
 
+def test_turn_analysis_prompt_includes_evidence_plan_schema():
+    text = prompts.TURN_ANALYSIS_SYSTEM
+
+    assert '"evidence_plan"' in text
+    assert '"answer_slot"' in text
+    assert "không dùng mẹo danh sách từ khóa" in text
+    assert "needs_fallback=true" in text
+
+
 def test_generator_system_prompt_adopts_patient_friendly_template_rules():
     text = prompts.GENERATOR_SYSTEM
 
@@ -351,6 +400,15 @@ def test_generator_uses_retrieved_drug_usage_when_model_claims_missing(monkeypat
         )
     )
     monkeypatch.setattr(generator, "get_openai", lambda: fake_client)
+    monkeypatch.setattr(generator, "build_evidence_brief", lambda **kwargs: None)
+    monkeypatch.setattr(
+        generator,
+        "repair_answer_with_evidence",
+        lambda **kwargs: (
+            kwargs["answer"]
+            + "\n- Nên sử dụng Ketoprofen cùng với thức ăn để giảm nguy cơ tiêu hóa. [1]"
+        ),
+    )
 
     answer = generator.generate(
         "Almagate liều dùng thế nào?",
@@ -409,6 +467,12 @@ def test_generator_drug_usage_fallback_includes_later_cach_dung_chunk(monkeypatc
         )
     )
     monkeypatch.setattr(generator, "get_openai", lambda: fake_client)
+    monkeypatch.setattr(generator, "build_evidence_brief", lambda **kwargs: None)
+    monkeypatch.setattr(
+        generator,
+        "repair_answer_with_evidence",
+        lambda **kwargs: kwargs["answer"],
+    )
 
     answer = generator.generate(
         "Tôi cần uống Sắt Gluconat như thế nào để đạt hiệu quả tốt nhất?",
@@ -422,6 +486,910 @@ def test_generator_drug_usage_fallback_includes_later_cach_dung_chunk(monkeypatc
     assert "nước đầy hoặc nước trái cây" in answer
     assert "5 Liều dùng - Cách dùng >" not in answer
     assert "không đủ thông tin" not in answer.lower()
+
+
+def test_generator_includes_evidence_plan_in_prompt(monkeypatch):
+    captured: dict = {}
+    hits = [
+        Hit(
+            text="Liều dùng: người lớn uống 1-2 gói/lần, ngày 3 lần.",
+            score=1.0,
+            source_type="drug",
+            source_name="Almagate",
+            heading_path="Liều dùng và cách dùng",
+            source_slug="almagate",
+            chunk_id="drug:almagate:lieu-dung-va-cach-dung",
+            id="uuid-usage",
+        )
+    ]
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        return {"choices": [{"message": {"content": "Uống theo tài liệu [1]."}}]}
+
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))
+    )
+    monkeypatch.setattr(generator, "get_openai", lambda: fake_client)
+    monkeypatch.setattr(generator, "build_evidence_brief", lambda **kwargs: None)
+    monkeypatch.setattr(
+        generator,
+        "repair_answer_with_evidence",
+        lambda **kwargs: kwargs["answer"],
+    )
+
+    generator.generate(
+        "Almagate uống thế nào?",
+        hits,
+        answer_domain="drug_info",
+        evidence_plan={
+            "domain": "drug_info",
+            "source_type": "drug",
+            "entity": "Almagate",
+            "answer_slot": "dose",
+            "target_heading_paths": ["Liều dùng và cách dùng"],
+            "required_facts": ["liều dùng", "tần suất"],
+            "confidence": 0.9,
+        },
+    )
+
+    user_prompt = captured["messages"][1]["content"]
+    assert "Kế hoạch bằng chứng cần bám sát" in user_prompt
+    assert "Loại thông tin cần trả lời: dose" in user_prompt
+    assert "Liều dùng và cách dùng" in user_prompt
+    assert "liều dùng; tần suất" in user_prompt
+
+
+def test_generator_prioritizes_planned_disease_sections_without_dropping_context(monkeypatch):
+    captured: dict = {}
+    hits = [
+        Hit(
+            text="Bệnh Basedow là bệnh cường giáp tự miễn, có tính chất gia đình.",
+            score=1.0,
+            source_type="disease",
+            source_name="Basedow",
+            heading_path="I. Đại cương",
+            source_slug="basedow",
+            chunk_id="disease:basedow:intro",
+        ),
+        Hit(
+            text="Triệu chứng gồm bướu giáp, mắt lồi và run tay.",
+            score=0.9,
+            source_type="disease",
+            source_name="Basedow",
+            heading_path="II. Triệu chứng lâm sàng",
+            source_slug="basedow",
+            chunk_id="disease:basedow:symptoms",
+        ),
+        Hit(
+            text="Điều trị có thể dùng thuốc kháng giáp tổng hợp.",
+            score=0.8,
+            source_type="disease",
+            source_name="Basedow",
+            heading_path="IV. Điều trị",
+            source_slug="basedow",
+            chunk_id="disease:basedow:treatment",
+        ),
+        Hit(
+            text="Biến chứng có thể gồm loạn nhịp tim.",
+            score=0.7,
+            source_type="disease",
+            source_name="Basedow",
+            heading_path="V. Biến chứng",
+            source_slug="basedow",
+            chunk_id="disease:basedow:complications",
+        ),
+    ]
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        return {"choices": [{"message": {"content": "Basedow là bệnh tự miễn [1]."}}]}
+
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))
+    )
+    monkeypatch.setattr(generator, "get_openai", lambda: fake_client)
+    monkeypatch.setattr(generator, "build_evidence_brief", lambda **kwargs: None)
+    monkeypatch.setattr(
+        generator,
+        "repair_answer_with_evidence",
+        lambda **kwargs: kwargs["answer"],
+    )
+
+    generator.generate(
+        "Bệnh Basedow là gì và có biểu hiện nào?",
+        hits,
+        answer_domain="disease_info",
+        evidence_plan={
+            "domain": "disease_info",
+            "source_type": "disease",
+            "entity": "Basedow",
+            "answer_slot": "overview",
+            "target_heading_paths": ["Đại cương", "Triệu chứng lâm sàng"],
+            "required_facts": ["bản chất bệnh", "triệu chứng"],
+            "confidence": 0.9,
+        },
+    )
+
+    user_prompt = captured["messages"][1]["content"]
+    assert "Ưu tiên tài liệu theo kế hoạch bằng chứng" in user_prompt
+    assert "có tính chất gia đình" in user_prompt
+    assert "bướu giáp" in user_prompt
+    assert "thuốc kháng giáp" in user_prompt
+    assert "loạn nhịp tim" in user_prompt
+    assert user_prompt.index("có tính chất gia đình") < user_prompt.index("thuốc kháng giáp")
+
+
+def test_generator_uses_evidence_brief_to_prioritize_context(monkeypatch):
+    captured: dict = {}
+    hits = [
+        Hit(
+            text="Basedow là bệnh tự miễn, có tính chất gia đình.",
+            score=1.0,
+            source_type="disease",
+            source_name="Basedow",
+            heading_path="I. Đại cương",
+            source_slug="basedow",
+            chunk_id="disease:basedow:intro",
+        ),
+        Hit(
+            text="Chẩn đoán dựa vào TRAb và siêu âm.",
+            score=0.9,
+            source_type="disease",
+            source_name="Basedow",
+            heading_path="II. Chẩn đoán",
+            source_slug="basedow",
+            chunk_id="disease:basedow:diagnosis",
+        ),
+        Hit(
+            text="Điều trị có thể dùng thuốc kháng giáp tổng hợp.",
+            score=0.8,
+            source_type="disease",
+            source_name="Basedow",
+            heading_path="III. Điều trị",
+            source_slug="basedow",
+            chunk_id="disease:basedow:treatment",
+        ),
+    ]
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        return {"choices": [{"message": {"content": "Basedow có tính chất gia đình [1]."}}]}
+
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))
+    )
+    monkeypatch.setattr(generator, "get_openai", lambda: fake_client)
+    monkeypatch.setattr(
+        generator,
+        "build_evidence_brief",
+        lambda **kwargs: {
+            "selected_indexes": [1],
+            "must_include_facts": ["có tính chất gia đình"],
+            "avoid_topics": ["chẩn đoán", "điều trị"],
+            "brief": "Trả lời bằng phần đại cương.",
+        },
+    )
+    monkeypatch.setattr(
+        generator,
+        "repair_answer_with_evidence",
+        lambda **kwargs: kwargs["answer"],
+    )
+
+    generator.generate(
+        "Basedow là gì?",
+        hits,
+        answer_domain="disease_info",
+    )
+
+    user_prompt = captured["messages"][1]["content"]
+    assert "Brief bằng chứng đã chọn" in user_prompt
+    assert "có tính chất gia đình" in user_prompt
+    assert "TRAb và siêu âm" in user_prompt
+    assert "thuốc kháng giáp" in user_prompt
+    assert user_prompt.index("có tính chất gia đình") < user_prompt.index("TRAb và siêu âm")
+
+
+def test_disease_overview_contract_removes_scope_drift_without_specific_fact_injection():
+    hits = [
+        Hit(
+            text=(
+                "Basedow là một bệnh cường giáp do hoạt động quá mức không ức chế "
+                "được của tuyến giáp. Nó là một bệnh tự miễn, có tính chất gia đình, "
+                "bệnh thường gặp ở phụ nữ (3%). Tỷ lệ nữ/nam: 7,5/1."
+            ),
+            score=1.0,
+            source_type="disease",
+            source_name="Basedow",
+            heading_path="I. ĐẠI CƯƠNG",
+            source_slug="basedow",
+            chunk_id="disease:basedow:intro",
+        ),
+        Hit(
+            text="Điều trị có thể dùng thuốc kháng giáp tổng hợp.",
+            score=0.8,
+            source_type="disease",
+            source_name="Basedow",
+            heading_path="III. Điều trị",
+            source_slug="basedow",
+            chunk_id="disease:basedow:treatment",
+        ),
+    ]
+    answer = (
+        "Basedow: bệnh cường giáp tự miễn [1]. "
+        "Cơ chế: hệ miễn dịch kích thích sản xuất hormone tuyến giáp (T3, T4) [1]. "
+        "Điều trị: thuốc kháng giáp [1]. "
+        "Biến chứng: loạn nhịp tim [1]."
+    )
+
+    cleaned = generator.enforce_info_answer_contract(
+        answer,
+        hits,
+        "disease_info",
+        "Bệnh Basedow là gì và nó ảnh hưởng đến cơ thể như thế nào?",
+    )
+
+    assert "Cơ chế" in cleaned
+    assert "gia đình" not in cleaned
+    assert "phụ nữ (3%)" not in cleaned
+    assert "Điều trị" not in cleaned
+    assert "Biến chứng" not in cleaned
+
+
+def test_generator_keeps_drug_usage_chunk_when_brief_omits_it(monkeypatch):
+    captured: dict = {}
+    hits = [
+        Hit(
+            text="Atapulgit dùng điều trị triệu chứng tiêu chảy.",
+            score=1.0,
+            source_type="drug",
+            source_name="Atapulgit",
+            heading_path="4 Chỉ định",
+            source_slug="atapulgit",
+            chunk_id="drug:atapulgit:chi-dinh",
+        ),
+        Hit(
+            text="Liều thường dùng: uống 1,2 g đến 1,5 g mỗi lần đi phân lỏng.",
+            score=0.8,
+            source_type="drug",
+            source_name="Atapulgit",
+            heading_path="10 Liều lượng và cách dùng",
+            source_slug="atapulgit",
+            chunk_id="drug:atapulgit:lieu-dung",
+        ),
+    ]
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        return {"choices": [{"message": {"content": "Atapulgit dùng cho tiêu chảy [1]."}}]}
+
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))
+    )
+    monkeypatch.setattr(generator, "get_openai", lambda: fake_client)
+    monkeypatch.setattr(
+        generator,
+        "build_evidence_brief",
+        lambda **kwargs: {
+            "selected_indexes": [1],
+            "must_include_facts": ["chỉ định"],
+            "avoid_topics": [],
+            "brief": "Chỉ định.",
+        },
+    )
+    monkeypatch.setattr(
+        generator,
+        "repair_answer_with_evidence",
+        lambda **kwargs: kwargs["answer"],
+    )
+
+    generator.generate(
+        "Atapulgit dùng như thế nào?",
+        hits,
+        answer_domain="drug_info",
+        evidence_plan={
+            "domain": "drug_info",
+            "source_type": "drug",
+            "entity": "Atapulgit",
+            "answer_slot": "dose",
+            "confidence": 0.9,
+        },
+    )
+
+    user_prompt = captured["messages"][1]["content"]
+    assert "Atapulgit dùng điều trị triệu chứng tiêu chảy" in user_prompt
+    assert "1,2 g đến 1,5 g" in user_prompt
+
+
+def test_generator_appends_usage_fallback_when_answer_omits_retrieved_dose(monkeypatch):
+    hits = [
+        Hit(
+            text="Atapulgit dùng điều trị triệu chứng tiêu chảy.",
+            score=1.0,
+            source_type="drug",
+            source_name="Atapulgit",
+            heading_path="4 Chỉ định",
+            source_slug="atapulgit",
+            chunk_id="drug:atapulgit:chi-dinh",
+        ),
+        Hit(
+            text="Liều thường dùng: uống 1,2 g đến 1,5 g mỗi lần đi phân lỏng; không vượt quá 9 g trong 24 giờ.",
+            score=0.8,
+            source_type="drug",
+            source_name="Atapulgit",
+            heading_path="10 Liều lượng và cách dùng",
+            source_slug="atapulgit",
+            chunk_id="drug:atapulgit:lieu-dung",
+        ),
+    ]
+    fake_response = {
+        "choices": [{
+            "message": {
+                "content": "Atapulgit dùng điều trị triệu chứng tiêu chảy [1]."
+            }
+        }]
+    }
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=lambda **kwargs: fake_response)
+        )
+    )
+    monkeypatch.setattr(generator, "get_openai", lambda: fake_client)
+    monkeypatch.setattr(generator, "build_evidence_brief", lambda **kwargs: None)
+    monkeypatch.setattr(
+        generator,
+        "repair_answer_with_evidence",
+        lambda **kwargs: kwargs["answer"],
+    )
+
+    answer = generator.generate(
+        "Atapulgit dùng như thế nào?",
+        hits,
+        answer_domain="drug_info",
+        evidence_plan={
+            "domain": "drug_info",
+            "source_type": "drug",
+            "entity": "Atapulgit",
+            "answer_slot": "indication",
+            "confidence": 0.9,
+        },
+    )
+
+    assert "Atapulgit dùng điều trị triệu chứng tiêu chảy" in answer
+    assert "1,2 g đến 1,5 g" in answer
+    assert "không vượt quá 9 g trong 24 giờ" in answer
+
+
+def test_generator_does_not_replace_valid_drug_usage_answer(monkeypatch):
+    hits = [
+        Hit(
+            text="Liều dùng: uống 1 viên/lần, ngày 2 lần sau ăn.",
+            score=1.0,
+            source_type="drug",
+            source_name="Thuốc A",
+            heading_path="Liều dùng và cách dùng",
+            source_slug="thuoc-a",
+            chunk_id="drug:thuoc-a:lieu-dung",
+        )
+    ]
+    fake_response = {
+        "choices": [{
+            "message": {"content": "Bạn có thể uống 1 viên/lần, ngày 2 lần sau ăn [1]."}
+        }]
+    }
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=lambda **kwargs: fake_response)
+        )
+    )
+    monkeypatch.setattr(generator, "get_openai", lambda: fake_client)
+    monkeypatch.setattr(generator, "build_evidence_brief", lambda **kwargs: None)
+    monkeypatch.setattr(
+        generator,
+        "repair_answer_with_evidence",
+        lambda **kwargs: kwargs["answer"],
+    )
+
+    answer = generator.generate(
+        "Thuốc A uống như thế nào?",
+        hits,
+        answer_domain="drug_info",
+        evidence_plan={
+            "domain": "drug_info",
+            "source_type": "drug",
+            "entity": "Thuốc A",
+            "answer_slot": "dose",
+            "confidence": 0.9,
+        },
+    )
+
+    assert "Bạn có thể uống 1 viên/lần, ngày 2 lần sau ăn" in answer
+    assert "Theo chuyên luận thuốc được truy xuất" not in answer
+
+
+def test_generator_does_not_treat_drug_indication_question_as_usage(monkeypatch):
+    hits = [
+        Hit(
+            text="Thuốc A được sử dụng để hỗ trợ cải thiện đau họng.",
+            score=1.0,
+            source_type="drug",
+            source_name="Thuốc A",
+            heading_path="Chỉ định",
+            source_slug="thuoc-a",
+            chunk_id="drug:thuoc-a:chi-dinh",
+        ),
+        Hit(
+            text="Liều dùng phụ thuộc dạng bào chế và hàm lượng từng chế phẩm.",
+            score=0.8,
+            source_type="drug",
+            source_name="Thuốc A",
+            heading_path="Chỉ định - liều dùng",
+            source_slug="thuoc-a",
+            chunk_id="drug:thuoc-a:lieu-dung",
+        ),
+    ]
+    fake_response = {
+        "choices": [{
+            "message": {"content": "Có thể dùng trong phạm vi chỉ định hỗ trợ đau họng [1]."}
+        }]
+    }
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=lambda **kwargs: fake_response)
+        )
+    )
+    monkeypatch.setattr(generator, "get_openai", lambda: fake_client)
+    monkeypatch.setattr(generator, "build_evidence_brief", lambda **kwargs: None)
+    monkeypatch.setattr(
+        generator,
+        "repair_answer_with_evidence",
+        lambda **kwargs: kwargs["answer"],
+    )
+
+    answer = generator.generate(
+        "Tôi bị đau họng, có thể dùng thuốc chứa Thuốc A được không?",
+        hits,
+        answer_domain="drug_info",
+        evidence_plan={
+            "domain": "drug_info",
+            "source_type": "drug",
+            "entity": "Thuốc A",
+            "answer_slot": "indication",
+            "confidence": 0.9,
+        },
+    )
+
+    assert "Có thể dùng trong phạm vi chỉ định hỗ trợ đau họng" in answer
+    assert "Liều dùng phụ thuộc" not in answer.split("Nguồn:", 1)[0]
+    assert "Theo chuyên luận thuốc được truy xuất" not in answer
+
+
+def test_drug_usage_detection_requires_actual_usage_question():
+    assert generator._question_asks_drug_usage_detail("Thuốc A uống như thế nào?")
+    assert generator._question_asks_drug_usage_detail("Thuốc A liều dùng bao nhiêu?")
+    assert not generator._question_asks_drug_usage_detail(
+        "Tôi bị loét dạ dày, uống thuốc này có sao không?"
+    )
+    assert not generator._question_asks_drug_usage_detail(
+        "Điều này có đúng không và nó hoạt động như thế nào?"
+    )
+
+
+def test_generator_usage_fallback_prefers_nested_dose_section(monkeypatch):
+    hits = [
+        Hit(
+            text=(
+                "Là thuốc giảm đau chống viêm để giảm triệu chứng viêm khớp "
+                "và đau bao gồm đau cơ, đau răng, đau đầu do hầu hết các nguyên nhân."
+            ),
+            score=1.0,
+            source_type="drug",
+            source_name="Acid Mefenamic",
+            heading_path="2 Công dụng và chỉ định",
+            source_slug="acid-mefenamic",
+            chunk_id="drug:acid-mefenamic:cong-dung-chi-dinh",
+        ),
+        Hit(
+            text=(
+                "Acid Mefenamic thường được sử dụng trong thời gian ngắn. "
+                "Nên sử dụng Ketoprofen cùng với thức ăn."
+            ),
+            score=1.0,
+            source_type="drug",
+            source_name="Acid Mefenamic",
+            heading_path="1 Dược lý và cơ chế tác dụng",
+            source_slug="acid-mefenamic",
+            chunk_id="drug:acid-mefenamic:duoc-ly",
+        ),
+        Hit(
+            text=(
+                "Người lớn: 500mg/lần/ngày. Sau đó có thể dùng tiếp 1 liều "
+                "250mg nếu cần, thời gian điều trị thường không quá 7 ngày."
+            ),
+            score=0.8,
+            source_type="drug",
+            source_name="Acid Mefenamic",
+            heading_path=(
+                "4 Liều dùng và cách dùng > 4.1 Liều dùng Acid mefenamic > "
+                "4.1.1 Đau, đau do viêm xương khớp"
+            ),
+            source_slug="acid-mefenamic",
+            chunk_id="drug:acid-mefenamic:lieu-dung-nguoi-lon",
+        ),
+    ]
+    fake_response = {
+        "choices": [{
+            "message": {
+                "content": "Tài liệu được cung cấp không đủ thông tin để xác nhận liều/cách dùng."
+            }
+        }]
+    }
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=lambda **kwargs: fake_response)
+        )
+    )
+    monkeypatch.setattr(generator, "get_openai", lambda: fake_client)
+    monkeypatch.setattr(generator, "build_evidence_brief", lambda **kwargs: None)
+    monkeypatch.setattr(
+        generator,
+        "repair_answer_with_evidence",
+        lambda **kwargs: kwargs["answer"],
+    )
+
+    answer = generator.generate(
+        "Tôi bị đau đầu, tôi có thể dùng Acid Mefenamic được không và dùng như thế nào?",
+        hits,
+        answer_domain="drug_info",
+        evidence_plan={
+            "domain": "drug_info",
+            "source_type": "drug",
+            "entity": "Acid Mefenamic",
+            "answer_slot": "dose",
+            "confidence": 0.9,
+        },
+    )
+
+    assert "đau đầu" in answer
+    assert "500mg/lần/ngày" in answer
+    assert "250mg nếu cần" in answer
+    assert "không quá 7 ngày" in answer
+    assert "Ketoprofen" not in answer
+
+
+def test_generator_usage_fallback_ignores_secondary_drug_chunks(monkeypatch):
+    hits = [
+        Hit(
+            text=(
+                "Giảm đau/giảm sốt: Uống 300 - 900 mg, lặp lại sau mỗi "
+                "4 - 6 giờ nếu cần, tối đa là 4 g/ngày.\n"
+                "Chống viêm: có thể dùng liều 4 - 8 g/ngày, chia làm nhiều liều nhỏ."
+            ),
+            score=1.0,
+            source_type="drug",
+            source_name="Aspirin",
+            heading_path="10 Liều lượng và cách dùng > 10.2 Liều lượng > 10.2.1 Người lớn",
+            source_slug="aspirin",
+            chunk_id="drug:aspirin:lieu-nguoi-lon",
+        ),
+        Hit(
+            text="Liều uống thông thường: 25 mg/lần, uống 2 - 3 lần mỗi ngày.",
+            score=0.7,
+            source_type="drug",
+            source_name="Indomethacin",
+            heading_path="10 Liều lượng và cách dùng > 10.2 Liều dùng",
+            source_slug="indomethacin",
+            chunk_id="drug:indomethacin:lieu-dung",
+        ),
+        Hit(
+            text="Trẻ em: uống 60 - 130 mg/kg/ngày, chia làm nhiều liều nhỏ.",
+            score=0.6,
+            source_type="drug",
+            source_name="Aspirin",
+            heading_path="10 Liều lượng và cách dùng > 10.2 Liều lượng > 10.2.2 Trẻ em",
+            source_slug="aspirin",
+            chunk_id="drug:aspirin:lieu-tre-em",
+        ),
+    ]
+    fake_response = {
+        "choices": [{
+            "message": {
+                "content": "Tài liệu được cung cấp không đủ thông tin để xác nhận liều/cách dùng."
+            }
+        }]
+    }
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=lambda **kwargs: fake_response)
+        )
+    )
+    monkeypatch.setattr(generator, "get_openai", lambda: fake_client)
+    monkeypatch.setattr(generator, "build_evidence_brief", lambda **kwargs: None)
+    monkeypatch.setattr(
+        generator,
+        "repair_answer_with_evidence",
+        lambda **kwargs: kwargs["answer"] + "\n- Liều 25 mg/lần. [1]",
+    )
+
+    answer = generator.generate(
+        "Tôi bị đau khớp, bác sĩ kê Aspirin. Tôi muốn biết liều dùng cho người lớn là bao nhiêu?",
+        hits,
+        answer_domain="drug_info",
+        evidence_plan={
+            "domain": "drug_info",
+            "source_type": "drug",
+            "entity": "Aspirin",
+            "answer_slot": "dose",
+            "confidence": 0.9,
+        },
+    )
+
+    assert "300 - 900 mg" in answer
+    assert "4 g/ngày" in answer
+    assert "4 - 8 g/ngày" in answer
+    assert "25 mg/lần" not in answer
+    assert "60 - 130 mg/kg/ngày" not in answer
+    assert "Indomethacin" not in answer
+
+
+def test_drug_usage_fallback_keeps_matching_local_regimen_only():
+    text = (
+        "Giun đũa, giun móc hoặc giun tóc, giun kim:\n"
+        "Người lớn và trẻ em trên 2 tuổi: 400 mg uống 1 liều duy nhất.\n"
+        "Trẻ em 1 - 2 tuổi: 200 mg uống 1 liều duy nhất.\n"
+        "Giun lươn:\n"
+        "Người lớn và trẻ em trên 2 tuổi: 400 mg/lần, 2 lần/ngày, trong 3 ngày. "
+        "Có thể nhắc lại sau 3 tuần.\n"
+        "Điều trị bệnh ấu trùng di chuyển ở da:\n"
+        "Người lớn và trẻ em trên 2 tuổi: 400 mg/lần/ngày, uống trong 3 ngày."
+    )
+    hits = [
+        Hit(
+            text=text,
+            score=1.0,
+            source_type="drug",
+            source_name="Albendazole",
+            heading_path=(
+                "7 Liều lượng và cách dùng > 7.2 Liều lượng > "
+                "7.2.3 Điều trị nhiễm ký sinh trùng đường ruột như giun đũa"
+            ),
+            source_slug="albendazole",
+            chunk_id="drug:albendazole:lieu-giun-duong-ruot-a",
+        ),
+        Hit(
+            text=text,
+            score=0.9,
+            source_type="drug",
+            source_name="Albendazole",
+            heading_path=(
+                "7 Liều lượng và cách dùng > 7.2 Liều lượng > "
+                "7.2.3 Điều trị nhiễm ký sinh trùng đường ruột như giun đũa"
+            ),
+            source_slug="albendazole",
+            chunk_id="drug:albendazole:lieu-giun-duong-ruot-b",
+        ),
+    ]
+
+    answer = generator._drug_usage_fallback_answer(
+        hits,
+        [1, 1],
+        question="Tôi bị nhiễm giun đũa, bác sĩ kê Albendazole. Tôi uống thế nào?",
+    )
+
+    assert "400 mg uống 1 liều duy nhất" in answer
+    assert "400 mg/lần, 2 lần/ngày" not in answer
+    assert "ấu trùng di chuyển" not in answer
+
+
+def test_drug_usage_fallback_filters_age_specific_lines():
+    hits = [
+        Hit(
+            text=(
+                "Mày đay, ngứa:\n"
+                "Trẻ em 2 - 4 tuổi: 2,5 mg/lần, ngày 3 - 4 lần.\n"
+                "Trẻ em 5 - 11 tuổi: 5 mg/lần, ngày 3 - 4 lần.\n"
+                "Trẻ em >= 12 tuổi và người lớn: 10 mg/lần, 2 - 3 lần/ngày.\n"
+                "Người cao tuổi nên giảm liều: 10 mg/lần, ngày dùng 1 - 2 lần.\n"
+                "Tiền mê trước phẫu thuật cho trẻ em:\n"
+                "Trẻ em 2 - 7 tuổi: uống liều cao nhất là 2 mg/kg."
+            ),
+            score=1.0,
+            source_type="drug",
+            source_name="Alimemazine",
+            heading_path="10 Liều lượng và cách dùng > 10.2 Liều lượng",
+            source_slug="alimemazine",
+            chunk_id="drug:alimemazine:lieu-luong",
+        )
+    ]
+
+    answer = generator._drug_usage_fallback_answer(
+        hits,
+        [1],
+        question=(
+            "Con tôi 3 tuổi bị mày đay, tôi muốn dùng Alimemazine cho con. "
+            "Vậy liều dùng như thế nào là phù hợp?"
+        ),
+    )
+
+    assert "2,5 mg/lần" in answer
+    assert "Trẻ em 5 - 11 tuổi" not in answer
+    assert "Trẻ em >= 12 tuổi" not in answer
+    assert "Người cao tuổi" not in answer
+    assert "2 mg/kg" not in answer
+
+
+def test_drug_contract_removes_unsupported_allergy_minimization():
+    hits = [
+        Hit(
+            text=(
+                "Hãy tham khảo ý kiến bác sĩ hoặc dược sĩ trước khi sử dụng.\n"
+                "Không sử dụng với người quá mẫn cảm với thành phần của thuốc."
+            ),
+            score=1.0,
+            source_type="drug",
+            source_name="Thuốc A",
+            heading_path="Thận trọng khi sử dụng",
+            source_slug="thuoc-a",
+            chunk_id="drug:thuoc-a:than-trong",
+        )
+    ]
+
+    cleaned = generator.enforce_info_answer_contract(
+        (
+            "Thuốc A hiếm khi gây dị ứng [1]. "
+            "Không ghi nhận dị ứng chéo với thành phần khác [1]. "
+            "Hãy tham khảo bác sĩ/dược sĩ trước khi dùng [1]."
+        ),
+        hits,
+        "drug_info",
+        "Tôi bị dị ứng với một số thành phần mỹ phẩm, có dùng Thuốc A được không?",
+    )
+
+    assert "hiếm khi" not in cleaned
+    assert "Không ghi nhận" not in cleaned
+    assert "Không sử dụng nếu bạn quá mẫn cảm với thành phần của thuốc" in cleaned
+
+
+def test_generator_repair_is_limited_to_disease_and_drug(monkeypatch):
+    calls: list[dict] = []
+    disease_hit = Hit(
+        text="Basedow là bệnh cường giáp tự miễn.",
+        score=1.0,
+        source_type="disease",
+        source_name="Basedow",
+        heading_path="I. Đại cương",
+        source_slug="basedow",
+        chunk_id="disease:basedow:intro",
+    )
+    health_hit = Hit(
+        text="Người tham gia bảo hiểm y tế được cấp thẻ bảo hiểm y tế.",
+        score=1.0,
+        source_type="health_insurance",
+        source_name="Luật Bảo hiểm y tế",
+        heading_path="Điều 16",
+        source_slug="22-vbhn-vpqh",
+        chunk_id="health_insurance:22-vbhn-vpqh:article:16",
+    )
+
+    fake_response = {
+        "choices": [{"message": {"content": "Câu trả lời ban đầu [1]."}}]
+    }
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=lambda **kwargs: fake_response)
+        )
+    )
+
+    def fake_repair(**kwargs):
+        calls.append(kwargs)
+        return "Câu trả lời đã sửa [1]."
+
+    monkeypatch.setattr(generator, "get_openai", lambda: fake_client)
+    monkeypatch.setattr(generator, "repair_answer_with_evidence", fake_repair)
+
+    disease_answer = generator.generate(
+        "Basedow là gì?",
+        [disease_hit],
+        answer_domain="disease_info",
+        evidence_plan={
+            "domain": "disease_info",
+            "source_type": "disease",
+            "entity": "Basedow",
+            "answer_slot": "overview",
+            "target_heading_paths": ["Đại cương"],
+            "required_facts": ["bản chất bệnh"],
+            "confidence": 0.9,
+        },
+    )
+    assert "Câu trả lời đã sửa" in disease_answer
+    assert calls and calls[0]["answer_domain"] == "disease_info"
+
+    calls.clear()
+    health_answer = generator.generate(
+        "Thẻ bảo hiểm y tế được cấp thế nào?",
+        [health_hit],
+        answer_domain="health_insurance_info",
+        evidence_plan={
+            "domain": "health_insurance_info",
+            "source_type": "health_insurance",
+            "entity": "thẻ bảo hiểm y tế",
+            "answer_slot": "overview",
+            "target_heading_paths": ["Điều 16"],
+            "required_facts": ["cấp thẻ"],
+            "confidence": 0.9,
+        },
+    )
+    assert "Câu trả lời ban đầu" in health_answer
+    assert calls == []
+
+
+def test_evidence_brief_normalizes_llm_selection(monkeypatch):
+    monkeypatch.setattr(
+        evidence_brief,
+        "call_mini",
+        lambda *args, **kwargs: {
+            "selected_indexes": [1, "2", 2, 99, "x"],
+            "must_include_facts": ["định nghĩa", "định nghĩa", "đối tượng thường gặp"],
+            "avoid_topics": ["điều trị"],
+            "brief": "Chỉ dùng hai đoạn đầu.",
+        },
+    )
+    hits = [
+        Hit("intro", 1.0, "disease", "Basedow", "I. Đại cương", "basedow"),
+        Hit("symptoms", 0.9, "disease", "Basedow", "II. Triệu chứng", "basedow"),
+    ]
+
+    brief = evidence_brief.build_evidence_brief(
+        question="Basedow là gì?",
+        hits=hits,
+        evidence_plan=None,
+        answer_domain="disease_info",
+    )
+
+    assert brief == {
+        "selected_indexes": [1, 2],
+        "must_include_facts": ["định nghĩa", "đối tượng thường gặp"],
+        "avoid_topics": ["điều trị"],
+        "brief": "Chỉ dùng hai đoạn đầu.",
+    }
+
+
+def test_answer_verifier_returns_repaired_answer(monkeypatch):
+    monkeypatch.setattr(
+        answer_verifier,
+        "call_mini",
+        lambda *args, **kwargs: {
+            "needs_rewrite": True,
+            "missing_required_facts": ["tính chất gia đình"],
+            "unsupported_claims": ["biến chứng"],
+            "repaired_answer": "Basedow có tính chất gia đình [1].",
+        },
+    )
+
+    repaired = answer_verifier.repair_answer_with_evidence(
+        question="Basedow là gì?",
+        answer="Basedow có biến chứng tim.",
+        evidence_text="[1] Basedow\nBệnh có tính chất gia đình.",
+        evidence_plan={"required_facts": ["tính chất gia đình"]},
+        answer_domain="disease_info",
+    )
+
+    assert repaired == "Basedow có tính chất gia đình [1]."
+
+
+def test_answer_verifier_keeps_original_when_llm_returns_invalid(monkeypatch):
+    monkeypatch.setattr(answer_verifier, "call_mini", lambda *args, **kwargs: None)
+
+    original = "Basedow là bệnh cường giáp tự miễn [1]."
+    repaired = answer_verifier.repair_answer_with_evidence(
+        question="Basedow là gì?",
+        answer=original,
+        evidence_text="[1] Basedow\nBasedow là bệnh cường giáp tự miễn.",
+        evidence_plan={"required_facts": ["bản chất bệnh"]},
+        answer_domain="disease_info",
+    )
+
+    assert repaired == original
 
 
 def test_build_clarification_uses_patient_friendly_intro(monkeypatch):

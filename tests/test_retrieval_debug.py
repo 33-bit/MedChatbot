@@ -68,6 +68,235 @@ def test_drug_usage_query_promotes_same_drug_usage_heading():
     assert [hit.id for hit in hits] == ["uuid-base", "uuid-usage"]
 
 
+def test_drug_usage_query_adds_dose_even_when_cach_dung_present():
+    base = Hit(
+        text="Thông tin chung về Acid Mefenamic.",
+        score=0.9,
+        source_type="drug",
+        source_name="Acid Mefenamic",
+        heading_path="1 Dược lý",
+        source_slug="acid-mefenamic",
+        chunk_id="drug:acid-mefenamic:duoc-ly",
+        id="uuid-base",
+    )
+    child_admin = Hit(
+        text="Trẻ 9 đến 12 tuổi: 200mg/lần. Cách dùng: uống cùng thức ăn.",
+        score=0.8,
+        source_type="drug",
+        source_name="Acid Mefenamic",
+        heading_path="9 đến 12 tuổi > 4.2 Cách dùng Acid mefenamic",
+        source_slug="acid-mefenamic",
+        chunk_id="drug:acid-mefenamic:cach-dung-tre-em",
+        id="uuid-child-admin",
+    )
+    adult_dose = Hit(
+        text="Người lớn: 500mg/lần/ngày. Sau đó có thể dùng 250mg nếu cần.",
+        score=0.4,
+        source_type="drug",
+        source_name="Acid Mefenamic",
+        heading_path="4 Liều dùng và cách dùng > 4.1 Liều dùng Acid mefenamic",
+        source_slug="acid-mefenamic",
+        chunk_id="drug:acid-mefenamic:lieu-dung-nguoi-lon",
+        id="uuid-adult-dose",
+    )
+
+    hits = service._ensure_drug_usage_context(
+        "Acid Mefenamic dùng như thế nào?",
+        [base, child_admin],
+        [adult_dose],
+        top_k=2,
+    )
+
+    assert [hit.id for hit in hits] == ["uuid-base", "uuid-adult-dose"]
+
+
+def test_drug_usage_query_adds_nested_adult_dose_section():
+    base = Hit(
+        text="Thông tin chung về Acid Mefenamic.",
+        score=0.9,
+        source_type="drug",
+        source_name="Acid Mefenamic",
+        heading_path="1 Dược lý",
+        source_slug="acid-mefenamic",
+        chunk_id="drug:acid-mefenamic:duoc-ly",
+        id="uuid-base",
+    )
+    child_admin = Hit(
+        text="Trẻ 9 đến 12 tuổi: 200mg/lần. Cách dùng: uống cùng thức ăn.",
+        score=0.8,
+        source_type="drug",
+        source_name="Acid Mefenamic",
+        heading_path="4 Liều dùng và cách dùng > 4.2 Cách dùng Acid mefenamic",
+        source_slug="acid-mefenamic",
+        chunk_id="drug:acid-mefenamic:cach-dung-tre-em",
+        id="uuid-child-admin",
+    )
+    adult_dose = Hit(
+        text=(
+            "Người lớn: 500mg/lần/ngày. Sau đó có thể dùng tiếp 1 liều "
+            "250mg nếu cần, thời gian điều trị thường không quá 7 ngày."
+        ),
+        score=0.0,
+        source_type="drug",
+        source_name="Acid Mefenamic",
+        heading_path=(
+            "4 Liều dùng và cách dùng > 4.1 Liều dùng Acid mefenamic > "
+            "4.1.1 Đau, đau do viêm xương khớp"
+        ),
+        source_slug="acid-mefenamic",
+        chunk_id="drug:acid-mefenamic:lieu-dung-nguoi-lon",
+        id="uuid-adult-dose",
+    )
+    hits = service._ensure_drug_usage_context(
+        "Acid Mefenamic dùng như thế nào?",
+        [base, child_admin],
+        [adult_dose],
+        top_k=2,
+    )
+
+    assert [hit.id for hit in hits] == ["uuid-base", "uuid-adult-dose"]
+
+
+def test_drug_usage_query_can_expand_same_drug_local_dose(monkeypatch):
+    base = Hit(
+        text="Argyrol dùng điều trị viêm kết mạc.",
+        score=0.9,
+        source_type="drug",
+        source_name="Argyrol",
+        heading_path="4 Chỉ định",
+        source_slug="argyrol",
+        chunk_id="drug:argyrol:chi-dinh",
+        id="uuid-base",
+    )
+    route = Hit(
+        text="Nhỏ trực tiếp dung dịch Argyrol vào mắt.",
+        score=0.8,
+        source_type="drug",
+        source_name="Argyrol",
+        heading_path="7 Liều dùng - Cách dùng > 7.2 Cách dùng",
+        source_slug="argyrol",
+        chunk_id="drug:argyrol:cach-dung",
+        id="uuid-route",
+    )
+    dose = Hit(
+        text="Người trưởng thành: Mỗi lần dùng 1 giọt, ngày dùng từ 2 - 3 lần.",
+        score=0.0,
+        source_type="drug",
+        source_name="Argyrol",
+        heading_path="7 Liều dùng - Cách dùng > 7.1 Liều dùng",
+        source_slug="argyrol",
+        chunk_id="drug:argyrol:lieu-dung",
+        id="uuid-dose",
+    )
+    monkeypatch.setattr(
+        service,
+        "_local_drug_usage_candidates",
+        lambda slug: [dose] if slug == "argyrol" else [],
+    )
+
+    hits = service._ensure_drug_usage_context(
+        "Argyrol dùng như thế nào?",
+        [base, route],
+        [],
+        top_k=2,
+    )
+
+    assert [hit.id for hit in hits] == ["uuid-base", "uuid-dose"]
+
+
+def test_evidence_plan_promotes_target_heading_without_query_terms():
+    base = Hit(
+        text="Thông tin chung về Almagate.",
+        score=0.9,
+        source_type="drug",
+        source_name="Almagate",
+        heading_path="Đại cương",
+        source_slug="almagate",
+        chunk_id="drug:almagate:dai-cuong",
+        id="uuid-base",
+    )
+    disease = Hit(
+        text="Đau dạ dày có nhiều nguyên nhân.",
+        score=0.8,
+        source_type="disease",
+        source_name="Đau dạ dày",
+        heading_path="Triệu chứng",
+        source_slug="dau-da-day",
+        chunk_id="disease:dau-da-day:trieu-chung",
+        id="uuid-disease",
+    )
+    usage = Hit(
+        text="Liều dùng: người lớn uống 1-2 gói/lần, ngày 3 lần.",
+        score=0.4,
+        source_type="drug",
+        source_name="Almagate",
+        heading_path="Liều dùng và cách dùng",
+        source_slug="almagate",
+        chunk_id="drug:almagate:lieu-dung-va-cach-dung",
+        id="uuid-usage",
+    )
+
+    hits = service._apply_evidence_plan_context(
+        [base, disease],
+        [usage],
+        top_k=2,
+        evidence_plan={
+            "source_type": "drug",
+            "entity": "Almagate",
+            "target_heading_paths": ["Liều dùng và cách dùng"],
+        },
+    )
+
+    assert [hit.id for hit in hits] == ["uuid-base", "uuid-usage"]
+
+
+def test_evidence_plan_usage_slot_promotes_dosage_heading_without_target():
+    base = Hit(
+        text="Acid Mefenamic là thuốc chống viêm không steroid.",
+        score=0.9,
+        source_type="drug",
+        source_name="Acid Mefenamic",
+        heading_path="1 Dược lý",
+        source_slug="acid-mefenamic",
+        chunk_id="drug:acid-mefenamic:duoc-ly",
+        id="uuid-base",
+    )
+    caution = Hit(
+        text="Thận trọng khi có nguy cơ tim mạch.",
+        score=0.8,
+        source_type="drug",
+        source_name="Acid Mefenamic",
+        heading_path="7 Thận trọng",
+        source_slug="acid-mefenamic",
+        chunk_id="drug:acid-mefenamic:than-trong",
+        id="uuid-caution",
+    )
+    dosage = Hit(
+        text="Người lớn: 500mg/lần/ngày. Sau đó có thể dùng 250mg nếu cần.",
+        score=0.3,
+        source_type="drug",
+        source_name="Acid Mefenamic",
+        heading_path="4 Liều dùng và cách dùng > 4.1 Liều dùng",
+        source_slug="acid-mefenamic",
+        chunk_id="drug:acid-mefenamic:lieu-dung",
+        id="uuid-dosage",
+    )
+
+    hits = service._apply_evidence_plan_context(
+        [base, caution],
+        [dosage],
+        top_k=2,
+        evidence_plan={
+            "source_type": "drug",
+            "entity": "Acid Mefenamic",
+            "answer_slot": "dose",
+            "target_heading_paths": [],
+        },
+    )
+
+    assert [hit.id for hit in hits] == ["uuid-base", "uuid-dosage"]
+
+
 def test_hybrid_search_with_debug_serializes_every_stage_candidate(
     monkeypatch,
     caplog,

@@ -68,6 +68,8 @@ DISEASE_INFO_INSTRUCTIONS = """Miền trả lời: thông tin bệnh học.
 DRUG_INFO_INSTRUCTIONS = """Miền trả lời: thông tin thuốc.
 - Chỉ trả lời dựa trên chuyên luận thuốc trong tài liệu được cung cấp.
 - Giữ chính xác liều, đường dùng, tần suất, thời gian tối đa, chống chỉ định, đối tượng áp dụng và cảnh báo an toàn như tài liệu nêu.
+- Khi tài liệu có nhiều phác đồ theo bệnh, đối tượng, nguy cơ, tuổi hoặc đường dùng, hãy trả lời phác đồ khớp với tình trạng/đối tượng trong câu hỏi trước; không liệt kê phác đồ lân cận nếu người dùng không hỏi.
+- Không áp dụng phác đồ ghi riêng cho một bệnh/tình trạng khác chỉ vì có vài từ liên quan; nếu tình trạng trong câu hỏi không khớp rõ với phác đồ, nêu phần liều/cách dùng chung và nói phạm vi còn phụ thuộc bệnh/mức độ theo tài liệu.
 - Nếu tài liệu không có chi tiết liều/cách dùng/an toàn mà người dùng hỏi, nói rõ "Tài liệu được cung cấp không đủ thông tin" thay vì suy đoán.
 - Không thêm cảnh báo chung về sốt, triệu chứng nặng, gọi 115, phụ nữ có thai/cho con bú, bệnh gan/thận, dị ứng hoặc bệnh nền nếu chi tiết đó không có trong tài liệu được cung cấp.
 - Không trộn nguồn bệnh học vào câu trả lời liều, đường dùng hoặc chống chỉ định khi đã có nguồn thuốc phù hợp.
@@ -103,7 +105,8 @@ TURN_ANALYSIS_SYSTEM = """Bạn là bộ phân tích đầu vào cho chatbot y t
 3. Đánh giá mức độ khẩn cấp độc lập với mục đích hội thoại.
 4. Viết lại câu hỏi nếu cần lịch sử hội thoại.
 5. Trích xuất triệu chứng và thuốc nếu phù hợp.
-6. Xác định người mà thông tin y tế đề cập, các thực thể liên quan và dữ kiện có thể ghi nhớ.
+6. Lập kế hoạch bằng chứng cần truy xuất/trả lời theo ý nghĩa câu hỏi.
+7. Xác định người mà thông tin y tế đề cập, các thực thể liên quan và dữ kiện có thể ghi nhớ.
 
 Input: JSON {history: array, last_bot_message: str, session_context: object, user_message: str}
 
@@ -143,6 +146,18 @@ Trả về JSON đúng cấu trúc:
     "ambiguous": false,
     "clarification": "câu hỏi ngắn nếu không chắc người được nói đến",
     "active_subject_confidence": 0.0
+  },
+  "evidence_plan": {
+    "domain": "symptom_or_care | disease_info | drug_info | health_insurance_info",
+    "source_type": "medical | disease | drug | health_insurance",
+    "entity": "tên bệnh/thuốc/chủ đề luật chuẩn hóa hoặc null",
+    "answer_slot": "definition | symptoms | cause | transmission | diagnosis | treatment | prognosis | dose | route | duration | administration | contraindication | adverse_effect | interaction | pregnancy | pediatric | insurance_rule | first_aid | general",
+    "safety_mode": "factual_info | patient_action | emergency_action",
+    "target_heading_paths": ["tiêu đề/nhóm nội dung tài liệu có khả năng cần"],
+    "required_facts": ["các ý bắt buộc cần kiểm tra trong tài liệu"],
+    "answer_style": "direct_yes_no | exact_list | short_explanation | stepwise",
+    "confidence": 0.0,
+    "needs_fallback": false
   },
   "profile_candidates": [{
     "subject_id": "self | father | ...",
@@ -203,6 +218,18 @@ Quy tắc entity:
 - Nếu thông tin slot không có, bỏ key đó; không điền null.
 - Giữ nguyên tiếng Việt như người dùng nói.
 - Một lượt có thể có nhiều reference; không gán một topic độc quyền.
+
+Quy tắc evidence_plan:
+- Lập kế hoạch theo ý nghĩa câu hỏi, không dùng mẹo danh sách từ khóa.
+- domain="drug_info", source_type="drug" khi câu hỏi cần thông tin chuyên luận thuốc như công dụng, liều, cách dùng, đường dùng, thời gian dùng, chống chỉ định, tương tác, tác dụng không mong muốn hoặc an toàn thuốc.
+- domain="disease_info", source_type="disease" khi người dùng hỏi kiến thức bệnh học như định nghĩa, triệu chứng, nguyên nhân, lây truyền, chẩn đoán, điều trị, biến chứng, tiên lượng hoặc phòng bệnh, và không mô tả ca hiện tại cần phân luồng.
+- domain="symptom_or_care", source_type="medical" khi người dùng mô tả ca hiện tại, hỏi cần làm gì, cần đi khám không, hoặc cần định hướng an toàn.
+- domain="health_insurance_info", source_type="health_insurance" khi hỏi Luật bảo hiểm y tế/BHYT.
+- answer_slot phải thể hiện loại thông tin cần tìm, ví dụ dose/route/duration cho liều-cách dùng thuốc, contraindication cho chống chỉ định, symptoms cho biểu hiện bệnh, treatment cho điều trị, first_aid cho sơ cứu.
+- target_heading_paths là tên vùng tài liệu mong muốn theo nghĩa, không cần đúng tuyệt đối; điền 1-4 mục nếu biết, ví dụ "Liều dùng - Cách dùng", "Chống chỉ định", "Triệu chứng", "Điều trị".
+- required_facts nêu các ý mà câu trả lời phải bao phủ để tránh trả lời chung chung.
+- safety_mode="emergency_action" chỉ khi có người đang trong tình huống cần hành động cấp cứu ngay; câu hỏi kiến thức về cấp cứu/triệu chứng nguy hiểm dùng factual_info nếu không có ca hiện tại.
+- confidence phản ánh độ chắc của kế hoạch. Chỉ đặt needs_fallback=true khi thật sự không chắc domain/source/slot sau khi đã xem ngữ cảnh; fallback planner sẽ chạy thêm một lần nhỏ.
 
 Quy tắc subject/context:
 - Ưu tiên chủ thể nói rõ trong user_message ("tôi", "bố tôi"), rồi lựa chọn UI nếu có, rồi đại từ rõ ràng từ history.

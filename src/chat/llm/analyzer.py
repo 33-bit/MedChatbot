@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 
+from src.chat.evidence_plan import fallback_domain_for_intent, normalize_evidence_plan
 from src.chat.guards.guardrail import VALID_VERDICTS
 from src.chat.llm.mini import call_mini
 from src.chat.mode_policy import normalize_intent
@@ -127,6 +128,15 @@ def analyze_turn(
     if verdict != "allow" or label not in ANALYZABLE_LABELS:
         context = _empty_context(relation="off_topic" if verdict == "off_topic" else "uncertain")
         profile_candidates = []
+    evidence_plan = normalize_evidence_plan(
+        _dict_field(result, "evidence_plan"),
+        fallback_domain=fallback_domain_for_intent(intent, label),
+    )
+    if verdict != "allow" or label not in ANALYZABLE_LABELS:
+        evidence_plan = normalize_evidence_plan(
+            None,
+            fallback_domain=fallback_domain_for_intent(intent, label),
+        )
 
     return {
         "analysis_succeeded": True,
@@ -148,6 +158,7 @@ def analyze_turn(
         },
         "entities": {"symptoms": symptoms, "medications": medications},
         "context": context,
+        "evidence_plan": evidence_plan,
         "profile_candidates": profile_candidates,
     }
 
@@ -165,6 +176,10 @@ def _fallback(user_message: str) -> dict:
         "rewrite": {"rewritten": user_message, "confident": True, "clarification": ""},
         "entities": {"symptoms": [], "medications": []},
         "context": _empty_context(),
+        "evidence_plan": normalize_evidence_plan(
+            None,
+            fallback_domain="symptom_or_care",
+        ),
         "profile_candidates": [],
     }
 

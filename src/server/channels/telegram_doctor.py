@@ -2079,14 +2079,24 @@ async def relay_message(chat_id: int | str, message: dict) -> bool:
 async def handle_end(chat_id: int | str) -> bool:
     row = doctors.active_consultation_for_chat(chat_id)
     if row is None:
-        return False
-    # Bill any unbilled whole minutes of the current paid block before closing.
-    settlement = doctors.settle_block_minutes(row["id"])
-    if settlement is not None:
-        account_id, amount = settlement
-        if amount > 0:
-            wallet.debit(account_id, amount)
+        row = doctors.open_consultation_for_patient(chat_id)
+        if row is None:
+            return False
+    if row["status"] == "active":
+        # Bill any unbilled whole minutes of the current paid block before closing.
+        settlement = doctors.settle_block_minutes(row["id"])
+        if settlement is not None:
+            account_id, amount = settlement
+            if amount > 0:
+                wallet.debit(account_id, amount)
     doctors.end_consultation(row["id"])
+    if row["status"] == "pending":
+        await telegram.send_text(
+            row["patient_chat_id"],
+            "Yêu cầu tư vấn đã được hủy. Bạn có thể tiếp tục hỏi bot hoặc dùng /doctor để kết nối lại.",
+        )
+        await telegram.send_text(row["doctor_chat_id"], "Bệnh nhân đã hủy yêu cầu tư vấn.")
+        return True
     await telegram.send_text(
         row["patient_chat_id"],
         "Phiên tư vấn đã kết thúc. Bạn có thể tiếp tục hỏi bot hoặc dùng /doctor để kết nối lại.",

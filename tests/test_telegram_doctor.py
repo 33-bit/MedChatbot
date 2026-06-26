@@ -1245,6 +1245,25 @@ def test_handle_end_from_patient_closes_and_notifies_both(monkeypatch):
     assert any(cid == 1001 and "kết thúc" in text.lower() for cid, text in sent)
 
 
+def test_handle_end_from_patient_cancels_pending_request(monkeypatch):
+    doctor_id = doctors.create_doctor("BS Pending End", "Nội", "free", 0, 1002)
+    consult_id = doctors.create_consultation(8302, doctors.get_doctor(doctor_id), "free")
+    sent: list[tuple[int | str, str]] = []
+
+    async def fake_send_text(chat_id, text, *args, **kwargs):
+        sent.append((chat_id, text))
+
+    monkeypatch.setattr(telegram_doctor.telegram, "send_text", fake_send_text)
+
+    handled = asyncio.run(telegram_doctor.handle_end(8302))
+
+    assert handled is True
+    assert doctors.get_consultation(consult_id)["status"] == "ended"
+    assert doctors.open_consultation_for_patient(8302) is None
+    assert any(cid == 8302 and "hủy" in text.lower() for cid, text in sent)
+    assert any(cid == 1002 and "hủy" in text.lower() for cid, text in sent)
+
+
 def test_handle_end_returns_false_when_no_consultation():
     assert asyncio.run(telegram_doctor.handle_end(99991)) is False
 
