@@ -31,3 +31,4 @@ class Hit:
     source_slug: str = ""
     chunk_id: str = ""
     metadata: dict | None = None
+    id: str = ""

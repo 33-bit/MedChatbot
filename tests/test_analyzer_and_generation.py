@@ -325,6 +325,105 @@ def test_generator_strips_horizontal_rules_from_llm_answer(monkeypatch):
     assert "Ghi nhận: đau bụng và tiêu chảy [1].\n\nBạn nên bù nước." in answer
 
 
+def test_generator_uses_retrieved_drug_usage_when_model_claims_missing(monkeypatch):
+    hits = [
+        Hit(
+            text="Liều dùng: người lớn uống 1-2 gói/lần, ngày 3 lần.",
+            score=1.0,
+            source_type="drug",
+            source_name="Almagate",
+            heading_path="Liều dùng và cách dùng",
+            source_slug="almagate",
+            chunk_id="drug:almagate:lieu-dung-va-cach-dung",
+            id="uuid-usage",
+        )
+    ]
+    fake_response = {
+        "choices": [{
+            "message": {
+                "content": "Tài liệu được cung cấp không đủ thông tin để xác nhận liều/cách dùng."
+            }
+        }]
+    }
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=lambda **kwargs: fake_response)
+        )
+    )
+    monkeypatch.setattr(generator, "get_openai", lambda: fake_client)
+
+    answer = generator.generate(
+        "Almagate liều dùng thế nào?",
+        hits,
+        answer_domain="drug_info",
+    )
+
+    assert "người lớn uống 1-2 gói/lần, ngày 3 lần" in answer
+    assert "không đủ thông tin" not in answer.lower()
+    assert "Nguồn:" in answer
+
+
+def test_generator_drug_usage_fallback_includes_later_cach_dung_chunk(monkeypatch):
+    hits = [
+        Hit(
+            text=(
+                "5 Liều dùng - Cách dùng > 5.1 Liều dùng\n"
+                "Liều người lớn thông thường cho bệnh thiếu máu do thiếu sắt:\n"
+                "Liều khởi đầu: 960 mg/ngày ferrous gluconate (120 mg/ngày sắt nguyên tố) trong 3 tháng\n"
+                "Dùng chia làm nhiều lần (1 đến 3 lần mỗi ngày)"
+            ),
+            score=1.0,
+            source_type="drug",
+            source_name="Sắt Gluconat",
+            heading_path="5 Liều dùng - Cách dùng > 5.1 Liều dùng",
+            source_slug="sat-gluconat",
+            chunk_id="drug:sat-gluconat:lieu-dung",
+            id="uuid-dose",
+        ),
+        Hit(
+            text=(
+                "5 Liều dùng - Cách dùng > 5.2 Cách dùng\n"
+                "Uống gluconate sắt khi bụng đói, ít nhất 1 giờ trước hoặc 2 giờ sau bữa ăn.\n"
+                "Gluconate sắt có thể được dùng cùng với thức ăn nếu nó làm đau dạ dày. "
+                "Uống gluconate sắt với một ly nước đầy hoặc nước trái cây."
+            ),
+            score=0.9,
+            source_type="drug",
+            source_name="Sắt Gluconat",
+            heading_path="5 Liều dùng - Cách dùng > 5.2 Cách dùng",
+            source_slug="sat-gluconat",
+            chunk_id="drug:sat-gluconat:cach-dung",
+            id="uuid-cach-dung",
+        ),
+    ]
+    fake_response = {
+        "choices": [{
+            "message": {
+                "content": "Tài liệu được cung cấp không đủ thông tin để xác nhận liều/cách dùng."
+            }
+        }]
+    }
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=lambda **kwargs: fake_response)
+        )
+    )
+    monkeypatch.setattr(generator, "get_openai", lambda: fake_client)
+
+    answer = generator.generate(
+        "Tôi cần uống Sắt Gluconat như thế nào để đạt hiệu quả tốt nhất?",
+        hits,
+        answer_domain="drug_info",
+    )
+
+    assert "960 mg/ngày" in answer
+    assert "bụng đói" in answer
+    assert "1 giờ trước hoặc 2 giờ sau bữa ăn" in answer
+    assert "nước đầy hoặc nước trái cây" in answer
+    assert "5 Liều dùng - Cách dùng >" not in answer
+    assert "không đủ thông tin" not in answer.lower()
+
+
 def test_build_clarification_uses_patient_friendly_intro(monkeypatch):
     monkeypatch.setattr(
         differential,

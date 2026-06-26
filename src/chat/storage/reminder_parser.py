@@ -2,11 +2,16 @@ import datetime
 import json
 import logging
 import re
+import unicodedata
 from zoneinfo import ZoneInfo
 from src.chat.llm.mini import call_mini
 
 log = logging.getLogger(__name__)
 TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+MEDICAL_REMINDER_REJECTION_MESSAGE = (
+    "Mình chỉ hỗ trợ nhắc nhở y tế như uống thuốc hoặc lịch khám. "
+    "Ví dụ: “nhắc tôi uống thuốc lúc 20h” hoặc “nhắc tôi đi khám lúc 9h sáng mai”."
+)
 
 _DIRECT_REMINDER_PATTERNS = (
     r"^\s*/remind(?:@\w+)?\s+add\b",
@@ -23,6 +28,47 @@ def is_explicit_reminder_request(text: str) -> bool:
         re.search(pattern, text or "", flags=re.IGNORECASE)
         for pattern in _DIRECT_REMINDER_PATTERNS
     )
+
+
+def _normalize_guard_text(*parts: str | None) -> str:
+    text = " ".join(part or "" for part in parts).lower()
+    decomposed = unicodedata.normalize("NFD", text)
+    return "".join(
+        char for char in decomposed
+        if unicodedata.category(char) != "Mn"
+    )
+
+
+def is_supported_medical_reminder(
+    medical_type: str | None,
+    reminder_text: str | None,
+    *user_texts: str | None,
+) -> bool:
+    """Allow only medication or clinic reminders with explicit medical evidence."""
+    normalized = _normalize_guard_text(reminder_text, *user_texts)
+    medication = bool(re.search(
+        r"\b("
+        r"thuoc|pill|medicine|medication|meds|vitamin|supplement|"
+        r"thuc pham chuc nang|tpcn|lieu|insulin|khang sinh|"
+        r"antibiotic|panadol|paracetamol|ibuprofen|aspirin|vac xin|vaccine"
+        r")\b"
+        r"|\b(tiem|chich)\s+(insulin|thuoc|vac xin|vaccine)"
+        r"|\buong\s+(?!nuoc|cafe|ca phe|tra|sua|bia|ruou|nuoc ngot)\w+",
+        normalized,
+    ))
+    clinic = bool(re.search(
+        r"\b("
+        r"kham|tai kham|bac si|benh vien|phong kham|nha khoa|"
+        r"clinic|doctor|hospital|appointment|checkup|xet nghiem|sieu am|vac xin"
+        r")\b",
+        normalized,
+    ))
+
+    if medical_type == "medication":
+        return medication
+    if medical_type == "clinic":
+        return clinic
+    return medication or clinic
 
 
 def direct_reminder_fallback(text: str) -> dict:
@@ -165,6 +211,8 @@ If prior context is provided, determine if this new message is a relevant follow
 8. "is_past": bool. True if the scheduled time is in the past relative to current_time.
 9. "clarification_prompt": str | null. If is_complete is false and is_relevant_followup is true, provide a friendly, natural Vietnamese or English question (matching the user's language) to ask for the missing fields. Do not infer dosage or timing.
 
+Do not ask the user to confirm whether a clearly non-medical task is medical. A standalone answer like "có", "yes", "đúng", or "ok" is never enough to convert non-medical content into a medication or clinic reminder.
+
 If NO prior context is provided:
 1. "is_relevant_followup": bool (always true).
 2. "is_canceled": bool. True if the user starts with a cancel request.
@@ -178,6 +226,8 @@ If NO prior context is provided:
 10. "clarification_prompt": str | null (same as above).
 
 Rules:
+- Only medication reminders and clinic/doctor appointment reminders are supported.
+- Reject non-medical reminders such as cooking, meetings, shopping, studying, chores, entertainment, or other personal tasks.
 - Never infer medication dosage or timing that the user has not provided.
 - The user must explicitly state the schedule.
 - Standard schedule formats in JSON:

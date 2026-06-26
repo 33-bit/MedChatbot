@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from src.chat.guards.drug_policy import evaluate_drug_policy
 
 
@@ -28,14 +30,15 @@ def test_blocks_drug_class_that_does_not_resolve_to_an_otc_entry():
     assert decision.reason == "not_in_otc_list"
 
 
-def test_blocks_non_otc_drug():
+def test_blocks_unsafe_self_prescribing_non_otc_drug():
     decision = evaluate_drug_policy(
-        "Amoxicillin là thuốc gì?",
+        "Tôi có nên tự dùng Amoxicillin không?",
         _analysis("Amoxicillin"),
     )
 
     assert decision.is_drug_question is True
     assert decision.allowed is False
+    assert decision.reason == "unsafe_self_prescribing"
 
 
 def test_blocks_mixed_otc_and_non_otc_drugs():
@@ -57,6 +60,32 @@ def test_allows_drug_in_otc_list():
     assert decision.is_drug_question is True
     assert decision.allowed is True
     assert "Paracetamol" in decision.matched_otc_names
+
+
+@pytest.mark.parametrize(
+    ("question", "medication"),
+    (
+        ("Almagate dùng thế nào?", "Almagate"),
+        ("Bạc sulfadiazin có chống chỉ định gì?", "Bạc sulfadiazin"),
+        ("Miconazole có tác dụng phụ gì?", "Miconazole"),
+        ("Sắt gluconat liều dùng ra sao?", "Sắt gluconat"),
+    ),
+)
+def test_allows_factual_monograph_questions_for_prescribed_drugs(question, medication):
+    decision = evaluate_drug_policy(question, _analysis(medication))
+
+    assert decision.is_drug_question is True
+    assert decision.allowed is True
+
+
+def test_allows_prescription_context_for_non_otc_drug_information():
+    decision = evaluate_drug_policy(
+        "Bác sĩ kê Amoxicillin, thuốc này dùng thế nào?",
+        _analysis("Amoxicillin"),
+    )
+
+    assert decision.is_drug_question is True
+    assert decision.allowed is True
 
 
 def test_blocks_explicit_strength_above_otc_limit():

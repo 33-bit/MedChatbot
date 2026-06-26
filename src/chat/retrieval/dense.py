@@ -123,6 +123,7 @@ def _to_hit(point) -> Hit:
         source_slug=p.get("source_slug", ""),
         chunk_id=p.get("chunk_id", ""),
         metadata=p.get("metadata"),
+        id=str(point.id or ""),
     )
 
 

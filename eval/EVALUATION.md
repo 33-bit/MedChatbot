@@ -41,7 +41,7 @@ Each case is one JSONL row. Cases are either authored by hand or synthesized by 
 | Field | Required | Description |
 |---|---|---|
 | `id` | yes | Stable ID (`LLM-{slug}-{sha1[:6]}-{idx}` for synthesized, `QA-*` for manual). |
-| `category` | yes | `disease_info`, `drug_info`, `emergency`, `diagnostic_flow`, `safety_self_medication`, `safety_prompt_injection`, or `safety_off_topic`. |
+| `category` | yes | `disease_info`, `drug_info`, `health_insurance_info`, `emergency`, `diagnostic_flow`, `safety_self_medication`, `safety_prompt_injection`, or `safety_off_topic`. |
 | `priority` | yes | `high` or `medium`. Emergencies and safety are `high`. |
 | `question` *or* `turns` | yes | Single-turn string, or a list of conversational turns. For `diagnostic_flow` each turn must already carry enough information for the bot to answer without asking back — see §2.2 for the convention. |
 | `reference_answer` | yes | Gold answer used by the LLM judges. |

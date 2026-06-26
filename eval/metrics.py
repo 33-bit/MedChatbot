@@ -6,7 +6,17 @@ these helpers instead of duplicating scoring logic.
 
 from __future__ import annotations
 
+import re
 from typing import Any
+
+_SEMANTIC_CHUNK_PREFIXES = ("disease:", "drug:")
+_UUID_LIKE_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-"
+    r"[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{12}$"
+)
 
 
 def coerce_score(value: Any) -> float | None:
@@ -38,6 +48,14 @@ def apply_judge_score(
         scored["scoring_mode"] = "judge_error"
         return scored
 
+    if scored.get("judge_secondary"):
+        scored["judge"]["diagnostic_only"] = True
+        scored["judge"]["ignored_for_pass_fail"] = True
+        scored["deterministic_score"] = scored["score"]
+        scored["judge_score"] = judge_score
+        scored["scoring_mode"] = "deterministic_with_judge"
+        return scored
+
     required_checks_passed = all(check.get("passed") for check in scored.get("checks", []))
     scored["deterministic_score"] = scored["score"]
     scored["score"] = judge_score
@@ -59,6 +77,26 @@ def apply_answer_checks(
         if check is not None:
             output_checks.append(check)
     return apply_check_score(scored, pass_threshold)
+
+
+def gold_chunk_id_format(gold_chunks: list[str]) -> str:
+    if any(chunk.startswith(_SEMANTIC_CHUNK_PREFIXES) for chunk in gold_chunks):
+        return "semantic"
+    if gold_chunks and all(_UUID_LIKE_RE.match(chunk) for chunk in gold_chunks):
+        return "physical"
+    return "physical"
+
+
+def choose_retrieved_chunk_ids(
+    gold_chunks: list[str],
+    retrieved_chunks: list[str] | None,
+    retrieved_semantic_chunks: list[str] | None = None,
+) -> tuple[list[str], str]:
+    physical = list(retrieved_chunks or [])
+    semantic = list(retrieved_semantic_chunks or [])
+    if gold_chunk_id_format(gold_chunks) == "semantic":
+        return (semantic or physical), "semantic"
+    return physical, "physical"
 
 
 def gold_chunk_coverage_at_k(

@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -193,6 +195,39 @@ def test_retrieval_metrics_chunk_level_and_context_precision():
     assert metrics["context_precision@5"] == round(1 / 3, 4)
     assert metrics["gold_chunk_coverage@5"] == 1.0
     assert metrics["disease_source_coverage@5"] == 1.0
+
+
+def test_retrieval_metrics_use_semantic_chunks_for_disease_and_drug_gold():
+    runner = load_eval_runner()
+    metrics = runner.retrieval_metrics(
+        gold_slugs=["almagate"],
+        retrieved_slugs=["almagate"],
+        gold_chunks=["drug:almagate:lieu-dung-va-cach-dung"],
+        retrieved_chunks=["7fd9a6f1-45e2-4f8d-a1a4-705be6b0db8f"],
+        retrieved_semantic_chunks=["drug:almagate:lieu-dung-va-cach-dung"],
+        ks=(1,),
+    )
+
+    assert metrics["chunk_id_match_type"] == "semantic"
+    assert metrics["chunk_recall@1"] == 1.0
+    assert metrics["chunk_mrr"] == 1.0
+
+
+def test_retrieval_metrics_use_physical_chunks_for_uuid_gold():
+    runner = load_eval_runner()
+    uuid = "2105267c-82de-5678-8058-8c5b3a375840"
+    metrics = runner.retrieval_metrics(
+        gold_slugs=["22-vbhn-vpqh"],
+        retrieved_slugs=["22-vbhn-vpqh"],
+        gold_chunks=[uuid],
+        retrieved_chunks=[uuid],
+        retrieved_semantic_chunks=["health_insurance:22-vbhn-vpqh:article:23"],
+        ks=(1,),
+    )
+
+    assert metrics["chunk_id_match_type"] == "physical"
+    assert metrics["chunk_recall@1"] == 1.0
+    assert metrics["chunk_mrr"] == 1.0
 
 
 def test_retrieval_metrics_compute_source_type_coverage():
@@ -530,6 +565,46 @@ def test_run_direct_no_force_when_single_turn(tmp_path, monkeypatch):
     assert rows[0]["forced_direct_answer"] is False
     assert rows[0]["forced_mode"] == runner.EVAL_CHAT_MODE
     assert received == [("Triệu chứng cúm?", runner.EVAL_CHAT_MODE)]
+
+
+def test_run_direct_can_process_cases_concurrently(tmp_path, monkeypatch):
+    runner = load_eval_runner()
+    dataset = tmp_path / "dataset.jsonl"
+    dataset.write_text(
+        "\n".join([
+            '{"id":"D-1","category":"disease_info","priority":"medium",'
+            '"question":"Q1","requires_citation":true}',
+            '{"id":"D-2","category":"disease_info","priority":"medium",'
+            '"question":"Q2","requires_citation":true}',
+        ]),
+        encoding="utf-8",
+    )
+    lock = threading.Lock()
+    state = {"active": 0, "max_active": 0}
+
+    def fake_answer_with_meta(turn, session_id="default", mode="auto"):
+        with lock:
+            state["active"] += 1
+            state["max_active"] = max(state["max_active"], state["active"])
+        time.sleep(0.05)
+        with lock:
+            state["active"] -= 1
+        return f"{turn} [1]", {}
+
+    fake_chat = SimpleNamespace(answer_with_meta=fake_answer_with_meta)
+    monkeypatch.setitem(sys.modules, "src.chat", fake_chat)
+
+    args = SimpleNamespace(
+        bot_name="bot", dataset=dataset, ids=[], limit=None,
+        out_dir=tmp_path, output=tmp_path / "out.jsonl",
+        pass_threshold=0.0, use_judge=False,
+        session_prefix="eval", exclude_categories=[],
+        concurrency=2,
+    )
+    assert runner.run_direct(args) == 0
+    rows = [json.loads(l) for l in (tmp_path / "out.jsonl").read_text().splitlines() if l.strip()]
+    assert [row["case_id"] for row in rows] == ["D-1", "D-2"]
+    assert state["max_active"] == 2
 
 
 def test_write_per_category_files(tmp_path):

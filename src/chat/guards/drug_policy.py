@@ -29,6 +29,43 @@ _DRUG_REQUEST_PATTERNS = (
     ),
     re.compile(r"\b(?:lieu dung|uong bao nhieu|may vien|ngay uong)\b"),
 )
+_PRESCRIPTION_CONTEXT_TERMS = (
+    "bac si ke",
+    "bac si da ke",
+    "duoc ke don",
+    "theo don",
+    "co don",
+    "don thuoc",
+    "bac si cho",
+)
+_FACTUAL_MONOGRAPH_TERMS = (
+    "la gi",
+    "thong tin",
+    "cong dung",
+    "tac dung",
+    "tac dung phu",
+    "phan ung phu",
+    "chi dinh",
+    "chong chi dinh",
+    "tuong tac",
+    "lieu dung",
+    "cach dung",
+    "dung the nao",
+    "duong dung",
+    "luu y",
+)
+_UNSAFE_SELF_PRESCRIBING_TERMS = (
+    "tu dung",
+    "tu uong",
+    "tu mua",
+    "khong can don",
+    "khong co don",
+    "co nen dung",
+    "co nen uong",
+    "dung duoc khong",
+    "uong duoc khong",
+    "mua ve dung",
+)
 _NON_DRUG_NEGATIONS = (
     "khong dung thuoc",
     "khong su dung thuoc",
@@ -213,6 +250,30 @@ def _is_drug_question(question: str, analysis: dict, candidates: list[str]) -> b
     return _has_explicit_drug_request(question)
 
 
+def _has_prescription_context(question: str) -> bool:
+    normalized = _normalize(question)
+    return any(term in normalized for term in _PRESCRIPTION_CONTEXT_TERMS)
+
+
+def _is_factual_monograph_question(question: str) -> bool:
+    normalized = _normalize(question)
+    return any(term in normalized for term in _FACTUAL_MONOGRAPH_TERMS)
+
+
+def _is_unsafe_self_prescribing_request(question: str) -> bool:
+    normalized = _normalize(question)
+    return any(term in normalized for term in _UNSAFE_SELF_PRESCRIBING_TERMS)
+
+
+def _looks_like_specific_drug_candidate(candidate: str) -> bool:
+    normalized = _normalize(candidate)
+    if not normalized:
+        return False
+    generic_terms = {"thuoc", "nhom", "loai", "khang", "uc che"}
+    tokens = normalized.split()
+    return not any(token in generic_terms for token in tokens)
+
+
 def _contains_alias(text: str, alias: str) -> bool:
     return re.search(
         rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])",
@@ -326,10 +387,15 @@ def _entry_matches_explicit_constraints(entry: _OtcEntry, question: str) -> bool
 
 
 def evaluate_drug_policy(question: str, analysis: dict) -> DrugPolicyDecision:
-    """Allow only resolved OTC drug questions and explicit in-range constraints."""
+    """Block unsafe self-prescribing while allowing source-grounded drug info."""
     candidates = _medication_candidates(analysis)
     if not _is_drug_question(question, analysis, candidates):
         return DrugPolicyDecision(False, True, "not_a_drug_question")
+
+    has_prescription_context = _has_prescription_context(question)
+    factual_monograph = _is_factual_monograph_question(question)
+    unsafe_self_prescribing = _is_unsafe_self_prescribing_request(question)
+    source_grounded_allowed = has_prescription_context or factual_monograph
 
     if analysis.get("analysis_succeeded") is False and not candidates:
         return DrugPolicyDecision(True, False, "unresolved_drug")
@@ -348,6 +414,10 @@ def evaluate_drug_policy(question: str, analysis: dict) -> DrugPolicyDecision:
         for segment in segments:
             entries = _candidate_entries(segment)
             if not entries:
+                if unsafe_self_prescribing and not has_prescription_context:
+                    return DrugPolicyDecision(True, False, "unsafe_self_prescribing")
+                if source_grounded_allowed and _looks_like_specific_drug_candidate(segment):
+                    return DrugPolicyDecision(True, True, "source_grounded_drug_info")
                 return DrugPolicyDecision(True, False, "not_in_otc_list")
             constrained_entries = [
                 entry
@@ -355,6 +425,8 @@ def evaluate_drug_policy(question: str, analysis: dict) -> DrugPolicyDecision:
                 if _entry_matches_explicit_constraints(entry, question)
             ]
             if not constrained_entries:
+                if source_grounded_allowed and _looks_like_specific_drug_candidate(segment):
+                    return DrugPolicyDecision(True, True, "source_grounded_drug_info")
                 return DrugPolicyDecision(True, False, "outside_otc_constraints")
             matched_entries.extend(constrained_entries)
 

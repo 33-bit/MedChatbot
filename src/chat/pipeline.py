@@ -19,7 +19,7 @@ import unicodedata
 import uuid
 from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from dataclasses import asdict
-from typing import Any
+from typing import Any, Callable
 
 from src.chat.diagnosis.clarification_options import (
     detail_options_from_catalog,
@@ -40,9 +40,10 @@ from src.chat.diagnosis.entities import normalize_entities
 from src.chat.diagnosis.flow import build_general_triage_prompt, direct_diagnostic_prompt
 from src.chat.guards.drug_policy import OTC_ONLY_REPLY, evaluate_drug_policy
 from src.chat.guards.guardrail import VERDICT_REPLIES, regex_check
+from src.chat.health_insurance import is_health_insurance_query
 from src.chat.guards.quota import check_both as check_llm_quota
 from src.chat.llm.analyzer import analyze_turn
-from src.chat.llm.generator import generate
+from src.chat.llm.generator import AnswerDomain, generate
 from src.chat.context.domain import ClinicalCase, ConversationContextBundle
 from src.chat.context.resolver import format_subject_address
 from src.chat.profile.runtime import (
@@ -77,7 +78,7 @@ from src.chat.storage.session import (
 )
 from src.chat.context.context_store import load_conversation_context
 from src.chat.timing import elapsed_ms, log_trace_timing
-from src.config import CONVERSATION_CONTEXT_ENABLED, RERANK_TOP_K
+from src.config import CONVERSATION_CONTEXT_ENABLED, EMERGENCY_RAG_ENABLED, PIPELINE_EMERGENCY_RAG, RERANK_TOP_K
 
 GREETING_REPLY = ("Xin chào! Tôi là trợ lý y tế. Bạn có thể mô tả triệu chứng "
                   "hoặc hỏi về bệnh/thuốc cụ thể.")
@@ -87,6 +88,18 @@ _YES_CHOICES = {"co"}
 _NO_CHOICES = {"khong"}
 _UNKNOWN_CHOICES = {"khong ro", "khong biet", "chua ro", "chua biet"}
 _ANSWER_NOW_CHOICES = {"tra loi luon", "cu tra loi", "tra loi di"}
+_DISEASE_INFO_TERMS = (
+    "la gi",
+    "nguyen nhan",
+    "trieu chung",
+    "dieu tri",
+    "giai doan",
+    "phan loai",
+    "chan doan",
+    "xet nghiem",
+    "bien chung",
+    "co lay",
+)
 _MEDICATION_INFO_TERMS = (
     "lieu",
     "lieu dung",
@@ -106,6 +119,89 @@ _MEDICATION_INFO_TERMS = (
     "uong may",
     "uong bao",
     "ngay uong",
+)
+_TOXICOLOGY_TERMS = (
+    "ma tuy",
+    "bong cuoi",
+    "khi cuoi",
+    "ngo doc",
+    "lam dung chat",
+    "chat gay nghien",
+)
+_TOXICOLOGY_HEALTH_TERMS = (
+    "suc khoe",
+    "tac hai",
+    "anh huong",
+    "co hai",
+    "trieu chung",
+    "ngo doc",
+    "qua lieu",
+    "nghien",
+    "lam dung",
+    "cai",
+    "dieu tri",
+    "nguy hiem",
+    "hau qua",
+    "gay hai",
+    "gay benh",
+)
+_EMERGENCY_ACTION_TERMS = (
+    "toi phai lam gi",
+    "phai lam gi",
+    "nen lam gi",
+    "can lam gi",
+    "lam sao",
+    "xu tri the nao",
+    "xu tri sao",
+    "xu ly the nao",
+    "so cuu",
+    "cap cuu khong",
+    "can cap cuu",
+    "co can cap cuu",
+    "goi 115",
+    "goi cap cuu",
+    "di cap cuu",
+    "dua di cap cuu",
+    "dua den vien",
+    "dua vao vien",
+)
+_EMERGENCY_FACTUAL_TERMS = (
+    "la gi",
+    "trieu chung",
+    "dau hieu",
+    "bieu hien",
+    "nguyen nhan",
+    "chan doan",
+    "xet nghiem",
+    "bien chung",
+    "phan loai",
+    "co che",
+    "dinh nghia",
+    "mo ta",
+    "thong tin",
+)
+_EMERGENCY_PROTOCOL_INFO_TERMS = (
+    "truyen dich",
+    "bu dich",
+    "hoi suc dich",
+    "phac do",
+    "cap cuu ban dau",
+)
+_CURRENT_CASE_TERMS = (
+    "toi bi",
+    "toi dang",
+    "minh bi",
+    "minh dang",
+    "em bi",
+    "em dang",
+    "bo toi",
+    "ba toi",
+    "me toi",
+    "chong toi",
+    "vo toi",
+    "con toi",
+    "nguoi nha",
+    "ban toi",
 )
 _DETAIL_PREFIX = "detail:"
 _DETAIL_SLOT_ORDER = ("onset", "severity", "pattern", "associated")
@@ -157,6 +253,7 @@ def _record_hits(hits: list[Hit]) -> None:
             "source_slug": h.source_slug,
             "source_name": h.source_name,
             "heading_path": h.heading_path,
+            "id": h.id,
             "chunk_id": h.chunk_id,
             "score": h.score,
             **({"text": h.text} if include_text else {}),
@@ -295,7 +392,7 @@ def _last_bot_message(session: PatientSession) -> str:
 
 
 def _choice_key(text: str) -> str:
-    normalized = unicodedata.normalize("NFD", text.strip().casefold())
+    normalized = unicodedata.normalize("NFD", text.strip().casefold().replace("đ", "d"))
     no_marks = "".join(
         char for char in normalized if unicodedata.category(char) != "Mn"
     )
@@ -326,6 +423,79 @@ def _is_answer_now_choice(text: str) -> bool:
 def _looks_like_medication_info_question(text: str) -> bool:
     key = _choice_key(text)
     return any(term in key for term in _MEDICATION_INFO_TERMS)
+
+
+def _looks_like_disease_info_question(text: str) -> bool:
+    key = _choice_key(text)
+    return any(term in key for term in _DISEASE_INFO_TERMS)
+
+
+def _is_medical_toxicology_query(text: str) -> bool:
+    key = _choice_key(text)
+    has_toxicology_term = any(term in key for term in _TOXICOLOGY_TERMS)
+    if not has_toxicology_term:
+        return False
+    if "ngo doc" in key:
+        return True
+    return any(term in key for term in _TOXICOLOGY_HEALTH_TERMS)
+
+
+def _asks_emergency_action(text: str) -> bool:
+    key = _choice_key(text)
+    return any(term in key for term in _EMERGENCY_ACTION_TERMS)
+
+
+def _looks_like_current_emergency_case(text: str) -> bool:
+    key = _choice_key(text)
+    return any(term in key for term in _CURRENT_CASE_TERMS)
+
+
+def _looks_like_factual_emergency_topic(text: str) -> bool:
+    key = _choice_key(text)
+    if _asks_emergency_action(key):
+        return False
+    if any(term in key for term in _EMERGENCY_FACTUAL_TERMS):
+        return True
+    if _looks_like_current_emergency_case(key):
+        return False
+    return any(term in key for term in _EMERGENCY_PROTOCOL_INFO_TERMS)
+
+
+def _allow_rag_drug_info(question: str, label: str, intent: str) -> bool:
+    if label == "greeting_other" or intent == "off_scope":
+        return False
+    return (
+        intent in {"contextual_drug_info", "pure_info"}
+        or _looks_like_medication_info_question(question)
+    )
+
+
+def _infer_answer_domain(
+    question: str,
+    hits: list[Hit],
+    turn_intent: str = "",
+) -> AnswerDomain:
+    if turn_intent == "health_insurance_info":
+        return "health_insurance_info"
+    if turn_intent == "contextual_drug_info":
+        return "drug_info"
+
+    top_hits = hits[:5]
+    drug_count = sum(1 for hit in top_hits if hit.source_type == "drug")
+    disease_count = sum(1 for hit in top_hits if hit.source_type == "disease")
+
+    if drug_count and drug_count >= disease_count:
+        return "drug_info"
+    if (
+        disease_count
+        and disease_count >= drug_count
+        and (
+            _looks_like_disease_info_question(question)
+            or turn_intent in {"pure_info", "condition_management_info"}
+        )
+    ):
+        return "disease_info"
+    return "symptom_or_care"
 
 
 def _question_variants(value: Any) -> list[str]:
@@ -736,9 +906,16 @@ def _handle_diagnostic(
             trace_id,
             use_patient_context=True,
             retrieval_question=retrieval_query,
+            answer_domain="symptom_or_care",
         )
     # Enough narrowing — answer with RAG + KG and patient context
-    return _handle_informational(session, question, trace_id, use_patient_context=True)
+    return _handle_informational(
+        session,
+        question,
+        trace_id,
+        use_patient_context=True,
+        answer_domain="symptom_or_care",
+    )
 
 
 def _handle_clarification_answer(
@@ -822,6 +999,8 @@ def _handle_informational(
     trace_id: str,
     use_patient_context: bool = False,
     retrieval_question: str | None = None,
+    turn_intent: str = "",
+    answer_domain: AnswerDomain | None = None,
 ) -> str:
     stage_start = time.perf_counter()
     search_question = retrieval_question or question
@@ -931,6 +1110,14 @@ def _handle_informational(
                 hits=len(hits), kg_chars=len(kg_text))
     _record_hits(hits)
     _record_latency("retrieval", elapsed_ms(stage_start))
+    answer_domain = answer_domain or _infer_answer_domain(
+        search_question,
+        hits,
+        turn_intent,
+    )
+    active_meta = _meta()
+    if active_meta is not None:
+        active_meta["answer_domain"] = answer_domain
 
     patient_dict = None
     profile_text = ""
@@ -962,13 +1149,24 @@ def _handle_informational(
     try:
         if _meta() is not None:
             reply, gen_meta = generate(
-                question, hits, kg_text=kg_text, patient=patient_dict, return_meta=True,
+                question,
+                hits,
+                kg_text=kg_text,
+                patient=patient_dict,
+                answer_domain=answer_domain,
+                return_meta=True,
             )
             _record_usage("generator", gen_meta.get("usage"), model=gen_meta.get("model"))
             _meta()["doctor_offer"] = bool(gen_meta.get("doctor_handoff_recommended"))
             _meta()["doctor_specialty"] = gen_meta.get("doctor_specialty")
         else:
-            reply = generate(question, hits, kg_text=kg_text, patient=patient_dict)
+            reply = generate(
+                question,
+                hits,
+                kg_text=kg_text,
+                patient=patient_dict,
+                answer_domain=answer_domain,
+            )
     except Exception:
         _log_failed_timing(trace_id, "generate", stage_start)
         raise
@@ -1004,11 +1202,18 @@ def _handle_health_insurance(question: str, trace_id: str) -> str:
     _record_timing("hybrid_search", hits_elapsed, {"hits": len(hits)})
     _record_hits(hits)
     _record_latency("retrieval", elapsed_ms(stage_start))
+    if active_meta is not None:
+        active_meta["answer_domain"] = "health_insurance_info"
 
     stage_start = time.perf_counter()
     try:
         if active_meta is not None:
-            reply, gen_meta = generate(question, hits, return_meta=True)
+            reply, gen_meta = generate(
+                question,
+                hits,
+                answer_domain="health_insurance_info",
+                return_meta=True,
+            )
             _record_usage(
                 "generator",
                 gen_meta.get("usage"),
@@ -1017,7 +1222,11 @@ def _handle_health_insurance(question: str, trace_id: str) -> str:
             active_meta["doctor_offer"] = False
             active_meta["doctor_specialty"] = None
         else:
-            reply = generate(question, hits)
+            reply = generate(
+                question,
+                hits,
+                answer_domain="health_insurance_info",
+            )
     except Exception:
         _log_failed_timing(trace_id, "generate", stage_start)
         raise
@@ -1035,9 +1244,53 @@ def _route(
     trace_id: str,
     use_patient_context_override: bool | None = None,
     emergency_subject: str = "bạn",
+    emergency_red_flags: list[str] | None = None,
+    emergency_context: dict | None = None,
+    on_preliminary_reply: Callable[[str], None] | None = None,
+    use_emergency_rag: bool | None = None,
+    turn_intent: str = "",
 ) -> str:
     if label == "emergency":
-        return emergency_reply(emergency_subject)
+        emergency_question = question if rewritten == question else f"{question}\n{rewritten}"
+        if use_emergency_rag is None:
+            use_emergency_rag = PIPELINE_EMERGENCY_RAG
+        # Always emit the deterministic fast reply first (so the user sees
+        # 115 + first cues without waiting for retrieval). For channels
+        # that want a real two-message UX, ``on_preliminary_reply`` is
+        # invoked synchronously with the fast reply.
+        from src.chat.replies import emergency_fast_reply
+        fast = emergency_fast_reply(
+            emergency_subject,
+            red_flags=emergency_red_flags,
+            question=emergency_question,
+            context=emergency_context,
+        )
+        if on_preliminary_reply is not None:
+            try:
+                on_preliminary_reply(fast)
+            except Exception:
+                log.exception("preliminary emergency reply callback failed trace=%s", trace_id)
+        if not use_emergency_rag:
+            return fast
+        try:
+            if on_preliminary_reply is not None:
+                from src.chat.replies import emergency_first_aid_reply
+                return emergency_first_aid_reply(
+                    emergency_question,
+                    red_flags=emergency_red_flags,
+                    subject_address=emergency_subject,
+                )
+            from src.chat.replies import emergency_reply as _emergency_reply
+            return _emergency_reply(
+                emergency_subject,
+                red_flags=emergency_red_flags,
+                question=emergency_question,
+                context=emergency_context,
+                use_rag=True,
+            )
+        except Exception:
+            log.exception("Emergency RAG failed trace=%s", trace_id)
+            return fast
     if label == "health_insurance":
         return _handle_health_insurance(rewritten, trace_id)
     if label == "clarification_answer":
@@ -1058,6 +1311,7 @@ def _route(
         rewritten,
         trace_id,
         use_patient_context=use_patient_context,
+        turn_intent=turn_intent,
     )
 
 
@@ -1137,6 +1391,8 @@ def _answer_inner(
     owner_id: str | None = None,
     previous_owner_ids: tuple[str, ...] = (),
     mode: str = "auto",
+    on_preliminary_reply: Callable[[str], None] | None = None,
+    use_emergency_rag: bool | None = None,
 ) -> str:
     question = (question or "").strip()
     if not question:
@@ -1246,7 +1502,87 @@ def _answer_inner(
     turn = analysis["turn"]
     label = turn["label"]
     intent = normalize_intent(turn.get("intent"), label)
+    rewrite = analysis.get("rewrite") if isinstance(analysis.get("rewrite"), dict) else {}
+    health_insurance_detected = (
+        is_health_insurance_query(question)
+        or is_health_insurance_query(str(rewrite.get("rewritten") or ""))
+    )
+    if health_insurance_detected and guard.get("verdict") in {"allow", "off_topic"}:
+        guard["verdict"] = "allow"
+        guard["reason"] = "deterministic_health_insurance_route"
+        label = "informational"
+        intent = "health_insurance_info"
+        turn["label"] = label
+        turn["intent"] = intent
+        analysis.setdefault("entities", {}).setdefault("symptoms", [])
+        analysis.setdefault("entities", {}).setdefault("medications", [])
+        rewrite = analysis.setdefault("rewrite", {})
+        rewrite.setdefault("rewritten", question)
+        rewrite.setdefault("confident", True)
+        rewrite.setdefault("clarification", "")
+        if meta is not None:
+            meta["health_insurance_detector"] = "forced"
+    toxicology_detected = (
+        _is_medical_toxicology_query(question)
+        or _is_medical_toxicology_query(str(rewrite.get("rewritten") or ""))
+    )
+    if (
+        toxicology_detected
+        and not health_insurance_detected
+        and guard.get("verdict") in {"allow", "off_topic"}
+    ):
+        guard["verdict"] = "allow"
+        guard["reason"] = "deterministic_medical_toxicology_scope"
+        label = "informational"
+        intent = "pure_info"
+        turn["label"] = label
+        turn["intent"] = intent
+        analysis.setdefault("entities", {}).setdefault("symptoms", [])
+        analysis.setdefault("entities", {}).setdefault("medications", [])
+        rewrite = analysis.setdefault("rewrite", {})
+        rewrite.setdefault("rewritten", question)
+        rewrite.setdefault("confident", True)
+        rewrite.setdefault("clarification", "")
+        if meta is not None:
+            meta["medical_toxicology_detector"] = "forced"
     context = analysis.get("context") if isinstance(analysis.get("context"), dict) else {}
+    triage = analysis.get("triage") if isinstance(analysis.get("triage"), dict) else {}
+    red_flags = triage.get("red_flags")
+    emergency_red_flags = red_flags if isinstance(red_flags, list) else None
+    try:
+        from src.chat.emergency import classify_emergency_intent
+        emergency_intent = classify_emergency_intent(question, emergency_red_flags)
+    except Exception:  # pragma: no cover - route override must never break chat
+        emergency_intent = None
+    emergency_topic_info = bool(
+        emergency_intent
+        and _looks_like_factual_emergency_topic(question)
+    )
+    emergency_action_needed = bool(
+        emergency_intent
+        and not emergency_topic_info
+        and (
+            triage.get("urgency") == "emergency"
+            or bool(emergency_red_flags)
+            or _asks_emergency_action(question)
+            or _looks_like_current_emergency_case(question)
+        )
+    )
+    if emergency_topic_info:
+        if label == "emergency" or intent == "emergency":
+            label = "informational"
+            intent = "pure_info"
+            turn["label"] = label
+            turn["intent"] = intent
+        if meta is not None:
+            meta["emergency_intent_topic_info"] = emergency_intent
+    elif emergency_action_needed:
+        label = "emergency"
+        intent = "emergency"
+        triage["urgency"] = "emergency"
+        meta = _meta()
+        if meta is not None:
+            meta["emergency_intent_override"] = emergency_intent
     if not CONVERSATION_CONTEXT_ENABLED and context.get("relation") == "switch_subject":
         _reset_diagnostic_workflow(session)
     direct_answer_for_log = (
@@ -1288,7 +1624,15 @@ def _answer_inner(
             "reason": drug_policy.reason,
             "matched_otc_names": list(drug_policy.matched_otc_names),
         }
-    if drug_policy.is_drug_question and not drug_policy.allowed:
+    allow_rag_drug_info = (
+        drug_policy.is_drug_question
+        and not drug_policy.allowed
+        and drug_policy.reason not in {"unresolved_drug", "unsafe_self_prescribing"}
+        and _allow_rag_drug_info(question, label, intent)
+    )
+    if meta is not None and allow_rag_drug_info:
+        meta["drug_policy"]["rag_drug_info_override"] = True
+    if drug_policy.is_drug_question and not drug_policy.allowed and not allow_rag_drug_info:
         session.add_message("user", question)
         session.add_message("assistant", OTC_ONLY_REPLY)
         _persist_final_turn(
@@ -1414,6 +1758,10 @@ def _answer_inner(
         raise
     _record_mode_decision(mode, intent, decision, question)
     route_label = decision.route_label or label
+    if route_label == "informational" and health_insurance_detected:
+        route_label = "health_insurance"
+        if meta is not None:
+            meta["health_insurance_detector"] = "route_fallback"
     meta = _meta()
     if meta is not None and meta.get("_collect_graph"):
         meta["_graph_route"] = {
@@ -1487,6 +1835,11 @@ def _answer_inner(
             emergency_subject=format_subject_address(
                 (analysis.get("context") or {}).get("subject")
             ),
+            emergency_red_flags=emergency_red_flags,
+            emergency_context=context,
+            on_preliminary_reply=on_preliminary_reply,
+            use_emergency_rag=use_emergency_rag,
+            turn_intent=intent,
         )
     except Exception:
         log.exception("Pipeline route failed trace=%s", trace_id)
@@ -1529,6 +1882,8 @@ def answer(
     session_id: str = "default",
     owner_id: str | None = None,
     mode: str = "auto",
+    on_preliminary_reply: Callable[[str], None] | None = None,
+    use_emergency_rag: bool | None = None,
 ) -> str:
     trace_id = uuid.uuid4().hex[:8]
     request_start = time.perf_counter()
@@ -1540,6 +1895,8 @@ def answer(
             request_start,
             owner_id=owner_id,
             mode=mode,
+            on_preliminary_reply=on_preliminary_reply,
+            use_emergency_rag=use_emergency_rag,
         )
     except Exception:
         log.exception("Pipeline failed trace=%s", trace_id)
@@ -1836,6 +2193,8 @@ def answer_with_meta(
     session_id: str = "default",
     owner_id: str | None = None,
     mode: str = "auto",
+    on_preliminary_reply: Callable[[str], None] | None = None,
+    use_emergency_rag: bool | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Like `answer`, but also returns a meta dict capturing usage, retrieved
     hits, and per-stage latency for the turn. Eval-only entry point — channels
@@ -1854,6 +2213,8 @@ def answer_with_meta(
                 request_start,
                 owner_id=owner_id,
                 mode=mode,
+                on_preliminary_reply=on_preliminary_reply,
+                use_emergency_rag=use_emergency_rag,
             )
         except Exception:
             log.exception("Pipeline failed trace=%s", trace_id)

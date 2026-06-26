@@ -26,7 +26,7 @@ import httpx
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
 from src.chat import answer_with_choices
-from src.chat.mode_policy import mode_label, normalize_mode
+from src.chat.mode_policy import normalize_mode
 from src.chat.replies import ChatReply, TECHNICAL_ERROR_REPLY
 from src.chat.security.identity import derive_previous_owner_keys, derive_request_identity
 from src.chat.storage.feedback import create_feedback_request, record_feedback_rating
@@ -68,18 +68,23 @@ TG_MAX_LEN = 4000  # safe under Telegram's 4096-byte limit
 TG_HARD_MAX_BYTES = 4096
 TYPING_REFRESH_SECONDS = 4.0
 BOT_COMMANDS = [
-    {"command": "menu", "description": "📋 Menu các lệnh hỗ trợ"},
+    {"command": "menu", "description": "📋 Mở danh sách việc cần làm"},
     {"command": "help", "description": "📝 Cách đặt câu hỏi"},
-    {"command": "mode", "description": "⚙️ Chọn chế độ trả lời"},
-    {"command": "tts", "description": "🔊 Bật/tắt đọc câu trả lời"},
-    {"command": "remind", "description": "🔔 Đặt nhắc nhở y tế"},
+    {"command": "mode", "description": "⚙️ Chọn cách bot trả lời"},
+    {"command": "tts", "description": "🔊 Nghe câu trả lời"},
+    {"command": "remind", "description": "🔔 Nhắc uống thuốc hoặc tái khám"},
     {"command": "doctor", "description": "👨‍⚕️ Kết nối bác sĩ"},
     {"command": "end", "description": "⛔ Kết thúc tư vấn bác sĩ"},
-    {"command": "topup", "description": "💰 Nạp tiền vào tài khoản"},
+    {"command": "topup", "description": "💰 Nạp tiền"},
     {"command": "balance", "description": "💳 Xem số dư"},
-    {"command": "paydebt", "description": "🧾 Thanh toán công nợ"},
-    {"command": "new", "description": "🔄 Xóa ngữ cảnh và bắt đầu lượt mới"},
-    {"command": "profile", "description": "🩺 Hồ sơ y tế cá nhân"},
+    {"command": "paydebt", "description": "🧾 Trả khoản nợ"},
+    {"command": "new", "description": "🔄 Bắt đầu câu hỏi mới"},
+    {"command": "profile", "description": "🩺 Hồ sơ y tế của tôi"},
+]
+ADMIN_BOT_COMMANDS = [
+    *BOT_COMMANDS,
+    {"command": "admin_doctors", "description": "🛠 Quản lý bác sĩ"},
+    {"command": "admin_paid", "description": "💵 Xác nhận đơn nạp tiền"},
 ]
 START_TEXT = """Xin chào! Tôi là trợ lý y tế.
 
@@ -90,7 +95,7 @@ Ví dụ:
 - Phòng bệnh cúm như thế nào?
 - Paracetamol dùng để làm gì?
 
-Dùng /mode để chọn chế độ trả lời: Auto, Thông tin hoặc Chẩn đoán.
+Bấm /menu để xem các nút hỗ trợ. Dùng /mode để chọn cách trả lời: Tự động, Thông tin hoặc Tư vấn triệu chứng.
 
 Nếu có triệu chứng nặng như khó thở, đau ngực dữ dội, lơ mơ, yếu liệt, co giật hoặc chảy máu nhiều, hãy đi cấp cứu ngay."""
 
@@ -99,9 +104,44 @@ HELP_TEXT = """Cách sử dụng:
 - Mô tả rõ triệu chứng, thời gian bắt đầu, mức độ và bệnh nền nếu có.
 - Với câu hỏi về thuốc, hãy gửi tên hoạt chất hoặc tên thuốc bạn muốn hỏi.
 - Khi tôi hỏi thêm triệu chứng, bạn có thể trả lời ngắn gọn theo từng ý.
-- Dùng /mode để chọn chế độ trả lời: Auto, Thông tin hoặc Chẩn đoán.
+- Bấm /menu để xem các nút hỗ trợ.
+- Dùng /mode để chọn cách trả lời: Tự động, Thông tin hoặc Tư vấn triệu chứng.
 
 Lưu ý: Tôi hỗ trợ thông tin y tế, không thay thế bác sĩ. Nếu tình trạng nặng hoặc diễn tiến nhanh, hãy đi khám/cấp cứu."""
+
+MENU_TEXT = """📋 **Bạn muốn làm gì?**
+
+Bấm một nút bên dưới. Nếu chưa biết chọn gì, hãy bấm **Cách đặt câu hỏi** hoặc gõ trực tiếp câu hỏi của bạn."""
+
+REMINDER_MENU_TEXT = (
+    "🔔 **Nhắc nhở y tế**\n\n"
+    "Bạn có thể nhắc uống thuốc hoặc lịch tái khám. Bấm **Thêm nhắc nhở mới** "
+    "hoặc gõ trực tiếp, ví dụ: Nhắc tôi uống thuốc lúc 8 giờ sáng hằng ngày."
+)
+
+TELEGRAM_MODE_LABELS = {
+    "auto": "Tự động",
+    "information": "Thông tin",
+    "diagnostic": "Tư vấn triệu chứng",
+}
+
+MENU_CALLBACK_FEEDBACK = {
+    "/help": "Đang mở cách đặt câu hỏi.",
+    "/mode": "Đang mở phần chọn cách trả lời.",
+    "/profile": "Đang mở hồ sơ y tế.",
+    "/remind": "Đang mở nhắc nhở.",
+    "/doctor": "Đang mở kết nối bác sĩ.",
+    "/end": "Đang kiểm tra tư vấn bác sĩ.",
+    "/tts": "Đang mở phần nghe câu trả lời.",
+    "/new": "Đang bắt đầu câu hỏi mới.",
+    "/balance": "Đang xem số dư.",
+    "/topup": "Đang mở nạp tiền.",
+    "/paydebt": "Đang kiểm tra khoản nợ.",
+    "/admin_doctors": "Đang mở quản lý bác sĩ.",
+    "/admin_paid": "Đang mở xác nhận đơn nạp tiền.",
+    "/ttson": "Đã chọn bật nghe câu trả lời.",
+    "/ttsoff": "Đã chọn tắt nghe câu trả lời.",
+}
 
 RATING_PROMPT = "Bạn đánh giá câu trả lời này từ 1 đến 5 nhé."
 DOCTOR_OFFER_PROMPT = (
@@ -135,6 +175,10 @@ def _strip_choice_icon(text: str) -> str:
     return text
 
 
+def _telegram_mode_label(mode: str) -> str:
+    return TELEGRAM_MODE_LABELS.get(normalize_mode(mode), TELEGRAM_MODE_LABELS["auto"])
+
+
 @dataclass
 class MultiSelectState:
     choices: tuple[str, ...]
@@ -152,6 +196,7 @@ _CHAT_MODE_DEFAULTS: dict[str, str] = {}
 _MODE_RETRIES: dict[str, ModeRetryState] = {}
 # Chats (keyed by str(chat_id)) awaiting a typed custom top-up amount.
 _TOPUP_PENDING: dict[str, bool] = {}
+_ADMIN_PAID_PENDING: dict[str, int] = {}
 
 REMIND_PREFIX_CONFIRM = "remind:confirm:"
 REMIND_PREFIX_CANCEL = "remind:cancel:"
@@ -186,13 +231,9 @@ def _remind_remove_keyboard(reminder_id: int) -> dict:
 def _remind_menu_keyboard() -> dict:
     return {
         "inline_keyboard": [
-            [
-                {"text": "➕ Thêm nhắc nhở", "callback_data": REMIND_CALLBACK_ADD},
-                {"text": "📋 Nhắc nhở của tôi", "callback_data": REMIND_CALLBACK_LIST}
-            ],
-            [
-                {"text": "❌ Đóng", "callback_data": "cmd:close"}
-            ]
+            [{"text": "➕ Thêm nhắc nhở mới", "callback_data": REMIND_CALLBACK_ADD}],
+            [{"text": "📋 Xem nhắc nhở của tôi", "callback_data": REMIND_CALLBACK_LIST}],
+            [{"text": "❌ Đóng menu", "callback_data": "cmd:close"}],
         ]
     }
 
@@ -203,6 +244,7 @@ TOPUP_CALLBACK_PREFIX = "topup:set:"
 TOPUP_CUSTOM_CALLBACK = "topup:custom"
 TOPUP_CANCEL_CALLBACK = "topup:cancel"
 BALANCE_REFRESH_CALLBACK = "balance:refresh"
+ADMIN_PAID_CANCEL_CALLBACK = "admin_paid:cancel"
 QR_IMAGE_BASE = "https://api.qrserver.com/v1/create-qr-code/"
 VIETQR_IMAGE_BASE = "https://img.vietqr.io/image"
 
@@ -229,10 +271,26 @@ async def setup_bot_menu() -> None:
         return
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.post(_api_url("setMyCommands"), json={"commands": BOT_COMMANDS})
+        admin_results = []
+        for admin_id in sorted(TELEGRAM_ADMIN_IDS):
+            admin_results.append(await client.post(
+                _api_url("setMyCommands"),
+                json={
+                    "commands": ADMIN_BOT_COMMANDS,
+                    "scope": {"type": "chat", "chat_id": admin_id},
+                },
+            ))
     if r.status_code >= 400:
         logger.warning("Telegram setMyCommands failed status=%s", r.status_code)
     else:
         logger.info("Telegram command menu configured.")
+    for admin_id, result in zip(sorted(TELEGRAM_ADMIN_IDS), admin_results):
+        if result.status_code >= 400:
+            logger.warning(
+                "Telegram admin setMyCommands failed admin_id=%s status=%s",
+                admin_id,
+                result.status_code,
+            )
 
 
 async def _send_typing_action(chat_id: int | str) -> None:
@@ -365,61 +423,46 @@ def _multi_choice_keyboard(
     return {"inline_keyboard": rows}
 
 
-def _menu_keyboard() -> dict:
-    return {
-        "inline_keyboard": [
-            [
-                {"text": "📝 Hướng dẫn", "callback_data": "cmd:/help"},
-                {"text": "⚙️ Chế độ", "callback_data": "cmd:/mode"},
-            ],
-            [
-                {"text": "👨‍⚕️ Bác sĩ", "callback_data": "cmd:/doctor"},
-                {"text": "⛔ Kết thúc", "callback_data": "cmd:/end"},
-            ],
-            [
-                {"text": "🔔 Nhắc nhở", "callback_data": "cmd:/remind"},
-                {"text": "🔄 Lượt mới", "callback_data": "cmd:/new"},
-            ],
-            [
-                {"text": "💰 Nạp tiền", "callback_data": "cmd:/topup"},
-                {"text": "💳 Số dư", "callback_data": "cmd:/balance"},
-            ],
-            [
-                {"text": "🧾 Công nợ", "callback_data": "cmd:/paydebt"},
-                {"text": "🩺 Hồ sơ", "callback_data": "cmd:/profile"},
-            ],
-            [
-                {"text": "🔊 Đọc câu trả lời", "callback_data": "cmd:/tts"},
-            ],
-            [
-                {"text": "❌ Đóng", "callback_data": "cmd:close"},
-            ],
-        ]
-    }
+def _menu_keyboard(is_admin_user: bool = False) -> dict:
+    rows = [
+        [{"text": "📝 Cách đặt câu hỏi", "callback_data": "cmd:/help"}],
+        [{"text": "⚙️ Chọn cách bot trả lời", "callback_data": "cmd:/mode"}],
+        [{"text": "🩺 Hồ sơ y tế của tôi", "callback_data": "cmd:/profile"}],
+        [{"text": "🔔 Nhắc uống thuốc / tái khám", "callback_data": "cmd:/remind"}],
+        [{"text": "👨‍⚕️ Kết nối bác sĩ", "callback_data": "cmd:/doctor"}],
+        [{"text": "⛔ Kết thúc tư vấn bác sĩ", "callback_data": "cmd:/end"}],
+        [{"text": "🔊 Nghe câu trả lời", "callback_data": "cmd:/tts"}],
+        [{"text": "🔄 Bắt đầu câu hỏi mới", "callback_data": "cmd:/new"}],
+        [{"text": "💳 Xem số dư", "callback_data": "cmd:/balance"}],
+        [{"text": "💰 Nạp tiền", "callback_data": "cmd:/topup"}],
+        [{"text": "🧾 Trả khoản nợ", "callback_data": "cmd:/paydebt"}],
+    ]
+    if is_admin_user:
+        rows.append([{"text": "🛠 Quản lý bác sĩ", "callback_data": "cmd:/admin_doctors"}])
+        rows.append([{"text": "💵 Xác nhận đơn nạp tiền", "callback_data": "cmd:/admin_paid"}])
+    rows.append([{"text": "❌ Đóng menu", "callback_data": "cmd:close"}])
+    return {"inline_keyboard": rows}
 
 
 def _mode_keyboard(selected_mode: str) -> dict:
     selected = normalize_mode(selected_mode)
     buttons = []
-    for mode, label in (
-        ("auto", "Auto"),
-        ("information", "Thông tin"),
-        ("diagnostic", "Chẩn đoán"),
-    ):
+    for mode in ("auto", "information", "diagnostic"):
+        label = _telegram_mode_label(mode)
         text = f"{SELECTED_ICON} {label}" if mode == selected else label
         buttons.append({"text": text, "callback_data": f"{MODE_CALLBACK_PREFIX}{mode}"})
-    return {"inline_keyboard": [buttons]}
+    return {"inline_keyboard": [[button] for button in buttons]}
 
 
 def _tts_keyboard(enabled: bool) -> dict:
     return {
         "inline_keyboard": [[
             {
-                "text": f"{SELECTED_ICON} Bật" if enabled else "Bật",
+                "text": f"{SELECTED_ICON} Bật nghe" if enabled else "Bật nghe",
                 "callback_data": "cmd:/ttson",
             },
             {
-                "text": f"{SELECTED_ICON} Tắt" if not enabled else "Tắt",
+                "text": f"{SELECTED_ICON} Tắt nghe" if not enabled else "Tắt nghe",
                 "callback_data": "cmd:/ttsoff",
             },
         ]]
@@ -433,7 +476,7 @@ def _mode_retry_keyboard(mode: str, question: str) -> dict:
     return {
         "inline_keyboard": [[
             {
-                "text": f"Trả lời ở chế độ {mode_label(normalized_mode)}",
+                "text": f"Trả lời theo cách: {_telegram_mode_label(normalized_mode)}",
                 "callback_data": f"{MODE_RETRY_PREFIX}{token}",
             }
         ]]
@@ -648,7 +691,7 @@ async def _edit_message_text(
     payload = {
         "chat_id": chat_id,
         "message_id": message_id,
-        "text": text,
+        "text": _md_to_tg_html(text),
         "parse_mode": "HTML",
     }
     if inline_keyboard is not None:
@@ -687,7 +730,7 @@ async def _handle_mode_callback(callback_query: dict) -> bool:
     if callback_query_id:
         await _answer_callback_query(
             str(callback_query_id),
-            f"Đã chọn chế độ {mode_label(mode)}.",
+            f"Đã chọn: {_telegram_mode_label(mode)}.",
         )
     return True
 
@@ -714,10 +757,10 @@ async def _handle_mode_retry_callback(
             await _answer_callback_query(str(callback_query_id), "Không xử lý được lựa chọn này.")
         return True
 
-    label = mode_label(state.mode)
+    label = _telegram_mode_label(state.mode)
     if callback_query_id:
-        await _answer_callback_query(str(callback_query_id), f"Đang trả lời ở chế độ {label}.")
-    await send_text(chat_id, f"Trả lời ở chế độ {label}: {state.question}")
+        await _answer_callback_query(str(callback_query_id), f"Đang trả lời theo cách: {label}.")
+    await send_text(chat_id, f"Trả lời theo cách {label}: {state.question}")
     callback_user_id = (callback_query.get("from") or {}).get("id")
     chat_type = (message.get("chat") or {}).get("type", "private")
     if callback_user_id is None and chat_type == "private":
@@ -1101,14 +1144,15 @@ def _command(text: str) -> str:
 
 
 def _topup_keyboard() -> dict:
-    rows = []
-    buttons = [
-        {"text": f"{amount:,} VND", "callback_data": f"{TOPUP_CALLBACK_PREFIX}{amount}"}
+    rows = [
+        [{
+            "text": f"Nạp {amount:,} VND".replace(",", "."),
+            "callback_data": f"{TOPUP_CALLBACK_PREFIX}{amount}",
+        }]
         for amount in TOPUP_PRESETS
     ]
-    for i in range(0, len(buttons), 2):
-        rows.append(buttons[i:i + 2])
-    rows.append([{"text": "✏️ Nhập số khác", "callback_data": TOPUP_CUSTOM_CALLBACK}])
+    rows.append([{"text": "✏️ Nhập số tiền khác", "callback_data": TOPUP_CUSTOM_CALLBACK}])
+    rows.append([{"text": "❌ Hủy", "callback_data": TOPUP_CANCEL_CALLBACK}])
     return {"inline_keyboard": rows}
 
 
@@ -1335,6 +1379,55 @@ def _parse_order_code(arg: str) -> int | None:
     return int(matches[-1])
 
 
+def _admin_paid_key(chat_id: int | str, user_id: int | None) -> str:
+    return f"{chat_id}:{user_id}"
+
+
+def _admin_paid_cancel_keyboard() -> dict:
+    return {"inline_keyboard": [[{"text": "❌ Hủy", "callback_data": ADMIN_PAID_CANCEL_CALLBACK}]]}
+
+
+async def _start_admin_paid_prompt(chat_id: int | str, user_id: int | None) -> None:
+    if not _is_admin(user_id):
+        await send_text(chat_id, "Bạn không có quyền dùng lệnh này.")
+        return
+    _ADMIN_PAID_PENDING[_admin_paid_key(chat_id, user_id)] = int(user_id)
+    await send_text(
+        chat_id,
+        "💵 Xác nhận đơn nạp tiền\n\n"
+        "Dán mã đơn nạp tiền hoặc nội dung chuyển khoản. "
+        "Ví dụ: 55501 hoặc NAPTIEN55501.",
+        inline_keyboard=_admin_paid_cancel_keyboard(),
+    )
+
+
+async def _handle_admin_paid_callback(callback_query: dict) -> bool:
+    data = str(callback_query.get("data") or "")
+    if data != ADMIN_PAID_CANCEL_CALLBACK:
+        return False
+    callback_query_id = callback_query.get("id")
+    user_id = (callback_query.get("from") or {}).get("id")
+    message = callback_query.get("message") or {}
+    chat_id = (message.get("chat") or {}).get("id")
+    message_id = message.get("message_id")
+    if chat_id is None:
+        if callback_query_id:
+            await _answer_callback_query(str(callback_query_id), "Không xử lý được lựa chọn này.")
+        return True
+    if not _is_admin(user_id):
+        if callback_query_id:
+            await _answer_callback_query(str(callback_query_id), "Bạn không có quyền dùng chức năng này.")
+        return True
+    _ADMIN_PAID_PENDING.pop(_admin_paid_key(chat_id, user_id), None)
+    if message_id is not None:
+        await _edit_message_text(chat_id, int(message_id), "Đã hủy xác nhận đơn nạp tiền.", {"inline_keyboard": []})
+    else:
+        await send_text(chat_id, "Đã hủy xác nhận đơn nạp tiền.")
+    if callback_query_id:
+        await _answer_callback_query(str(callback_query_id), "Đã hủy.")
+    return True
+
+
 async def _handle_admin_paid(chat_id: int | str, text: str, user_id: int | None) -> None:
     """Admin-only: reconcile a stuck top-up order by crediting its balance.
 
@@ -1349,9 +1442,18 @@ async def _handle_admin_paid(chat_id: int | str, text: str, user_id: int | None)
     # Everything after the command word is the argument (may contain spaces,
     # e.g. a pasted "CS... NAPTIEN..." transfer content).
     _, _, arg = text.strip().partition(" ")
+    if not arg.strip():
+        await _start_admin_paid_prompt(chat_id, user_id)
+        return
+
+    _ADMIN_PAID_PENDING.pop(_admin_paid_key(chat_id, user_id), None)
     order_code = _parse_order_code(arg)
     if order_code is None:
-        await send_text(chat_id, "Cú pháp: /admin_paid <order_code>")
+        await send_text(
+            chat_id,
+            "Không đọc được mã đơn. Hãy dán mã đơn hoặc nội dung có NAPTIEN<code>.",
+            inline_keyboard=_admin_paid_cancel_keyboard(),
+        )
         return
 
     order = get_order(order_code)
@@ -1394,12 +1496,32 @@ async def _handle_admin_paid(chat_id: int | str, text: str, user_id: int | None)
     await _delete_order_qr(order)
 
 
+async def _handle_pending_admin_paid(chat_id: int | str, text: str, user_id: int | None) -> bool:
+    key = _admin_paid_key(chat_id, user_id)
+    pending_admin_id = _ADMIN_PAID_PENDING.get(key)
+    if pending_admin_id is None:
+        return False
+    if not _is_admin(user_id) or pending_admin_id != user_id:
+        return False
+    if _parse_order_code(text) is None:
+        await send_text(
+            chat_id,
+            "Không đọc được mã đơn. Hãy dán mã đơn hoặc nội dung có NAPTIEN<code>.",
+            inline_keyboard=_admin_paid_cancel_keyboard(),
+        )
+        return True
+
+    _ADMIN_PAID_PENDING.pop(key, None)
+    await _handle_admin_paid(chat_id, f"/admin_paid {text}", user_id)
+    return True
+
+
 def _balance_text(balance: int) -> str:
     return f"Số dư hiện tại của bạn: {balance:,} VND."
 
 
 def _balance_keyboard() -> dict:
-    return {"inline_keyboard": [[{"text": "🔄 Làm mới số dư", "callback_data": BALANCE_REFRESH_CALLBACK}]]}
+    return {"inline_keyboard": [[{"text": "🔄 Cập nhật số dư", "callback_data": BALANCE_REFRESH_CALLBACK}]]}
 
 
 async def _handle_balance_callback(callback_query: dict) -> bool:
@@ -1431,6 +1553,8 @@ async def _handle_command(
 ) -> bool:
     cmd = _command(text)
     identity = _request_identity(chat_id, user_id, chat_type)
+    if cmd != "/admin_paid":
+        _ADMIN_PAID_PENDING.pop(_admin_paid_key(chat_id, user_id), None)
     if cmd == "/start":
         await send_text(chat_id, START_TEXT)
         return True
@@ -1443,11 +1567,15 @@ async def _handle_command(
     if cmd == "/admin_paid":
         await _handle_admin_paid(chat_id, text, user_id)
         return True
+    if cmd == "/admin_doctors":
+        return await telegram_doctor.handle_admin_doctors_command(chat_id, user_id)
+    if cmd in {"/admin_doctor_add", "/admin_doctor_edit", "/admin_doctor_delete"}:
+        return await telegram_doctor.handle_admin_doctor_command(chat_id, text, user_id)
     if cmd == "/menu":
         await send_text(
             chat_id,
-            "📋 **Menu các lệnh hỗ trợ:**",
-            inline_keyboard=_menu_keyboard(),
+            MENU_TEXT,
+            inline_keyboard=_menu_keyboard(_is_admin(user_id)),
         )
         return True
     if cmd == "/mode":
@@ -1455,11 +1583,11 @@ async def _handle_command(
         await send_text(
             chat_id,
             (
-                "Lựa chọn chế độ trả lời\n\n"
-                "**Auto**: bot tự chọn cách trả lời phù hợp với câu hỏi.\n"
-                "**Thông tin**: trả lời thông tin về bệnh, thuốc, phòng ngừa, điều trị và chăm sóc.\n"
-                "**Chẩn đoán**: tư vấn triệu chứng, sàng lọc an toàn và hướng dẫn khi cần đi khám.\n\n"
-                f"Chế độ hiện tại: **{mode_label(current)}**"
+                "Chọn cách bot trả lời\n\n"
+                "**Tự động**: bot tự chọn cách phù hợp với câu hỏi.\n"
+                "**Thông tin**: hỏi về bệnh, thuốc, phòng ngừa, điều trị và chăm sóc.\n"
+                "**Tư vấn triệu chứng**: kể triệu chứng để bot hỏi thêm và nhắc khi cần đi khám.\n\n"
+                f"Đang chọn: **{_telegram_mode_label(current)}**"
             ),
             inline_keyboard=_mode_keyboard(current),
         )
@@ -1473,7 +1601,7 @@ async def _handle_command(
         await send_text(
             chat_id,
             (
-                "Đọc câu trả lời bằng giọng nói\n\n"
+                "Nghe câu trả lời bằng giọng nói\n\n"
                 f"Trạng thái hiện tại: **{'Bật' if enabled else 'Tắt'}**\n\n"
                 "Khi bật, bot vẫn gửi văn bản trước rồi gửi thêm bản đọc tiếng Việt."
             ),
@@ -1486,7 +1614,7 @@ async def _handle_command(
             return True
         await send_text(
             chat_id,
-            "Chọn số tiền muốn nạp, hoặc nhập số khác:",
+            "Bạn muốn nạp bao nhiêu tiền? Bấm một số tiền bên dưới hoặc chọn **Nhập số tiền khác**.",
             inline_keyboard=_topup_keyboard(),
         )
         return True
@@ -1546,7 +1674,7 @@ async def _handle_command(
             return True
         await send_text(
             chat_id,
-            "🔔 **Quản lý nhắc nhở y tế**\n\nBạn có thể thêm nhắc nhở bằng cách gửi tin nhắn bằng tiếng Việt hoặc tiếng Anh (ví dụ: 'Nhắc tôi uống thuốc Panadol lúc 8h sáng hàng ngày') hoặc quản lý danh sách hiện có.",
+            REMINDER_MENU_TEXT,
             inline_keyboard=_remind_menu_keyboard()
         )
         return True
@@ -1607,7 +1735,10 @@ async def telegram_webhook(
 
             if data.startswith("cmd:") and chat_id:
                 cmd_text = data[len("cmd:"):]
-                await _answer_callback_query(cb_id, f"Đang thực hiện {cmd_text}")
+                await _answer_callback_query(
+                    cb_id,
+                    MENU_CALLBACK_FEEDBACK.get(cmd_text, "Đang mở lựa chọn này."),
+                )
                 await _handle_command(chat_id, cmd_text, "private", user_id)
                 return {"ok": True}
 
@@ -1616,8 +1747,8 @@ async def telegram_webhook(
                 await _edit_message_text(
                     chat_id,
                     message_id,
-                    "📋 **Menu các lệnh hỗ trợ:**",
-                    inline_keyboard=_menu_keyboard(),
+                    MENU_TEXT,
+                    inline_keyboard=_menu_keyboard(_is_admin(user_id)),
                 )
                 return {"ok": True}
 
@@ -1641,7 +1772,7 @@ async def telegram_webhook(
                         await _edit_message_text(
                             chat_id,
                             message_id,
-                            "🔔 Quản lý nhắc nhở y tế\n\nBạn có thể thêm nhắc nhở bằng cách gửi tin nhắn bằng tiếng Việt hoặc tiếng Anh (ví dụ: 'Nhắc tôi uống thuốc Panadol lúc 8h sáng hàng ngày') hoặc quản lý danh sách hiện có.",
+                            REMINDER_MENU_TEXT,
                             inline_keyboard=_remind_menu_keyboard()
                         )
                     return {"ok": True}
@@ -1760,6 +1891,8 @@ async def telegram_webhook(
             return {"ok": True}
         if await _handle_topup_callback(callback_query):
             return {"ok": True}
+        if await _handle_admin_paid_callback(callback_query):
+            return {"ok": True}
         if await _handle_balance_callback(callback_query):
             return {"ok": True}
         if await telegram_doctor.handle_doctor_callback(callback_query):
@@ -1791,6 +1924,12 @@ async def telegram_webhook(
 
     # Commands take priority so /end can always escape an active consultation.
     if text.startswith("/") and await _handle_command(chat_id, text, chat_type, user_id):
+        return {"ok": True}
+
+    if await _handle_pending_admin_paid(chat_id, text, user_id):
+        return {"ok": True}
+
+    if await telegram_doctor.intercept_pending_admin_doctor_edit(chat_id, text, user_id):
         return {"ok": True}
 
     # Active doctor consultation intercepts text/photo/voice before chatbot.
@@ -1889,7 +2028,11 @@ async def _show_remove_confirmation(chat_id: int, user_id: int, reminder_id: int
 
 async def _process_reminder_followup(chat_id: int, user_id: int, text: str, pending: dict) -> bool:
     import datetime
-    from src.chat.storage.reminder_parser import parse_multi_turn_reminder
+    from src.chat.storage.reminder_parser import (
+        MEDICAL_REMINDER_REJECTION_MESSAGE,
+        is_supported_medical_reminder,
+        parse_multi_turn_reminder,
+    )
     from src.chat.storage.reminders import (
         check_duplicate_active_or_pending,
         count_active_reminders,
@@ -1934,6 +2077,14 @@ async def _process_reminder_followup(chat_id: int, user_id: int, text: str, pend
         
         if not mtype or not reminder_text or not sched:
             await send_text(chat_id, "Thông tin chưa đầy đủ để thiết lập nhắc nhở.")
+            return True
+        if not is_supported_medical_reminder(
+            mtype,
+            reminder_text,
+            pending.get("original_request"),
+            text,
+        ):
+            await send_text(chat_id, MEDICAL_REMINDER_REJECTION_MESSAGE)
             return True
             
         first_fire = next_occurrence(sched, now_vietnam)
@@ -1990,6 +2141,16 @@ async def _process_reminder_followup(chat_id: int, user_id: int, text: str, pend
         )
     else:
         prompt = parsed.get("clarification_prompt") or "Bạn vui lòng cung cấp thêm thông tin cho nhắc nhở."
+    merged_fields = parsed.get("merged_fields", {})
+    if not is_supported_medical_reminder(
+        merged_fields.get("medical_type"),
+        merged_fields.get("reminder_text"),
+        pending.get("original_request"),
+        text,
+    ):
+        await asyncio.to_thread(delete_pending_conversation, chat_id, user_id)
+        await send_text(chat_id, MEDICAL_REMINDER_REJECTION_MESSAGE)
+        return True
     await asyncio.to_thread(
         upsert_pending_conversation,
         chat_id=chat_id,
@@ -2015,7 +2176,12 @@ async def _process_reminder_input_flow(
 ) -> bool:
     import json
     import datetime
-    from src.chat.storage.reminder_parser import parse_multi_turn_reminder, check_reminder_prefilter
+    from src.chat.storage.reminder_parser import (
+        MEDICAL_REMINDER_REJECTION_MESSAGE,
+        check_reminder_prefilter,
+        is_supported_medical_reminder,
+        parse_multi_turn_reminder,
+    )
     from src.chat.storage.reminders import (
         create_reminder_draft, count_active_reminders, check_duplicate_active_or_pending,
         upsert_pending_conversation, delete_pending_conversation
@@ -2043,6 +2209,18 @@ async def _process_reminder_input_flow(
         if is_direct_req:
             await asyncio.to_thread(delete_pending_conversation, chat_id, user_id)
             await send_text(chat_id, "❌ Đã hủy thiết lập nhắc nhở.")
+            return True
+        return False
+
+    merged_fields = parsed.get("merged_fields", {})
+    if not is_supported_medical_reminder(
+        merged_fields.get("medical_type"),
+        merged_fields.get("reminder_text"),
+        text,
+    ):
+        if is_direct_req:
+            await asyncio.to_thread(delete_pending_conversation, chat_id, user_id)
+            await send_text(chat_id, MEDICAL_REMINDER_REJECTION_MESSAGE)
             return True
         return False
         

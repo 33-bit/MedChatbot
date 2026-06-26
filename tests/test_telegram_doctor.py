@@ -49,8 +49,259 @@ def test_doctor_command_shows_tier_menu(monkeypatch):
     assert "5 phút" in text          # free session length
     assert "2.000" in text or "2,000" in text  # paid per-minute rate
     assert "15 phút" in text         # paid block length
-    callbacks = [btn["callback_data"] for row in sent[0]["inline_keyboard"]["inline_keyboard"] for btn in row]
+    rows = sent[0]["inline_keyboard"]["inline_keyboard"]
+    labels = [btn["text"] for row in rows for btn in row]
+    callbacks = [btn["callback_data"] for row in rows for btn in row]
+    assert all(len(row) == 1 for row in rows)
+    assert labels[:2] == ["🎁 Tư vấn miễn phí", "💳 Tư vấn trả phí"]
     assert callbacks == ["doctor:tier:free", "doctor:tier:paid", "doctor:cancel"]
+
+
+def test_admin_doctors_command_requires_admin(monkeypatch):
+    sent: list[dict] = []
+
+    async def fake_send_text(chat_id, text, *args, inline_keyboard=None, **kwargs):
+        sent.append({"chat_id": chat_id, "text": text, "inline_keyboard": inline_keyboard})
+
+    monkeypatch.setattr(telegram_doctor.telegram, "TELEGRAM_ADMIN_IDS", {42})
+    monkeypatch.setattr(telegram_doctor.telegram, "send_text", fake_send_text)
+
+    assert asyncio.run(telegram_doctor.handle_admin_doctors_command(123, 99)) is True
+
+    assert sent[0]["chat_id"] == 123
+    assert "không có quyền" in sent[0]["text"].lower()
+    assert sent[0]["inline_keyboard"] is None
+
+
+def test_admin_doctor_commands_add_edit_and_delete(monkeypatch):
+    sent: list[dict] = []
+
+    async def fake_send_text(chat_id, text, *args, inline_keyboard=None, **kwargs):
+        sent.append({"chat_id": chat_id, "text": text, "inline_keyboard": inline_keyboard})
+
+    monkeypatch.setattr(telegram_doctor.telegram, "TELEGRAM_ADMIN_IDS", {42})
+    monkeypatch.setattr(telegram_doctor.telegram, "send_text", fake_send_text)
+
+    assert asyncio.run(telegram_doctor.handle_admin_doctor_command(
+        123,
+        "/admin_doctor_add BS Admin | Tim mạch | paid | 3.000 | 4242 | CKI | 9 | BV E | Tư vấn.",
+        42,
+    )) is True
+    doctor_id = doctors.list_all_doctors()[0]["id"]
+    row = doctors.get_doctor(doctor_id)
+    assert row["name"] == "BS Admin"
+    assert row["specialty"] == "Tim mạch"
+    assert row["tier"] == "paid"
+    assert row["price"] == 3000
+    assert row["telegram_user_id"] == 4242
+
+    assert asyncio.run(telegram_doctor.handle_admin_doctor_command(
+        123,
+        f"/admin_doctor_edit {doctor_id} name=BS Updated | price=4000 | active=true",
+        42,
+    )) is True
+    row = doctors.get_doctor(doctor_id)
+    assert row["name"] == "BS Updated"
+    assert row["price"] == 4000
+    assert row["active"] == 1
+
+    assert asyncio.run(telegram_doctor.handle_admin_doctor_command(
+        123,
+        f"/admin_doctor_delete {doctor_id}",
+        42,
+    )) is True
+    assert doctors.get_doctor(doctor_id)["active"] == 0
+    assert "Đã xóa bác sĩ" in sent[-1]["text"]
+
+
+def test_admin_doctor_delete_callback_requires_confirmation(monkeypatch):
+    edits: list[dict] = []
+    answers: list[tuple[str, str]] = []
+    doctor_id = doctors.create_doctor("BS Callback", "Nội", "free", 0, 5151)
+
+    async def fake_edit_message_text(chat_id, message_id, text, inline_keyboard=None):
+        edits.append({
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+            "inline_keyboard": inline_keyboard,
+        })
+
+    async def fake_answer_callback_query(callback_query_id, text):
+        answers.append((callback_query_id, text))
+
+    monkeypatch.setattr(telegram_doctor.telegram, "TELEGRAM_ADMIN_IDS", {42})
+    monkeypatch.setattr(telegram_doctor.telegram, "_edit_message_text", fake_edit_message_text)
+    monkeypatch.setattr(telegram_doctor.telegram, "_answer_callback_query", fake_answer_callback_query)
+
+    assert asyncio.run(telegram_doctor.handle_doctor_callback({
+        "id": "cb-delete",
+        "data": f"doctor:admin:delete:{doctor_id}",
+        "from": {"id": 42},
+        "message": {"message_id": 9, "chat": {"id": 123}},
+    })) is True
+
+    assert "Xác nhận xóa" in edits[-1]["text"]
+    confirm_callback = edits[-1]["inline_keyboard"]["inline_keyboard"][0][0]["callback_data"]
+    assert confirm_callback == f"doctor:admin:delete_confirm:{doctor_id}"
+
+    assert asyncio.run(telegram_doctor.handle_doctor_callback({
+        "id": "cb-confirm",
+        "data": confirm_callback,
+        "from": {"id": 42},
+        "message": {"message_id": 9, "chat": {"id": 123}},
+    })) is True
+
+    assert doctors.get_doctor(doctor_id)["active"] == 0
+    assert "Đã xóa bác sĩ" in edits[-1]["text"]
+    assert ("cb-confirm", "Đã xử lý.") in answers
+
+
+def test_admin_edit_flow_browses_tier_specialty_and_doctor(monkeypatch):
+    edits: list[dict] = []
+    answers: list[tuple[str, str]] = []
+    doctor_id = doctors.create_doctor("BS Edit Flow", "Tim mạch", "paid", 3000, 6161)
+
+    async def fake_edit_message_text(chat_id, message_id, text, inline_keyboard=None):
+        edits.append({"text": text, "inline_keyboard": inline_keyboard})
+
+    async def fake_answer_callback_query(callback_query_id, text):
+        answers.append((callback_query_id, text))
+
+    monkeypatch.setattr(telegram_doctor.telegram, "TELEGRAM_ADMIN_IDS", {42})
+    monkeypatch.setattr(telegram_doctor.telegram, "_edit_message_text", fake_edit_message_text)
+    monkeypatch.setattr(telegram_doctor.telegram, "_answer_callback_query", fake_answer_callback_query)
+
+    assert asyncio.run(telegram_doctor.handle_doctor_callback({
+        "id": "cb-edit",
+        "data": "doctor:admin:edit",
+        "from": {"id": 42},
+        "message": {"message_id": 9, "chat": {"id": 123}},
+    })) is True
+    tier_callbacks = [
+        btn["callback_data"]
+        for row in edits[-1]["inline_keyboard"]["inline_keyboard"]
+        for btn in row
+    ]
+    assert tier_callbacks[:2] == ["doctor:admin:tier:edit:free", "doctor:admin:tier:edit:paid"]
+
+    assert asyncio.run(telegram_doctor.handle_doctor_callback({
+        "id": "cb-tier",
+        "data": "doctor:admin:tier:edit:paid",
+        "from": {"id": 42},
+        "message": {"message_id": 9, "chat": {"id": 123}},
+    })) is True
+    specialty_callbacks = [
+        btn["callback_data"]
+        for row in edits[-1]["inline_keyboard"]["inline_keyboard"]
+        for btn in row
+    ]
+    assert "doctor:admin:specialty:edit:paid:tim_mach" in specialty_callbacks
+
+    assert asyncio.run(telegram_doctor.handle_doctor_callback({
+        "id": "cb-specialty",
+        "data": "doctor:admin:specialty:edit:paid:tim_mach",
+        "from": {"id": 42},
+        "message": {"message_id": 9, "chat": {"id": 123}},
+    })) is True
+    doctor_callbacks = [
+        btn["callback_data"]
+        for row in edits[-1]["inline_keyboard"]["inline_keyboard"]
+        for btn in row
+    ]
+    assert f"doctor:admin:fields:{doctor_id}" in doctor_callbacks
+    assert "Chọn bác sĩ chuyên khoa Tim mạch" in edits[-1]["text"]
+
+
+def test_admin_edit_field_buttons_update_preset_value(monkeypatch):
+    edits: list[dict] = []
+    answers: list[tuple[str, str]] = []
+    doctor_id = doctors.create_doctor("BS Preset", "Nội", "free", 0, 6262)
+
+    async def fake_edit_message_text(chat_id, message_id, text, inline_keyboard=None):
+        edits.append({"text": text, "inline_keyboard": inline_keyboard})
+
+    async def fake_answer_callback_query(callback_query_id, text):
+        answers.append((callback_query_id, text))
+
+    monkeypatch.setattr(telegram_doctor.telegram, "TELEGRAM_ADMIN_IDS", {42})
+    monkeypatch.setattr(telegram_doctor.telegram, "_edit_message_text", fake_edit_message_text)
+    monkeypatch.setattr(telegram_doctor.telegram, "_answer_callback_query", fake_answer_callback_query)
+
+    assert asyncio.run(telegram_doctor.handle_doctor_callback({
+        "id": "cb-fields",
+        "data": f"doctor:admin:fields:{doctor_id}",
+        "from": {"id": 42},
+        "message": {"message_id": 9, "chat": {"id": 123}},
+    })) is True
+    field_callbacks = [
+        btn["callback_data"]
+        for row in edits[-1]["inline_keyboard"]["inline_keyboard"]
+        for btn in row
+    ]
+    assert f"doctor:admin:field:{doctor_id}:tier" in field_callbacks
+
+    assert asyncio.run(telegram_doctor.handle_doctor_callback({
+        "id": "cb-field",
+        "data": f"doctor:admin:field:{doctor_id}:tier",
+        "from": {"id": 42},
+        "message": {"message_id": 9, "chat": {"id": 123}},
+    })) is True
+    value_callbacks = [
+        btn["callback_data"]
+        for row in edits[-1]["inline_keyboard"]["inline_keyboard"]
+        for btn in row
+    ]
+    assert f"doctor:admin:value:{doctor_id}:tier:paid" in value_callbacks
+
+    assert asyncio.run(telegram_doctor.handle_doctor_callback({
+        "id": "cb-value",
+        "data": f"doctor:admin:value:{doctor_id}:tier:paid",
+        "from": {"id": 42},
+        "message": {"message_id": 9, "chat": {"id": 123}},
+    })) is True
+
+    assert doctors.get_doctor(doctor_id)["tier"] == "paid"
+    assert "Đã cập nhật Nhóm tư vấn" in edits[-1]["text"]
+    assert ("cb-value", "Đã cập nhật.") in answers
+
+
+def test_admin_edit_custom_value_is_captured_before_chatbot(monkeypatch):
+    edits: list[dict] = []
+    sent: list[dict] = []
+    doctor_id = doctors.create_doctor("BS Old Name", "Nội", "free", 0, 6363)
+
+    async def fake_edit_message_text(chat_id, message_id, text, inline_keyboard=None):
+        edits.append({"text": text, "inline_keyboard": inline_keyboard})
+
+    async def fake_answer_callback_query(callback_query_id, text):
+        pass
+
+    async def fake_send_text(chat_id, text, *args, inline_keyboard=None, **kwargs):
+        sent.append({"chat_id": chat_id, "text": text, "inline_keyboard": inline_keyboard})
+
+    monkeypatch.setattr(telegram_doctor.telegram, "TELEGRAM_ADMIN_IDS", {42})
+    monkeypatch.setattr(telegram_doctor.telegram, "_edit_message_text", fake_edit_message_text)
+    monkeypatch.setattr(telegram_doctor.telegram, "_answer_callback_query", fake_answer_callback_query)
+    monkeypatch.setattr(telegram_doctor.telegram, "send_text", fake_send_text)
+
+    assert asyncio.run(telegram_doctor.handle_doctor_callback({
+        "id": "cb-custom",
+        "data": f"doctor:admin:custom:{doctor_id}:name",
+        "from": {"id": 42},
+        "message": {"message_id": 9, "chat": {"id": 123}},
+    })) is True
+    assert "Nhập giá trị mới cho Tên" in edits[-1]["text"]
+
+    assert asyncio.run(
+        telegram_doctor.intercept_pending_admin_doctor_edit(123, "BS New Name", 42)
+    ) is True
+
+    assert doctors.get_doctor(doctor_id)["name"] == "BS New Name"
+    assert "Đã cập nhật Tên" in sent[-1]["text"]
+    assert sent[-1]["inline_keyboard"]["inline_keyboard"][0][0]["callback_data"] == (
+        f"doctor:admin:fields:{doctor_id}"
+    )
 
 
 def test_handoff_keyboard_shows_suggested_specialty_as_option():
@@ -67,7 +318,8 @@ def test_handoff_keyboard_shows_suggested_specialty_as_option():
     labels = [btn["text"] for row in keyboard["inline_keyboard"] for btn in row]
     callbacks = [btn["callback_data"] for row in keyboard["inline_keyboard"] for btn in row]
     assert any("Hô hấp" in label for label in labels)
-    assert any("Chuyên khoa khác" in label for label in labels)
+    assert any("Chọn khoa khác" in label for label in labels)
+    assert any("Không cần bác sĩ" in label for label in labels)
     assert callbacks == [
         telegram_doctor.HANDOFF_ACCEPT,
         telegram_doctor.HANDOFF_OTHER,

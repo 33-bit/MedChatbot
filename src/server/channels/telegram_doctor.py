@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import sqlite3
 import time
 import unicodedata
 from dataclasses import dataclass
@@ -43,6 +44,22 @@ EXTEND_PREFIX = "doctor:extend:"
 WAIT_PREFIX = "doctor:wait:"
 WLREFRESH_PREFIX = "doctor:wlrefresh:"
 WLLEAVE_PREFIX = "doctor:wlleave:"
+ADMIN_PREFIX = "doctor:admin:"
+ADMIN_MENU_CALLBACK = "doctor:admin:menu"
+ADMIN_LIST_CALLBACK = "doctor:admin:list"
+ADMIN_ADD_CALLBACK = "doctor:admin:add"
+ADMIN_EDIT_CALLBACK = "doctor:admin:edit"
+ADMIN_DELETE_CALLBACK = "doctor:admin:delete"
+ADMIN_TIER_PREFIX = "doctor:admin:tier:"
+ADMIN_SPECIALTY_PREFIX = "doctor:admin:specialty:"
+ADMIN_PROFILE_PREFIX = "doctor:admin:profile:"
+ADMIN_FIELDS_PREFIX = "doctor:admin:fields:"
+ADMIN_FIELD_PREFIX = "doctor:admin:field:"
+ADMIN_VALUE_PREFIX = "doctor:admin:value:"
+ADMIN_CUSTOM_PREFIX = "doctor:admin:custom:"
+ADMIN_CANCEL_EDIT_CALLBACK = "doctor:admin:cancel_edit"
+ADMIN_DELETE_PREFIX = "doctor:admin:delete:"
+ADMIN_DELETE_CONFIRM_PREFIX = "doctor:admin:delete_confirm:"
 HANDOFF_ACCEPT = "doctor:handoff:accept"
 HANDOFF_OTHER = "doctor:handoff:other"
 HANDOFF_DECLINE = "doctor:handoff:decline"
@@ -75,7 +92,15 @@ class DoctorHandoffContext:
     created_at: float
 
 
+@dataclass(frozen=True)
+class AdminDoctorPendingEdit:
+    user_id: int
+    doctor_id: int
+    field: str
+
+
 _HANDOFF_CONTEXTS: dict[str, DoctorHandoffContext] = {}
+_ADMIN_PENDING_EDITS: dict[str, AdminDoctorPendingEdit] = {}
 
 _SPECIALTY_KEYWORDS = {
     "Hô hấp": ("ho", "kho tho", "dau nguc", "hen", "pho quan", "phoi", "sot", "viem hong"),
@@ -234,8 +259,8 @@ def handoff_keyboard(chat_id: int | str | None = None) -> dict:
     specialty = context.specialty_hint if context else None
     if specialty:
         first_row = [
-            {"text": f"🩺 {specialty}", "callback_data": HANDOFF_ACCEPT},
-            {"text": "📁 Chuyên khoa khác", "callback_data": HANDOFF_OTHER},
+            {"text": f"🩺 Gặp bác sĩ khoa {specialty}", "callback_data": HANDOFF_ACCEPT},
+            {"text": "📁 Chọn khoa khác", "callback_data": HANDOFF_OTHER},
         ]
     else:
         first_row = [
@@ -244,7 +269,7 @@ def handoff_keyboard(chat_id: int | str | None = None) -> dict:
     return {
         "inline_keyboard": [
             first_row,
-            [{"text": "Không cần", "callback_data": HANDOFF_DECLINE}],
+            [{"text": "Không cần bác sĩ", "callback_data": HANDOFF_DECLINE}],
         ]
     }
 
@@ -253,10 +278,8 @@ def _tier_keyboard(specialty: str | None = None) -> dict:
     suffix = f":{_specialty_slug(specialty)}" if specialty else ""
     return {
         "inline_keyboard": [
-            [
-                {"text": "Miễn phí", "callback_data": f"doctor:tier:free{suffix}"},
-                {"text": "Trả phí", "callback_data": f"doctor:tier:paid{suffix}"},
-            ],
+            [{"text": "🎁 Tư vấn miễn phí", "callback_data": f"doctor:tier:free{suffix}"}],
+            [{"text": "💳 Tư vấn trả phí", "callback_data": f"doctor:tier:paid{suffix}"}],
             [{"text": "❌ Hủy", "callback_data": CANCEL_CALLBACK}],
         ]
     }
@@ -601,6 +624,830 @@ def _tier_menu_text() -> str:
         f"• Sau khi kết thúc, chờ {pair_cd} phút mới kết nối lại đúng bác sĩ đó.\n\n"
         "Chọn hình thức tư vấn:"
     )
+
+
+ADMIN_MENU_TEXT = "🛠 Quản lý bác sĩ\n\nChọn tác vụ bên dưới."
+
+ADMIN_ADD_USAGE = (
+    "➕ Thêm bác sĩ\n\n"
+    "Dùng lệnh:\n"
+    "`/admin_doctor_add Tên | Chuyên khoa | free|paid | Giá/phút | Telegram user id | "
+    "Học vị | Số năm kinh nghiệm | Bệnh viện | Giới thiệu`\n\n"
+    "5 trường đầu là bắt buộc; các trường còn lại có thể bỏ trống."
+)
+
+ADMIN_EDIT_USAGE = (
+    "✏️ Sửa bác sĩ\n\n"
+    "Chọn bác sĩ từ danh sách, chọn trường cần sửa, rồi bấm giá trị gợi ý "
+    "hoặc chọn nhập giá trị mới."
+)
+
+_ADMIN_ACTION_TITLES = {
+    "view": "Danh sách bác sĩ",
+    "edit": "Chọn bác sĩ cần sửa",
+    "delete": "Chọn bác sĩ cần xóa",
+}
+
+_ADMIN_FIELD_LABELS = {
+    "name": "Tên",
+    "specialty": "Chuyên khoa",
+    "tier": "Nhóm tư vấn",
+    "price": "Giá/phút",
+    "telegram_user_id": "Telegram user id",
+    "active": "Trạng thái",
+    "degree": "Học vị",
+    "experience_years": "Kinh nghiệm",
+    "hospital": "Bệnh viện",
+    "bio": "Giới thiệu",
+}
+
+_ADMIN_DEGREE_OPTIONS = (
+    ("ck1", "Bác sĩ chuyên khoa I"),
+    ("msc", "Thạc sĩ, Bác sĩ"),
+    ("ck2", "Bác sĩ chuyên khoa II"),
+    ("phd", "Tiến sĩ, Bác sĩ"),
+)
+
+_ADMIN_HOSPITAL_OPTIONS = (
+    ("bachmai", "Bệnh viện Bạch Mai"),
+    ("daihocy", "Bệnh viện Đại học Y Hà Nội"),
+    ("108", "Bệnh viện Trung ương Quân đội 108"),
+    ("e", "Bệnh viện E"),
+    ("vietduc", "Bệnh viện Hữu nghị Việt Đức"),
+)
+
+
+def _admin_doctors_keyboard() -> dict:
+    return {
+        "inline_keyboard": [
+            [{"text": "📋 Danh sách bác sĩ", "callback_data": ADMIN_LIST_CALLBACK}],
+            [{"text": "➕ Thêm bác sĩ", "callback_data": ADMIN_ADD_CALLBACK}],
+            [{"text": "✏️ Sửa bác sĩ", "callback_data": ADMIN_EDIT_CALLBACK}],
+            [{"text": "🗑 Xóa bác sĩ", "callback_data": ADMIN_DELETE_CALLBACK}],
+            [{"text": "⬅️ Menu chính", "callback_data": "menu:main"}],
+        ]
+    }
+
+
+def _admin_tier_keyboard(action: str) -> dict:
+    return {
+        "inline_keyboard": [
+            [{"text": "🎁 Miễn phí", "callback_data": f"{ADMIN_TIER_PREFIX}{action}:free"}],
+            [{"text": "💳 Trả phí", "callback_data": f"{ADMIN_TIER_PREFIX}{action}:paid"}],
+            [{"text": "⬅️ Quay lại quản lý bác sĩ", "callback_data": ADMIN_MENU_CALLBACK}],
+        ]
+    }
+
+
+def _admin_specialty_keyboard(action: str, tier: str, specialties: list[str]) -> dict:
+    rows = [
+        [{
+            "text": specialty,
+            "callback_data": f"{ADMIN_SPECIALTY_PREFIX}{action}:{tier}:{_specialty_slug(specialty)}",
+        }]
+        for specialty in specialties
+    ]
+    rows.append([{"text": "⬅️ Chọn nhóm tư vấn", "callback_data": _admin_action_root_callback(action)}])
+    rows.append([{"text": "⬅️ Quản lý bác sĩ", "callback_data": ADMIN_MENU_CALLBACK}])
+    return {"inline_keyboard": rows}
+
+
+def _admin_doctor_callback(action: str, doctor_id: int) -> str:
+    if action == "edit":
+        return f"{ADMIN_FIELDS_PREFIX}{doctor_id}"
+    if action == "delete":
+        return f"{ADMIN_DELETE_PREFIX}{doctor_id}"
+    return f"{ADMIN_PROFILE_PREFIX}{doctor_id}"
+
+
+def _admin_doctor_list_keyboard(action: str, rows: list[dict], tier: str) -> dict:
+    buttons = [
+        [{
+            "text": _admin_doctor_button_text(row),
+            "callback_data": _admin_doctor_callback(action, int(row["id"])),
+        }]
+        for row in rows[:40]
+    ]
+    buttons.append([{"text": "⬅️ Chọn chuyên khoa", "callback_data": f"{ADMIN_TIER_PREFIX}{action}:{tier}"}])
+    buttons.append([{"text": "⬅️ Quản lý bác sĩ", "callback_data": ADMIN_MENU_CALLBACK}])
+    return {"inline_keyboard": buttons}
+
+
+def _admin_back_keyboard() -> dict:
+    return {
+        "inline_keyboard": [
+            [{"text": "⬅️ Quay lại quản lý bác sĩ", "callback_data": ADMIN_MENU_CALLBACK}]
+        ]
+    }
+
+
+def _admin_delete_confirm_keyboard(doctor_id: int) -> dict:
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🗑 Xác nhận xóa", "callback_data": f"{ADMIN_DELETE_CONFIRM_PREFIX}{doctor_id}"},
+                {"text": "❌ Hủy", "callback_data": ADMIN_DELETE_CALLBACK},
+            ]
+        ]
+    }
+
+
+def _is_admin_user(user_id: int | None) -> bool:
+    return telegram._is_admin(user_id)
+
+
+def _admin_doctor_summary(row: dict) -> str:
+    status = "đang hoạt động" if row["active"] else "đã xóa"
+    available = "rảnh" if row["available"] else "bận/ẩn"
+    price = _vnd(int(row.get("price") or 0))
+    return (
+        f"#{row['id']} - {row['name']} | {row.get('specialty') or 'Chưa cập nhật'} | "
+        f"{row['tier']} | {price}đ/phút | tg:{row['telegram_user_id']} | "
+        f"{status}, {available}"
+    )
+
+
+def _admin_action_root_callback(action: str) -> str:
+    if action == "edit":
+        return ADMIN_EDIT_CALLBACK
+    if action == "delete":
+        return ADMIN_DELETE_CALLBACK
+    return ADMIN_LIST_CALLBACK
+
+
+def _admin_doctor_button_text(row: dict) -> str:
+    status = "ẩn" if not row["active"] else "bận" if not row["available"] else "rảnh"
+    return f"#{row['id']} {row['name']} ({status})"
+
+
+def _admin_doctor_detail_text(row: dict) -> str:
+    price = _vnd(int(row.get("price") or 0))
+    active = "Đang hiển thị" if row["active"] else "Đã ẩn khỏi danh sách"
+    available = "Rảnh" if row["available"] else "Bận/không khả dụng"
+    experience = row.get("experience_years")
+    experience_text = f"{experience} năm" if experience else "Chưa cập nhật"
+    return (
+        f"👨‍⚕️ #{row['id']} {row['name']}\n"
+        f"Chuyên khoa: {row.get('specialty') or 'Chưa cập nhật'}\n"
+        f"Nhóm tư vấn: {row['tier']}\n"
+        f"Giá/phút: {price}đ\n"
+        f"Telegram user id: {row['telegram_user_id']}\n"
+        f"Trạng thái: {active}\n"
+        f"Khả dụng: {available}\n"
+        f"Học vị: {row.get('degree') or 'Chưa cập nhật'}\n"
+        f"Kinh nghiệm: {experience_text}\n"
+        f"Công tác: {row.get('hospital') or 'Chưa cập nhật'}\n\n"
+        f"Giới thiệu:\n{row.get('bio') or 'Chưa cập nhật'}"
+    )
+
+
+def _admin_doctor_profile_keyboard(doctor_id: int) -> dict:
+    return {
+        "inline_keyboard": [
+            [{"text": "✏️ Sửa thông tin", "callback_data": f"{ADMIN_FIELDS_PREFIX}{doctor_id}"}],
+            [{"text": "🗑 Xóa bác sĩ", "callback_data": f"{ADMIN_DELETE_PREFIX}{doctor_id}"}],
+            [{"text": "⬅️ Danh sách bác sĩ", "callback_data": ADMIN_LIST_CALLBACK}],
+            [{"text": "⬅️ Quản lý bác sĩ", "callback_data": ADMIN_MENU_CALLBACK}],
+        ]
+    }
+
+
+def _admin_field_value(row: dict, field: str) -> str:
+    value = row.get(field)
+    if field == "price":
+        return f"{_vnd(int(value or 0))}đ/phút"
+    if field == "active":
+        return "Đang hiển thị" if value else "Đã ẩn"
+    if field == "experience_years":
+        return f"{value} năm" if value else "Chưa cập nhật"
+    return str(value or "Chưa cập nhật")
+
+
+def _admin_fields_text(row: dict) -> str:
+    lines = [f"✏️ Sửa bác sĩ #{row['id']} - {row['name']}", "", "Chọn trường cần sửa:"]
+    for field, label in _ADMIN_FIELD_LABELS.items():
+        lines.append(f"{label}: {_admin_field_value(row, field)}")
+    return "\n".join(lines)
+
+
+def _admin_fields_keyboard(doctor_id: int) -> dict:
+    rows = [
+        [{"text": f"✏️ {label}", "callback_data": f"{ADMIN_FIELD_PREFIX}{doctor_id}:{field}"}]
+        for field, label in _ADMIN_FIELD_LABELS.items()
+    ]
+    rows.append([{"text": "⬅️ Hồ sơ bác sĩ", "callback_data": f"{ADMIN_PROFILE_PREFIX}{doctor_id}"}])
+    rows.append([{"text": "⬅️ Quản lý bác sĩ", "callback_data": ADMIN_MENU_CALLBACK}])
+    return {"inline_keyboard": rows}
+
+
+def _admin_custom_value_keyboard(doctor_id: int, field: str) -> dict:
+    return {
+        "inline_keyboard": [
+            [{"text": "✍️ Nhập giá trị mới", "callback_data": f"{ADMIN_CUSTOM_PREFIX}{doctor_id}:{field}"}],
+            [{"text": "⬅️ Chọn trường khác", "callback_data": f"{ADMIN_FIELDS_PREFIX}{doctor_id}"}],
+        ]
+    }
+
+
+def _admin_field_options_keyboard(doctor_id: int, field: str) -> dict:
+    rows: list[list[dict]] = []
+    if field == "tier":
+        rows.extend([
+            [{"text": "🎁 Miễn phí", "callback_data": f"{ADMIN_VALUE_PREFIX}{doctor_id}:tier:free"}],
+            [{"text": "💳 Trả phí", "callback_data": f"{ADMIN_VALUE_PREFIX}{doctor_id}:tier:paid"}],
+        ])
+    elif field == "active":
+        rows.extend([
+            [{"text": "✅ Hiển thị", "callback_data": f"{ADMIN_VALUE_PREFIX}{doctor_id}:active:1"}],
+            [{"text": "🙈 Ẩn khỏi danh sách", "callback_data": f"{ADMIN_VALUE_PREFIX}{doctor_id}:active:0"}],
+        ])
+    elif field == "specialty":
+        rows.extend([
+            [{
+                "text": specialty,
+                "callback_data": f"{ADMIN_VALUE_PREFIX}{doctor_id}:specialty:{_specialty_slug(specialty)}",
+            }]
+            for specialty in SPECIALTIES
+        ])
+    elif field == "price":
+        for amount in (0, PAID_RATE_PER_MIN, 5_000, 10_000, 20_000):
+            rows.append([{
+                "text": f"{_vnd(amount)}đ/phút",
+                "callback_data": f"{ADMIN_VALUE_PREFIX}{doctor_id}:price:{amount}",
+            }])
+    elif field == "experience_years":
+        for years in (1, 3, 5, 10, 15, 20):
+            rows.append([{
+                "text": f"{years} năm",
+                "callback_data": f"{ADMIN_VALUE_PREFIX}{doctor_id}:experience_years:{years}",
+            }])
+    elif field == "degree":
+        for code, label in _ADMIN_DEGREE_OPTIONS:
+            rows.append([{
+                "text": label,
+                "callback_data": f"{ADMIN_VALUE_PREFIX}{doctor_id}:degree:{code}",
+            }])
+    elif field == "hospital":
+        for code, label in _ADMIN_HOSPITAL_OPTIONS:
+            rows.append([{
+                "text": label,
+                "callback_data": f"{ADMIN_VALUE_PREFIX}{doctor_id}:hospital:{code}",
+            }])
+    rows.append([{"text": "✍️ Nhập giá trị khác", "callback_data": f"{ADMIN_CUSTOM_PREFIX}{doctor_id}:{field}"}])
+    rows.append([{"text": "⬅️ Chọn trường khác", "callback_data": f"{ADMIN_FIELDS_PREFIX}{doctor_id}"}])
+    return {"inline_keyboard": rows}
+
+
+def _admin_field_prompt(row: dict, field: str) -> str:
+    label = _ADMIN_FIELD_LABELS[field]
+    return (
+        f"Đang sửa: {label}\n"
+        f"Giá trị hiện tại: {_admin_field_value(row, field)}\n\n"
+        "Chọn một giá trị bên dưới hoặc nhập giá trị mới."
+    )
+
+
+async def _admin_edit_or_send(
+    chat_id: int | str,
+    message_id: int | None,
+    text: str,
+    inline_keyboard: dict | None = None,
+) -> None:
+    if message_id is None:
+        await telegram.send_text(chat_id, text, inline_keyboard=inline_keyboard)
+        return
+    await telegram._edit_message_text(chat_id, int(message_id), text, inline_keyboard)
+
+
+def _command_word(text: str) -> str:
+    return (text.strip().split(maxsplit=1)[0] if text.strip() else "").split("@", 1)[0].lower()
+
+
+def _parse_amount(text: str) -> int:
+    cleaned = text.strip().replace(".", "").replace(",", "")
+    if not cleaned or not cleaned.isdigit():
+        raise ValueError("Giá phải là số nguyên không âm.")
+    return int(cleaned)
+
+
+def _parse_positive_int(text: str, field_name: str) -> int:
+    value = text.strip()
+    if not value.isdigit():
+        raise ValueError(f"{field_name} phải là số nguyên.")
+    return int(value)
+
+
+def _parse_tier(value: str) -> str:
+    tier = value.strip().lower()
+    if tier not in {"free", "paid"}:
+        raise ValueError("Tier phải là free hoặc paid.")
+    return tier
+
+
+def _optional_text(value: str) -> str | None:
+    value = value.strip()
+    return value or None
+
+
+def _optional_int(value: str, field_name: str) -> int | None:
+    if not value.strip():
+        return None
+    return _parse_positive_int(value, field_name)
+
+
+def _parse_active(value: str) -> bool:
+    normalized = _text_key(value)
+    if normalized in {"1", "true", "yes", "active", "on", "bat", "dang hoat dong"}:
+        return True
+    if normalized in {"0", "false", "no", "inactive", "off", "tat", "da xoa"}:
+        return False
+    raise ValueError("active phải là true/false hoặc 1/0.")
+
+
+def _parse_admin_add_payload(text: str) -> dict:
+    _, _, payload = text.strip().partition(" ")
+    parts = [part.strip() for part in payload.split("|", 8)]
+    if len(parts) < 5:
+        raise ValueError("Thiếu thông tin. Cần ít nhất: Tên | Chuyên khoa | tier | Giá | Telegram user id.")
+    parts.extend([""] * (9 - len(parts)))
+    name = parts[0]
+    if not name:
+        raise ValueError("Tên bác sĩ không được để trống.")
+    price = _parse_amount(parts[3])
+    telegram_user_id = _parse_positive_int(parts[4], "Telegram user id")
+    return {
+        "name": name,
+        "specialty": _optional_text(parts[1]),
+        "tier": _parse_tier(parts[2]),
+        "price": price,
+        "telegram_user_id": telegram_user_id,
+        "degree": _optional_text(parts[5]),
+        "experience_years": _optional_int(parts[6], "Số năm kinh nghiệm"),
+        "hospital": _optional_text(parts[7]),
+        "bio": _optional_text(parts[8]),
+    }
+
+
+_ADMIN_EDIT_FIELD_ALIASES = {
+    "name": "name",
+    "specialty": "specialty",
+    "tier": "tier",
+    "price": "price",
+    "telegram_user_id": "telegram_user_id",
+    "telegram": "telegram_user_id",
+    "tg": "telegram_user_id",
+    "active": "active",
+    "degree": "degree",
+    "experience_years": "experience_years",
+    "experience": "experience_years",
+    "hospital": "hospital",
+    "bio": "bio",
+}
+
+
+def _parse_admin_edit_value(field: str, value: str):
+    if field == "tier":
+        return _parse_tier(value)
+    if field == "price":
+        return _parse_amount(value)
+    if field == "telegram_user_id":
+        return _parse_positive_int(value, "Telegram user id")
+    if field == "experience_years":
+        return _parse_positive_int(value, "Số năm kinh nghiệm")
+    if field == "active":
+        return _parse_active(value)
+    value = value.strip()
+    if not value:
+        raise ValueError(f"{field} không được để trống.")
+    return value
+
+
+def _admin_pending_key(chat_id: int | str, user_id: int | None) -> str:
+    return f"{chat_id}:{user_id}"
+
+
+def _admin_specialty_from_value(value: str) -> str:
+    specialty = _specialty_from_slug([{"specialty": item} for item in SPECIALTIES], value)
+    if specialty is None:
+        raise ValueError("Không tìm thấy chuyên khoa này.")
+    return specialty
+
+
+def _admin_code_value(field: str, value: str):
+    if field == "specialty":
+        return _admin_specialty_from_value(value)
+    if field == "degree":
+        options = dict(_ADMIN_DEGREE_OPTIONS)
+        if value not in options:
+            raise ValueError("Không tìm thấy học vị này.")
+        return options[value]
+    if field == "hospital":
+        options = dict(_ADMIN_HOSPITAL_OPTIONS)
+        if value not in options:
+            raise ValueError("Không tìm thấy bệnh viện này.")
+        return options[value]
+    return _parse_admin_edit_value(field, value)
+
+
+def _apply_admin_doctor_update(doctor_id: int, field: str, value) -> dict:
+    if field not in _ADMIN_FIELD_LABELS:
+        raise ValueError("Trường sửa không hợp lệ.")
+    if not doctors.update_doctor(doctor_id, **{field: value}):
+        raise ValueError(f"Không tìm thấy bác sĩ #{doctor_id}.")
+    doctor = doctors.get_doctor(doctor_id)
+    if doctor is None:
+        raise ValueError(f"Không tìm thấy bác sĩ #{doctor_id}.")
+    return doctor
+
+
+async def intercept_pending_admin_doctor_edit(
+    chat_id: int | str,
+    text: str,
+    user_id: int | None,
+) -> bool:
+    pending = _ADMIN_PENDING_EDITS.get(_admin_pending_key(chat_id, user_id))
+    if pending is None:
+        return False
+    if not _is_admin_user(user_id) or user_id != pending.user_id:
+        return False
+    try:
+        value = _parse_admin_edit_value(pending.field, text)
+        doctor = _apply_admin_doctor_update(pending.doctor_id, pending.field, value)
+    except sqlite3.IntegrityError:
+        await telegram.send_text(chat_id, "Không lưu được: Telegram user id đã được dùng cho bác sĩ khác.")
+        return True
+    except ValueError as exc:
+        await telegram.send_text(chat_id, str(exc), inline_keyboard=_admin_custom_value_keyboard(
+            pending.doctor_id, pending.field,
+        ))
+        return True
+    _ADMIN_PENDING_EDITS.pop(_admin_pending_key(chat_id, user_id), None)
+    await telegram.send_text(
+        chat_id,
+        f"Đã cập nhật {_ADMIN_FIELD_LABELS[pending.field]}.\n\n{_admin_doctor_detail_text(doctor)}",
+        inline_keyboard=_admin_doctor_profile_keyboard(pending.doctor_id),
+    )
+    return True
+
+
+def _parse_admin_edit_payload(text: str) -> tuple[int, dict]:
+    _, _, payload = text.strip().partition(" ")
+    doctor_id_text, _, fields_text = payload.strip().partition(" ")
+    if not doctor_id_text or not fields_text:
+        raise ValueError("Cú pháp: /admin_doctor_edit <id> field=value | field=value")
+    doctor_id = _parse_positive_int(doctor_id_text, "Doctor id")
+    changes = {}
+    for raw_item in fields_text.split("|"):
+        key, sep, value = raw_item.strip().partition("=")
+        if not sep:
+            raise ValueError("Mỗi trường sửa phải có dạng field=value.")
+        field = _ADMIN_EDIT_FIELD_ALIASES.get(key.strip().lower())
+        if field is None:
+            raise ValueError(f"Không hỗ trợ field: {key.strip()}.")
+        changes[field] = _parse_admin_edit_value(field, value)
+    if not changes:
+        raise ValueError("Chưa có trường nào để sửa.")
+    return doctor_id, changes
+
+
+def _parse_admin_delete_payload(text: str) -> int:
+    _, _, payload = text.strip().partition(" ")
+    doctor_id_text = payload.strip().split(maxsplit=1)[0] if payload.strip() else ""
+    if not doctor_id_text:
+        raise ValueError("Cú pháp: /admin_doctor_delete <id>")
+    return _parse_positive_int(doctor_id_text, "Doctor id")
+
+
+async def handle_admin_doctors_command(chat_id: int | str, user_id: int | None) -> bool:
+    if not _is_admin_user(user_id):
+        await telegram.send_text(chat_id, "Bạn không có quyền dùng chức năng này.")
+        return True
+    await telegram.send_text(chat_id, ADMIN_MENU_TEXT, inline_keyboard=_admin_doctors_keyboard())
+    return True
+
+
+async def handle_admin_doctor_command(
+    chat_id: int | str,
+    text: str,
+    user_id: int | None,
+) -> bool:
+    if not _is_admin_user(user_id):
+        await telegram.send_text(chat_id, "Bạn không có quyền dùng chức năng này.")
+        return True
+    cmd = _command_word(text)
+    try:
+        if cmd == "/admin_doctor_add":
+            doctor_id = doctors.create_doctor(**_parse_admin_add_payload(text))
+            await telegram.send_text(
+                chat_id,
+                f"Đã thêm bác sĩ #{doctor_id}.",
+                inline_keyboard=_admin_doctors_keyboard(),
+            )
+            return True
+        if cmd == "/admin_doctor_edit":
+            doctor_id, changes = _parse_admin_edit_payload(text)
+            if not doctors.update_doctor(doctor_id, **changes):
+                await telegram.send_text(chat_id, f"Không tìm thấy bác sĩ #{doctor_id}.")
+                return True
+            await telegram.send_text(
+                chat_id,
+                f"Đã cập nhật bác sĩ #{doctor_id}.",
+                inline_keyboard=_admin_doctors_keyboard(),
+            )
+            return True
+        if cmd == "/admin_doctor_delete":
+            doctor_id = _parse_admin_delete_payload(text)
+            if not doctors.delete_doctor(doctor_id):
+                await telegram.send_text(chat_id, f"Không tìm thấy bác sĩ #{doctor_id}.")
+                return True
+            await telegram.send_text(
+                chat_id,
+                f"Đã xóa bác sĩ #{doctor_id} khỏi danh sách đang hoạt động.",
+                inline_keyboard=_admin_doctors_keyboard(),
+            )
+            return True
+    except sqlite3.IntegrityError:
+        await telegram.send_text(chat_id, "Không lưu được: Telegram user id đã được dùng cho bác sĩ khác.")
+        return True
+    except ValueError as exc:
+        usage = ADMIN_ADD_USAGE if cmd == "/admin_doctor_add" else ADMIN_EDIT_USAGE
+        if cmd == "/admin_doctor_delete":
+            usage = "Cú pháp: `/admin_doctor_delete <id>`"
+        await telegram.send_text(chat_id, f"{exc}\n\n{usage}")
+        return True
+    return False
+
+
+def _admin_action_from_callback(data: str) -> str:
+    if data == ADMIN_EDIT_CALLBACK:
+        return "edit"
+    if data == ADMIN_DELETE_CALLBACK:
+        return "delete"
+    return "view"
+
+
+def _admin_rows_for_tier(tier: str) -> list[dict]:
+    return [row for row in doctors.list_all_doctors(include_inactive=True) if row["tier"] == tier]
+
+
+async def _show_admin_tiers(
+    chat_id: int | str,
+    message_id: int | None,
+    action: str,
+) -> None:
+    title = _ADMIN_ACTION_TITLES.get(action, _ADMIN_ACTION_TITLES["view"])
+    await _admin_edit_or_send(
+        chat_id,
+        message_id,
+        f"{title}\n\nChọn nhóm tư vấn:",
+        _admin_tier_keyboard(action),
+    )
+
+
+async def _show_admin_specialties(
+    chat_id: int | str,
+    message_id: int | None,
+    action: str,
+    tier: str,
+) -> None:
+    rows = _admin_rows_for_tier(tier)
+    specialties = _ordered_specialties(rows)
+    if not specialties:
+        await _admin_edit_or_send(
+            chat_id,
+            message_id,
+            "Chưa có bác sĩ trong nhóm này.",
+            _admin_tier_keyboard(action),
+        )
+        return
+    title = _ADMIN_ACTION_TITLES.get(action, _ADMIN_ACTION_TITLES["view"])
+    await _admin_edit_or_send(
+        chat_id,
+        message_id,
+        f"{title}\n\nChọn chuyên khoa:",
+        _admin_specialty_keyboard(action, tier, specialties),
+    )
+
+
+async def _show_admin_doctor_list(
+    chat_id: int | str,
+    message_id: int | None,
+    action: str,
+    tier: str,
+    specialty_slug: str,
+) -> None:
+    rows = _admin_rows_for_tier(tier)
+    specialty = _specialty_from_slug(rows, specialty_slug)
+    if specialty is None:
+        await _admin_edit_or_send(
+            chat_id,
+            message_id,
+            "Không tìm thấy chuyên khoa này.",
+            _admin_tier_keyboard(action),
+        )
+        return
+    filtered = [row for row in rows if _specialty_slug(str(row.get("specialty") or "")) == specialty_slug]
+    title = _ADMIN_ACTION_TITLES.get(action, _ADMIN_ACTION_TITLES["view"])
+    await _admin_edit_or_send(
+        chat_id,
+        message_id,
+        f"{title}\n\nChọn bác sĩ chuyên khoa {specialty}:",
+        _admin_doctor_list_keyboard(action, filtered, tier),
+    )
+
+
+async def _show_admin_doctor_profile(
+    chat_id: int | str,
+    message_id: int | None,
+    doctor_id: int,
+) -> None:
+    doctor = doctors.get_doctor(doctor_id)
+    if doctor is None:
+        await _admin_edit_or_send(chat_id, message_id, f"Không tìm thấy bác sĩ #{doctor_id}.", _admin_doctors_keyboard())
+        return
+    await _admin_edit_or_send(
+        chat_id,
+        message_id,
+        _admin_doctor_detail_text(doctor),
+        _admin_doctor_profile_keyboard(doctor_id),
+    )
+
+
+async def _show_admin_fields(
+    chat_id: int | str,
+    message_id: int | None,
+    doctor_id: int,
+) -> None:
+    doctor = doctors.get_doctor(doctor_id)
+    if doctor is None:
+        await _admin_edit_or_send(chat_id, message_id, f"Không tìm thấy bác sĩ #{doctor_id}.", _admin_doctors_keyboard())
+        return
+    await _admin_edit_or_send(
+        chat_id,
+        message_id,
+        _admin_fields_text(doctor),
+        _admin_fields_keyboard(doctor_id),
+    )
+
+
+async def _show_admin_field_options(
+    chat_id: int | str,
+    message_id: int | None,
+    doctor_id: int,
+    field: str,
+) -> None:
+    doctor = doctors.get_doctor(doctor_id)
+    if doctor is None:
+        await _admin_edit_or_send(chat_id, message_id, f"Không tìm thấy bác sĩ #{doctor_id}.", _admin_doctors_keyboard())
+        return
+    if field not in _ADMIN_FIELD_LABELS:
+        await _admin_edit_or_send(chat_id, message_id, "Trường sửa không hợp lệ.", _admin_fields_keyboard(doctor_id))
+        return
+    await _admin_edit_or_send(
+        chat_id,
+        message_id,
+        _admin_field_prompt(doctor, field),
+        _admin_field_options_keyboard(doctor_id, field),
+    )
+
+
+async def _handle_admin_doctor_callback(
+    data: str,
+    chat_id: int | str,
+    message_id: int | None,
+    callback_query_id: str | None,
+    user_id: int | None,
+) -> bool:
+    if not data.startswith(ADMIN_PREFIX):
+        return False
+    if not _is_admin_user(user_id):
+        if callback_query_id:
+            await telegram._answer_callback_query(str(callback_query_id), "Bạn không có quyền dùng chức năng này.")
+        return True
+    if data == ADMIN_MENU_CALLBACK:
+        await _admin_edit_or_send(chat_id, message_id, ADMIN_MENU_TEXT, _admin_doctors_keyboard())
+        if callback_query_id:
+            await telegram._answer_callback_query(str(callback_query_id), "")
+        return True
+    if data in {ADMIN_LIST_CALLBACK, ADMIN_EDIT_CALLBACK, ADMIN_DELETE_CALLBACK}:
+        await _show_admin_tiers(chat_id, message_id, _admin_action_from_callback(data))
+        if callback_query_id:
+            await telegram._answer_callback_query(str(callback_query_id), "Chọn nhóm tư vấn.")
+        return True
+    if data == ADMIN_ADD_CALLBACK:
+        await _admin_edit_or_send(chat_id, message_id, ADMIN_ADD_USAGE, _admin_back_keyboard())
+        if callback_query_id:
+            await telegram._answer_callback_query(str(callback_query_id), "Hướng dẫn thêm bác sĩ.")
+        return True
+    if data.startswith(ADMIN_TIER_PREFIX):
+        payload = data[len(ADMIN_TIER_PREFIX):]
+        action, _, tier = payload.partition(":")
+        await _show_admin_specialties(chat_id, message_id, action, tier)
+        if callback_query_id:
+            await telegram._answer_callback_query(str(callback_query_id), "Chọn chuyên khoa.")
+        return True
+    if data.startswith(ADMIN_SPECIALTY_PREFIX):
+        payload = data[len(ADMIN_SPECIALTY_PREFIX):]
+        action, _, rest = payload.partition(":")
+        tier, _, specialty_slug = rest.partition(":")
+        await _show_admin_doctor_list(chat_id, message_id, action, tier, specialty_slug)
+        if callback_query_id:
+            await telegram._answer_callback_query(str(callback_query_id), "Chọn bác sĩ.")
+        return True
+    if data.startswith(ADMIN_PROFILE_PREFIX):
+        await _show_admin_doctor_profile(chat_id, message_id, int(data[len(ADMIN_PROFILE_PREFIX):]))
+        if callback_query_id:
+            await telegram._answer_callback_query(str(callback_query_id), "Thông tin bác sĩ.")
+        return True
+    if data.startswith(ADMIN_FIELDS_PREFIX):
+        await _show_admin_fields(chat_id, message_id, int(data[len(ADMIN_FIELDS_PREFIX):]))
+        if callback_query_id:
+            await telegram._answer_callback_query(str(callback_query_id), "Chọn trường cần sửa.")
+        return True
+    if data.startswith(ADMIN_FIELD_PREFIX):
+        payload = data[len(ADMIN_FIELD_PREFIX):]
+        doctor_id_text, _, field = payload.partition(":")
+        await _show_admin_field_options(chat_id, message_id, int(doctor_id_text), field)
+        if callback_query_id:
+            await telegram._answer_callback_query(str(callback_query_id), "Chọn giá trị mới.")
+        return True
+    if data.startswith(ADMIN_VALUE_PREFIX):
+        payload = data[len(ADMIN_VALUE_PREFIX):]
+        doctor_id_text, _, rest = payload.partition(":")
+        field, _, raw_value = rest.partition(":")
+        try:
+            value = _admin_code_value(field, raw_value)
+            doctor = _apply_admin_doctor_update(int(doctor_id_text), field, value)
+            await _admin_edit_or_send(
+                chat_id,
+                message_id,
+                f"Đã cập nhật {_ADMIN_FIELD_LABELS[field]}.\n\n{_admin_doctor_detail_text(doctor)}",
+                _admin_doctor_profile_keyboard(int(doctor_id_text)),
+            )
+            if callback_query_id:
+                await telegram._answer_callback_query(str(callback_query_id), "Đã cập nhật.")
+        except sqlite3.IntegrityError:
+            await _admin_edit_or_send(chat_id, message_id, "Không lưu được: Telegram user id đã được dùng cho bác sĩ khác.", _admin_doctors_keyboard())
+            if callback_query_id:
+                await telegram._answer_callback_query(str(callback_query_id), "Không lưu được.")
+        except ValueError as exc:
+            await _admin_edit_or_send(chat_id, message_id, str(exc), _admin_doctors_keyboard())
+            if callback_query_id:
+                await telegram._answer_callback_query(str(callback_query_id), "Không lưu được.")
+        return True
+    if data.startswith(ADMIN_CUSTOM_PREFIX):
+        payload = data[len(ADMIN_CUSTOM_PREFIX):]
+        doctor_id_text, _, field = payload.partition(":")
+        doctor_id = int(doctor_id_text)
+        if field not in _ADMIN_FIELD_LABELS or user_id is None:
+            await _admin_edit_or_send(chat_id, message_id, "Không xử lý được trường này.", _admin_doctors_keyboard())
+            return True
+        _ADMIN_PENDING_EDITS[_admin_pending_key(chat_id, user_id)] = AdminDoctorPendingEdit(
+            user_id=int(user_id),
+            doctor_id=doctor_id,
+            field=field,
+        )
+        await _admin_edit_or_send(
+            chat_id,
+            message_id,
+            f"Nhập giá trị mới cho {_ADMIN_FIELD_LABELS[field]}.",
+            {"inline_keyboard": [[{"text": "❌ Hủy", "callback_data": ADMIN_CANCEL_EDIT_CALLBACK}]]},
+        )
+        if callback_query_id:
+            await telegram._answer_callback_query(str(callback_query_id), "Nhập giá trị mới.")
+        return True
+    if data == ADMIN_CANCEL_EDIT_CALLBACK:
+        _ADMIN_PENDING_EDITS.pop(_admin_pending_key(chat_id, user_id), None)
+        await _admin_edit_or_send(chat_id, message_id, "Đã hủy sửa thông tin.", _admin_doctors_keyboard())
+        if callback_query_id:
+            await telegram._answer_callback_query(str(callback_query_id), "Đã hủy.")
+        return True
+    if data.startswith(ADMIN_DELETE_CONFIRM_PREFIX):
+        doctor_id = int(data[len(ADMIN_DELETE_CONFIRM_PREFIX):])
+        if doctors.delete_doctor(doctor_id):
+            text = f"Đã xóa bác sĩ #{doctor_id} khỏi danh sách đang hoạt động."
+        else:
+            text = f"Không tìm thấy bác sĩ #{doctor_id}."
+        await _admin_edit_or_send(chat_id, message_id, text, _admin_doctors_keyboard())
+        if callback_query_id:
+            await telegram._answer_callback_query(str(callback_query_id), "Đã xử lý.")
+        return True
+    if data.startswith(ADMIN_DELETE_PREFIX):
+        doctor_id = int(data[len(ADMIN_DELETE_PREFIX):])
+        doctor = doctors.get_doctor(doctor_id)
+        if doctor is None or not doctor["active"]:
+            await _admin_edit_or_send(chat_id, message_id, f"Không tìm thấy bác sĩ #{doctor_id}.", _admin_doctors_keyboard())
+        else:
+            await _admin_edit_or_send(
+                chat_id,
+                message_id,
+                f"Xác nhận xóa bác sĩ này khỏi danh sách đang hoạt động?\n\n{_admin_doctor_summary(doctor)}",
+                _admin_delete_confirm_keyboard(doctor_id),
+            )
+        if callback_query_id:
+            await telegram._answer_callback_query(str(callback_query_id), "Xác nhận xóa.")
+        return True
+    return True
 
 
 async def handle_doctor_command(chat_id: int | str) -> bool:
@@ -958,6 +1805,15 @@ async def handle_doctor_callback(callback_query: dict) -> bool:
     message_id = message.get("message_id")
     telegram_user_id = (callback_query.get("from") or {}).get("id")
     if chat_id is None:
+        return True
+
+    if await _handle_admin_doctor_callback(
+        data,
+        chat_id,
+        int(message_id) if message_id is not None else None,
+        str(callback_query_id) if callback_query_id else None,
+        telegram_user_id,
+    ):
         return True
 
     if data == HANDOFF_DECLINE:

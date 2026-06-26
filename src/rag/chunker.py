@@ -104,11 +104,22 @@ def _make_chunk(
 
 
 def _slugify(text: str) -> str:
+    import hashlib
     import re
     text = text.lower()
-    text = re.sub(r"[^a-z0-9_\s]", "", text)
-    text = re.sub(r"\s+", "_", text.strip())
-    return text[:80]
+    # Preserve dots (a., b., 1.1., ...) so sub-section letter prefixes are kept,
+    # otherwise e.g. "a. Giai đoạn sốt" and "b. Giai đoạn nguy hiểm" collapse
+    # to the same chunk_id. Convert runs of dots to underscores for stability.
+    sanitized = re.sub(r"[^a-z0-9_\s.]", "", text)
+    sanitized = re.sub(r"\.+", "_", sanitized)
+    sanitized = re.sub(r"\s+", "_", sanitized.strip())
+    sanitized = re.sub(r"_+", "_", sanitized)
+    # Long heading paths (deep sub-sub-subsections) get truncated; to keep
+    # uniqueness we append a short hash of the full path. We use a 6-char
+    # truncated sha1 over the original (case-folded) heading_path so sibling
+    # sub-sections get distinct IDs.
+    h = hashlib.sha1(text.encode("utf-8")).hexdigest()[:6]
+    return f"{sanitized[:120]}_{h}"
 
 
 def chunk_diseases() -> list[dict]:

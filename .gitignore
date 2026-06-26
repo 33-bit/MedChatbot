@@ -26,3 +26,6 @@ snapshots
 docs/superpowers/
 pytest.ini
 medical_chatbot_qa_templates.md
+.agents
+.codex
+.pytest_cache

@@ -126,6 +126,41 @@ def test_list_doctors_filters_tier_and_inactive():
     assert inactive["available"] is False
 
 
+def test_admin_doctor_helpers_update_list_and_soft_delete():
+    doctor_id = doctors.create_doctor("BS Old", "Nội", "free", 0, 205)
+
+    changed = doctors.update_doctor(
+        doctor_id,
+        name="BS New",
+        specialty="Tim mạch",
+        tier="paid",
+        price=75_000,
+        telegram_user_id=206,
+        degree="Bác sĩ chuyên khoa II",
+        experience_years=12,
+        hospital="Bệnh viện E",
+        bio="Tư vấn tim mạch.",
+    )
+
+    row = doctors.get_doctor(doctor_id)
+    assert changed is True
+    assert row["name"] == "BS New"
+    assert row["specialty"] == "Tim mạch"
+    assert row["tier"] == "paid"
+    assert row["price"] == 75_000
+    assert row["telegram_user_id"] == 206
+    assert row["degree"] == "Bác sĩ chuyên khoa II"
+    assert row["experience_years"] == 12
+    assert row["hospital"] == "Bệnh viện E"
+    assert row["bio"] == "Tư vấn tim mạch."
+
+    assert [d["id"] for d in doctors.list_all_doctors(include_inactive=False)] == [doctor_id]
+    assert doctors.delete_doctor(doctor_id) is True
+    assert doctors.get_doctor(doctor_id)["active"] == 0
+    assert doctors.list_all_doctors(include_inactive=False) == []
+    assert [d["id"] for d in doctors.list_all_doctors()] == [doctor_id]
+
+
 def test_consultation_create_accept_lookup_and_end():
     doctor_id = doctors.create_doctor("BS Relay", "Nội", "free", 0, 301)
     doctor = doctors.get_doctor(doctor_id)

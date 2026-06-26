@@ -26,6 +26,48 @@ def _hit(label: str, score: float) -> Hit:
     )
 
 
+def test_drug_usage_query_promotes_same_drug_usage_heading():
+    base = Hit(
+        text="Thông tin chung về Almagate.",
+        score=0.9,
+        source_type="drug",
+        source_name="Almagate",
+        heading_path="Đại cương",
+        source_slug="almagate",
+        chunk_id="drug:almagate:dai-cuong",
+        id="uuid-base",
+    )
+    disease = Hit(
+        text="Đau dạ dày có nhiều nguyên nhân.",
+        score=0.8,
+        source_type="disease",
+        source_name="Đau dạ dày",
+        heading_path="Triệu chứng",
+        source_slug="dau-da-day",
+        chunk_id="disease:dau-da-day:trieu-chung",
+        id="uuid-disease",
+    )
+    usage = Hit(
+        text="Liều dùng: người lớn uống 1-2 gói/lần, ngày 3 lần.",
+        score=0.4,
+        source_type="drug",
+        source_name="Almagate",
+        heading_path="Liều dùng và cách dùng",
+        source_slug="almagate",
+        chunk_id="drug:almagate:lieu-dung-va-cach-dung",
+        id="uuid-usage",
+    )
+
+    hits = service._ensure_drug_usage_context(
+        "Almagate liều dùng thế nào?",
+        [base, disease],
+        [usage],
+        top_k=2,
+    )
+
+    assert [hit.id for hit in hits] == ["uuid-base", "uuid-usage"]
+
+
 def test_hybrid_search_with_debug_serializes_every_stage_candidate(
     monkeypatch,
     caplog,
@@ -101,6 +143,7 @@ def test_hybrid_search_with_debug_serializes_every_stage_candidate(
     expected_fields = {
         "rank",
         "stage",
+        "id",
         "chunk_id",
         "source_type",
         "source_slug",
@@ -121,6 +164,7 @@ def test_hybrid_search_with_debug_serializes_every_stage_candidate(
             assert serialized == {
                 "rank": rank,
                 "stage": stage,
+                "id": original.id,
                 "chunk_id": original.chunk_id,
                 "source_type": original.source_type,
                 "source_slug": original.source_slug,

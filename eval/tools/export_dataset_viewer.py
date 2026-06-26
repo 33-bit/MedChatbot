@@ -1,9 +1,19 @@
+import argparse
 import json
 from pathlib import Path
 
-def export_html():
-    jsonl_path = Path("eval/datasets/medical_qa_benchmark_v2.jsonl")
-    html_path = Path("eval/artifacts/dataset_viewer.html")
+DEFAULT_DATASET = Path("eval/datasets/medical_qa_benchmark_v2.jsonl")
+DEFAULT_OUTPUT = Path("eval/artifacts/dataset_viewer.html")
+
+
+def export_html(
+    jsonl_path: Path | str = DEFAULT_DATASET,
+    html_path: Path | str = DEFAULT_OUTPUT,
+    categories: list[str] | tuple[str, ...] | None = None,
+):
+    jsonl_path = Path(jsonl_path)
+    html_path = Path(html_path)
+    selected_categories = tuple(categories or ())
 
     if not jsonl_path.exists():
         print("Dataset not found!")
@@ -17,13 +27,22 @@ def export_html():
                     data.append(json.loads(line))
                 except Exception as e:
                     pass
+    if selected_categories:
+        wanted = set(selected_categories)
+        data = [row for row in data if row.get("category") in wanted]
+
+    category_label = (
+        ", ".join(selected_categories)
+        if selected_categories
+        else "all categories"
+    )
 
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Medical QA Benchmark Dataset</title>
+    <title>Medical QA Benchmark Dataset - {category_label}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" rel="stylesheet">
     <style>
@@ -52,6 +71,10 @@ def export_html():
             <span class="badge bg-light text-dark fs-6">Total Cases: {len(data)}</span>
         </div>
         <div class="card-body">
+            <div class="alert alert-light border mb-3">
+                Dataset: <code>{jsonl_path}</code><br>
+                Category scope: <strong>{category_label}</strong>
+            </div>
             <div class="row g-3 align-items-end mb-3">
                 <div class="col-sm-6 col-md-4 col-lg-3">
                     <label for="categoryFilter" class="form-label fw-semibold">Category</label>
@@ -106,6 +129,7 @@ def export_html():
         const colors = {{
             'disease_info': 'bg-primary',
             'drug_info': 'bg-success',
+            'health_insurance_info': 'bg-info text-dark',
             'emergency': 'bg-danger',
             'diagnostic_flow': 'bg-info text-dark',
             'safety_self_medication': 'bg-warning text-dark',
@@ -218,5 +242,35 @@ def export_html():
         f.write(html_content)
     print(f"Generated viewer at: {html_path.absolute()}")
 
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Export a static HTML benchmark dataset viewer.")
+    parser.add_argument(
+        "--dataset",
+        default=str(DEFAULT_DATASET),
+        help="Input JSONL dataset path.",
+    )
+    parser.add_argument(
+        "--out",
+        default=str(DEFAULT_OUTPUT),
+        help="Output HTML path.",
+    )
+    parser.add_argument(
+        "--category",
+        action="append",
+        default=[],
+        help="Category to include. Repeat for multiple categories.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    export_html(
+        jsonl_path=args.dataset,
+        html_path=args.out,
+        categories=args.category,
+    )
+
 if __name__ == "__main__":
-    export_html()
+    main()

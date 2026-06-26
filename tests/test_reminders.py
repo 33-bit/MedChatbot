@@ -13,9 +13,11 @@ from src.chat.storage.reminders import (
     check_duplicate_active_or_pending, delete_reminder_draft
 )
 from src.chat.storage.reminder_parser import (
+    MEDICAL_REMINDER_REJECTION_MESSAGE,
     check_reminder_prefilter,
     direct_reminder_fallback,
     is_explicit_reminder_request,
+    is_supported_medical_reminder,
     parse_multi_turn_reminder,
     parse_reminder_natural_language,
 )
@@ -350,6 +352,8 @@ async def test_telegram_multi_turn_reminders(monkeypatch):
     
     # Turn 1: Incomplete direct request
     # Mock LLM for turn 1
+    future_dt = datetime.datetime.now(TZ) + datetime.timedelta(days=1)
+    future_when = future_dt.strftime("%Y-%m-%d 11:00")
     mock_responses = [
         # Response 1
         {
@@ -371,7 +375,7 @@ async def test_telegram_multi_turn_reminders(monkeypatch):
             "merged_fields": {
                 "medical_type": "medication",
                 "reminder_text": "uống thuốc",
-                "schedule": {"type": "one_time", "datetime": "2026-06-22 11:00"},
+                "schedule": {"type": "one_time", "datetime": future_when},
                 "end_date": None
             },
             "missing_fields": [],
@@ -409,7 +413,7 @@ async def test_telegram_multi_turn_reminders(monkeypatch):
     # Confirmation draft should have been proposed
     assert len(sent_messages) == 2
     assert "Đề xuất tạo nhắc nhở y tế" in sent_messages[-1]["text"]
-    assert "Một lần vào 2026-06-22 11:00" in sent_messages[-1]["text"]
+    assert f"Một lần vào {future_when}" in sent_messages[-1]["text"]
 
 
 @pytest.mark.anyio
@@ -563,6 +567,27 @@ def test_explicit_reminder_detection_and_safe_fallback():
     assert fallback["missing_fields"] == ["schedule"]
 
 
+def test_supported_medical_reminder_guard():
+    assert is_supported_medical_reminder(
+        "medication",
+        "uống thuốc",
+        "đặt lịch uống thuốc lúc 20h",
+    ) is True
+    assert is_supported_medical_reminder(
+        "clinic",
+        "đi khám",
+        "nhắc tôi đi khám lúc 9h sáng mai",
+    ) is True
+    assert is_supported_medical_reminder(
+        "medication",
+        "nấu cơm",
+        "đặt lịch nấu cơm lúc 20h hôm nay",
+    ) is False
+    assert is_supported_medical_reminder("medication", "họp nhân viên lúc 20h") is False
+    assert is_supported_medical_reminder("medication", "đi tiệm cắt tóc lúc 20h") is False
+    assert is_supported_medical_reminder(None, None, "đặt lịch nấu cơm lúc 20h") is False
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize("parser_result", [
     None,
@@ -667,6 +692,120 @@ async def test_ambiguous_direct_reminder_is_persisted_before_clarification(monke
 
 
 @pytest.mark.anyio
+async def test_non_medical_direct_reminder_is_rejected(monkeypatch):
+    from src.chat.storage.reminders import (
+        delete_pending_conversation,
+        get_pending_conversation,
+        init_reminders_db,
+    )
+    from src.server.channels import telegram
+
+    chat_id = 99115
+    user_id = 99116
+    init_reminders_db()
+    delete_pending_conversation(chat_id, user_id)
+    send_text = AsyncMock(return_value=123)
+    monkeypatch.setattr(telegram, "send_text", send_text)
+
+    parsed = {
+        "is_relevant_followup": True,
+        "is_canceled": False,
+        "is_direct_request": True,
+        "is_ordinary_mention": False,
+        "merged_fields": {
+            "medical_type": None,
+            "reminder_text": "nấu cơm",
+            "schedule": {"type": "one_time", "datetime": "2026-06-25 20:00"},
+            "end_date": None,
+        },
+        "missing_fields": ["medical_type"],
+        "is_complete": False,
+        "is_ambiguous": False,
+        "is_past": False,
+        "clarification_prompt": "Bạn muốn nhắc nhở việc nấu cơm là hoạt động y tế hay không?",
+    }
+
+    handled = await telegram._process_reminder_input_flow(
+        chat_id,
+        user_id,
+        "đặt lịch nấu cơm lúc 20h hôm nay",
+        is_direct=True,
+        parsed_reminder=parsed,
+    )
+
+    assert handled is True
+    assert get_pending_conversation(chat_id, user_id) is None
+    send_text.assert_awaited_once_with(chat_id, MEDICAL_REMINDER_REJECTION_MESSAGE)
+
+
+@pytest.mark.anyio
+async def test_yes_followup_cannot_convert_non_medical_reminder(monkeypatch):
+    from src.chat.storage.reminders import (
+        delete_pending_conversation,
+        delete_reminder_drafts_for_user,
+        get_latest_reminder_draft,
+        get_pending_conversation,
+        init_reminders_db,
+        upsert_pending_conversation,
+    )
+    from src.server.channels import telegram
+
+    chat_id = 99117
+    user_id = 99118
+    init_reminders_db()
+    delete_pending_conversation(chat_id, user_id)
+    delete_reminder_drafts_for_user(chat_id, user_id)
+    upsert_pending_conversation(
+        chat_id=chat_id,
+        user_id=user_id,
+        original_request="đặt lịch nấu cơm lúc 20h hôm nay",
+        partial_fields={
+            "medical_type": None,
+            "reminder_text": "nấu cơm",
+            "schedule": {"type": "one_time", "datetime": "2026-06-25 20:00"},
+            "end_date": None,
+        },
+        turns=[
+            "đặt lịch nấu cơm lúc 20h hôm nay",
+            "Bạn muốn nhắc nhở việc nấu cơm là hoạt động y tế hay không?",
+        ],
+        missing_fields=["medical_type"],
+        expires_at=int(time.time()) + 600,
+    )
+
+    parsed = {
+        "is_relevant_followup": True,
+        "is_canceled": False,
+        "corrected": False,
+        "merged_fields": {
+            "medical_type": "medication",
+            "reminder_text": "nấu cơm",
+            "schedule": {"type": "one_time", "datetime": "2026-06-25 20:00"},
+            "end_date": None,
+        },
+        "missing_fields": [],
+        "is_complete": True,
+        "is_ambiguous": False,
+        "is_past": False,
+        "clarification_prompt": None,
+    }
+    monkeypatch.setattr(
+        "src.chat.storage.reminder_parser.parse_multi_turn_reminder",
+        lambda *args, **kwargs: parsed,
+    )
+    send_text = AsyncMock(return_value=123)
+    monkeypatch.setattr(telegram, "send_text", send_text)
+
+    pending = get_pending_conversation(chat_id, user_id)
+    handled = await telegram._process_reminder_followup(chat_id, user_id, "có", pending)
+
+    assert handled is True
+    assert get_pending_conversation(chat_id, user_id) is None
+    assert get_latest_reminder_draft(chat_id, user_id) is None
+    send_text.assert_awaited_once_with(chat_id, MEDICAL_REMINDER_REJECTION_MESSAGE)
+
+
+@pytest.mark.anyio
 async def test_confirmation_draft_accepts_free_text_correction(monkeypatch):
     from src.chat.storage.reminders import (
         create_reminder_draft,
@@ -680,13 +819,15 @@ async def test_confirmation_draft_accepts_free_text_correction(monkeypatch):
     user_id = 99106
     init_reminders_db()
     delete_reminder_drafts_for_user(chat_id, user_id)
+    future_dt = datetime.datetime.now(TZ) + datetime.timedelta(days=1)
+    future_when = future_dt.strftime("%Y-%m-%d 12:00")
     old_draft_id = create_reminder_draft(
         chat_id=chat_id,
         user_id=user_id,
         medical_type="medication",
         reminder_text="uống thuốc",
-        schedule={"type": "one_time", "datetime": "2026-06-22 12:00"},
-        next_fire_at=int(datetime.datetime(2026, 6, 22, 12, 0, tzinfo=TZ).timestamp()),
+        schedule={"type": "one_time", "datetime": future_when},
+        next_fire_at=int(future_dt.replace(hour=12, minute=0, second=0, microsecond=0).timestamp()),
         end_date=None,
         source="direct",
     )
@@ -698,7 +839,7 @@ async def test_confirmation_draft_accepts_free_text_correction(monkeypatch):
         "merged_fields": {
             "medical_type": "medication",
             "reminder_text": "Vitamin A",
-            "schedule": {"type": "one_time", "datetime": "2026-06-22 12:00"},
+            "schedule": {"type": "one_time", "datetime": future_when},
             "end_date": None,
         },
         "missing_fields": [],

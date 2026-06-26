@@ -76,3 +76,34 @@ def test_export_html_matches_current_dataset_schema(tmp_path, monkeypatch):
     assert "safety_prompt_injection" in html
     assert "must_include" not in html
     assert "requires_emergency_advice" not in html
+
+
+def test_export_html_filters_requested_categories(tmp_path, monkeypatch):
+    eval_dir = tmp_path / "eval"
+    dataset_dir = eval_dir / "datasets"
+    artifact_dir = eval_dir / "artifacts"
+    dataset_dir.mkdir(parents=True)
+    artifact_dir.mkdir()
+    (dataset_dir / "medical_qa_benchmark_v2.jsonl").write_text(
+        "\n".join(
+            [
+                '{"id":"QA-E","category":"emergency","question":"Q emergency","reference_answer":"A"}',
+                '{"id":"QA-H","category":"health_insurance_info","question":"Q health","reference_answer":"A"}',
+                '{"id":"QA-D","category":"drug_info","question":"Q drug","reference_answer":"A"}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    load_exporter().export_html(
+        categories=["emergency", "health_insurance_info"],
+        html_path=artifact_dir / "two_new_categories.html",
+    )
+
+    html = (artifact_dir / "two_new_categories.html").read_text(encoding="utf-8")
+    assert "Total Cases: 2" in html
+    assert "QA-E" in html
+    assert "QA-H" in html
+    assert "QA-D" not in html
+    assert "health_insurance_info" in html

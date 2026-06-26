@@ -10,12 +10,20 @@ import json
 import logging
 import re
 import time
+import unicodedata
+from typing import Literal
 from urllib.parse import quote
 
 from src.chat.clients import get_openai
 from src.chat.llm.mini import chat_completion_extra_kwargs, message_text
 from src.chat.context.resolver import format_subject_address
-from src.chat.prompts import GENERATOR_SYSTEM
+from src.chat.prompts import (
+    DISEASE_INFO_INSTRUCTIONS,
+    DRUG_INFO_INSTRUCTIONS,
+    GENERATOR_SYSTEM,
+    HEALTH_INSURANCE_INFO_INSTRUCTIONS,
+    SYMPTOM_OR_CARE_INSTRUCTIONS,
+)
 from src.chat.replies import TECHNICAL_ERROR_REPLY
 from src.chat.retrieval.types import Hit
 from src.chat.storage.seed_doctors import SPECIALTIES
@@ -24,12 +32,121 @@ from src.config import BASE_URL, MODEL, MODEL_MAX_TOKENS, PUBLIC_BASE_URL
 
 log = logging.getLogger(__name__)
 
+AnswerDomain = Literal[
+    "symptom_or_care",
+    "disease_info",
+    "drug_info",
+    "health_insurance_info",
+]
+
 DRUG_URL_TEMPLATE = "https://trungtamthuoc.com/hoat-chat/{slug}"
 NO_DATA_REPLY = ("Tôi không tìm thấy thông tin phù hợp trong tài liệu. "
                  "Bạn vui lòng hỏi cụ thể hơn hoặc tham khảo ý kiến bác sĩ.")
 _CITATION_RE = re.compile(r"\[([0-9][0-9,\-\s]*)\]")
 _HORIZONTAL_RULE_RE = re.compile(r"(?m)^\s*-{3,}\s*$")
 _DOCTOR_SPECIALTY_OPTIONS = ", ".join(SPECIALTIES)
+_DOSE_TOKEN_RE = re.compile(
+    r"\b\d+(?:[,.]\d+)?(?:\s*[-–]\s*\d+(?:[,.]\d+)?)?\s*"
+    r"(?:mg|g|mcg|ug|ml|%|lần(?:/ngày)?|ngày|tuần|tháng|năm|viên|giọt|ống)\b",
+    flags=re.IGNORECASE,
+)
+_ANSWER_DOMAIN_INSTRUCTIONS: dict[AnswerDomain, str] = {
+    "symptom_or_care": SYMPTOM_OR_CARE_INSTRUCTIONS,
+    "disease_info": DISEASE_INFO_INSTRUCTIONS,
+    "drug_info": DRUG_INFO_INSTRUCTIONS,
+    "health_insurance_info": HEALTH_INSURANCE_INFO_INSTRUCTIONS,
+}
+_DISEASE_CONTEXT_TERMS = (
+    "benh",
+    "trieu chung",
+    "chan doan",
+    "nguyen nhan",
+    "bien chung",
+    "giai doan",
+    "phan loai",
+    "co lay",
+)
+_TREATMENT_OR_MEDICINE_TERMS = (
+    "dieu tri",
+    "thuoc",
+    "lieu",
+    "lieu dung",
+    "cach dung",
+    "uong",
+    "boi",
+    "tiem",
+    "phac do",
+    "khang sinh",
+)
+_DANGER_OR_CARE_TERMS = (
+    "nguy hiem",
+    "dau hieu nang",
+    "cap cuu",
+    "goi 115",
+    "di kham",
+    "kham ngay",
+    "dieu tri",
+    "xu tri",
+    "nghiem trong",
+    "nang hon",
+    "canh bao",
+    "chuyen bien xau",
+)
+_GENERIC_DISEASE_BOILERPLATE = (
+    "chua the chan doan chac chan qua chat",
+    "khong the chan doan chac chan qua chat",
+    "khong the ket luan chan doan qua chat",
+)
+_GENERIC_DRUG_WARNING_TERMS = (
+    "phu nu co thai",
+    "mang thai",
+    "cho con bu",
+    "benh gan",
+    "benh than",
+    "gan/than",
+    "suy gan",
+    "suy than",
+)
+_DRUG_EMERGENCY_TERMS = (
+    "goi 115",
+    "cap cuu",
+    "sot cao >39.5",
+    "sot cao > 39.5",
+    "sot cao tren 39.5",
+    "sot cao >39,5",
+    "sot cao > 39,5",
+)
+_DRUG_USAGE_QUERY_TERMS = (
+    "lieu",
+    "lieu dung",
+    "cach dung",
+    "duong dung",
+    "dung the nao",
+    "uong",
+    "boi",
+    "tiem",
+    "ngay may lan",
+    "bao nhieu",
+)
+_DRUG_USAGE_LINE_TERMS = (
+    "lieu",
+    "lieu dung",
+    "cach dung",
+    "duong dung",
+    "uong",
+    "boi",
+    "tiem",
+    "ngay",
+    "lan",
+    "mg",
+    "ml",
+    "%",
+)
+_INSUFFICIENT_USAGE_TERMS = (
+    "khong du thong tin",
+    "khong co du thong tin",
+    "tai lieu duoc cung cap khong du",
+)
 
 
 def _source_key(h: Hit) -> tuple:
@@ -100,6 +217,88 @@ def _format_context(hits: list[Hit], cite_idx: list[int]) -> str:
     return "\n\n---\n\n".join(blocks)
 
 
+def _normalize_text(text: str) -> str:
+    text = (text or "").casefold().replace("đ", "d")
+    text = unicodedata.normalize("NFD", text)
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
+    normalized = _normalize_text(text)
+    return any(term in normalized for term in terms)
+
+
+def _source_text(hits: list[Hit]) -> str:
+    return "\n".join(h.text for h in hits if h.text)
+
+
+def _source_contains_any(hits: list[Hit], terms: tuple[str, ...]) -> bool:
+    return _contains_any(_source_text(hits), terms)
+
+
+def _question_asks_drug_usage_detail(question: str) -> bool:
+    return _contains_any(question, _DRUG_USAGE_QUERY_TERMS)
+
+
+def _source_has_drug_usage_detail(hits: list[Hit]) -> bool:
+    drug_text = "\n".join(hit.text for hit in hits if hit.source_type == "drug")
+    if _DOSE_TOKEN_RE.search(drug_text):
+        return True
+    return _contains_any(drug_text, _DRUG_USAGE_LINE_TERMS)
+
+
+def _question_asks_disease_context(question: str) -> bool:
+    return _contains_any(question, _DISEASE_CONTEXT_TERMS)
+
+
+def _question_asks_treatment_or_medicine(question: str) -> bool:
+    return _contains_any(question, _TREATMENT_OR_MEDICINE_TERMS)
+
+
+def _question_asks_danger_or_care(question: str) -> bool:
+    return _contains_any(question, _DANGER_OR_CARE_TERMS)
+
+
+def _filter_hits_for_answer_domain(
+    question: str,
+    hits: list[Hit],
+    answer_domain: AnswerDomain,
+) -> list[Hit]:
+    if answer_domain == "health_insurance_info":
+        scoped = [hit for hit in hits if hit.source_type == "health_insurance"]
+        return scoped or hits
+
+    if answer_domain == "drug_info":
+        drug_hits = [hit for hit in hits if hit.source_type == "drug"]
+        if not drug_hits:
+            return hits
+        if _question_asks_disease_context(question):
+            disease_hits = [hit for hit in hits if hit.source_type == "disease"]
+            other_hits = [
+                hit for hit in hits
+                if hit.source_type not in {"drug", "disease"}
+            ]
+            return drug_hits + disease_hits + other_hits
+        return drug_hits
+
+    if answer_domain == "disease_info":
+        disease_hits = [hit for hit in hits if hit.source_type == "disease"]
+        if not disease_hits:
+            return hits
+        if _question_asks_treatment_or_medicine(question):
+            drug_hits = [hit for hit in hits if hit.source_type == "drug"]
+            other_hits = [
+                hit for hit in hits
+                if hit.source_type not in {"drug", "disease"}
+            ]
+            return disease_hits + drug_hits + other_hits
+        return disease_hits
+
+    return hits
+
+
 def _cited_source_numbers(text: str, max_index: int) -> list[int]:
     cited: list[int] = []
     seen: set[int] = set()
@@ -134,6 +333,39 @@ def _format_sources(unique: list[Hit], source_numbers: list[int] | None = None) 
             label = _disease_label(h)
         lines.append(f"[{i}] {label}")
     return "\n".join(lines)
+
+
+def _ensure_health_insurance_article_citations(
+    answer: str,
+    unique: list[Hit],
+    source_numbers: list[int],
+) -> tuple[str, list[int]]:
+    """Attach missing citations when a BHYT answer names a retrieved article.
+
+    Legal answers often mention "Điều 12" while citing a different article
+    that cross-references it. For eval and user trust, if the retrieved context
+    contains that named article, cite it explicitly.
+    """
+    if not any(hit.source_type == "health_insurance" for hit in unique):
+        return answer, source_numbers
+
+    cited = set(source_numbers)
+    updated = answer
+    for index, hit in enumerate(unique, start=1):
+        if hit.source_type != "health_insurance" or index in cited:
+            continue
+        article = str((hit.metadata or {}).get("article_number") or "").strip()
+        if not article:
+            continue
+        pattern = re.compile(
+            rf"(Điều\s+{re.escape(article)})(?!\d)(?!\s*\[[0-9,\-\s]+\])",
+            flags=re.IGNORECASE,
+        )
+        updated, count = pattern.subn(rf"\1 [{index}]", updated, count=1)
+        if count:
+            cited.add(index)
+
+    return updated, sorted(cited)
 
 
 def _format_patient(patient: dict | None) -> str:
@@ -244,6 +476,168 @@ def _clean_answer_format(text: str) -> str:
     return text.strip()
 
 
+def _strip_citation_markers(text: str) -> str:
+    return _CITATION_RE.sub("", text)
+
+
+def _compact_for_match(text: str) -> str:
+    return re.sub(r"\s+", "", _normalize_text(text))
+
+
+def _dose_tokens(text: str) -> list[str]:
+    text = _strip_citation_markers(text)
+    return [match.group(0) for match in _DOSE_TOKEN_RE.finditer(text)]
+
+
+def _has_unsupported_dose_token(line: str, hits: list[Hit]) -> bool:
+    tokens = _dose_tokens(line)
+    if not tokens:
+        return False
+    source_compact = _compact_for_match(_source_text(hits))
+    return any(_compact_for_match(token) not in source_compact for token in tokens)
+
+
+def _line_has_generic_drug_warning(line: str, hits: list[Hit]) -> bool:
+    normalized = _normalize_text(line)
+    if any(term in normalized for term in _DRUG_EMERGENCY_TERMS):
+        return not _source_contains_any(hits, _DRUG_EMERGENCY_TERMS)
+    warning_terms = tuple(
+        term for term in _GENERIC_DRUG_WARNING_TERMS
+        if term in normalized
+    )
+    return bool(warning_terms) and not _source_contains_any(hits, warning_terms)
+
+
+def _line_has_generic_disease_boilerplate(line: str) -> bool:
+    normalized = _normalize_text(line)
+    return any(term in normalized for term in _GENERIC_DISEASE_BOILERPLATE)
+
+
+def _answer_says_insufficient_drug_usage(answer: str) -> bool:
+    normalized = _normalize_text(answer)
+    if not any(term in normalized for term in _INSUFFICIENT_USAGE_TERMS):
+        return False
+    return any(term in normalized for term in ("lieu", "cach dung", "duong dung", "dung"))
+
+
+def _drug_usage_fallback_answer(hits: list[Hit], cite_idx: list[int]) -> str | None:
+    lines: list[str] = []
+    seen: set[str] = set()
+    for hit, source_number in zip(hits, cite_idx):
+        if hit.source_type != "drug":
+            continue
+        added_from_hit = 0
+        for raw_line in hit.text.splitlines():
+            line = raw_line.strip(" -*•\t")
+            if len(line) < 8:
+                continue
+            normalized = _normalize_text(line)
+            has_usage_term = any(term in normalized for term in _DRUG_USAGE_LINE_TERMS)
+            has_dose_token = bool(_DOSE_TOKEN_RE.search(line))
+            if not (has_usage_term or has_dose_token):
+                continue
+            if ">" in line:
+                continue
+            compact = _compact_for_match(line)
+            if compact in seen:
+                continue
+            seen.add(compact)
+            lines.append(f"- {line} [{source_number}]")
+            added_from_hit += 1
+            if added_from_hit >= 3 or len(lines) >= 7:
+                break
+        if len(lines) >= 7:
+            break
+    if not lines:
+        return None
+    return (
+        "Theo chuyên luận thuốc được truy xuất:\n"
+        + "\n".join(lines)
+        + "\n\nLưu ý: dùng thuốc theo đơn hoặc hướng dẫn của bác sĩ/dược sĩ."
+    )
+
+
+def _strip_triage_section(answer: str) -> str:
+    lines = answer.splitlines()
+    kept: list[str] = []
+    skipping = False
+    for line in lines:
+        normalized = _normalize_text(line.strip("*#:- "))
+        starts_triage_section = (
+            "khi nao can di kham ngay" in normalized
+            or "dau hieu nguy hiem" in normalized
+            or "can di kham ngay" in normalized
+            or "goi cap cuu" in normalized
+        )
+        if starts_triage_section:
+            skipping = True
+            continue
+        if skipping:
+            stripped = line.strip()
+            normalized_line = _normalize_text(stripped)
+            looks_like_next_heading = (
+                stripped
+                and not stripped.startswith(("-", "*", "+"))
+                and len(stripped) <= 90
+                and not any(
+                    term in normalized_line
+                    for term in (
+                        "goi 115",
+                        "cap cuu",
+                        "di kham",
+                        "kham ngay",
+                        "sot cao",
+                        "kho tho",
+                        "lo mo",
+                    )
+                )
+            )
+            if looks_like_next_heading:
+                skipping = False
+            else:
+                continue
+        if not _line_has_generic_disease_boilerplate(line):
+            kept.append(line)
+    return "\n".join(kept)
+
+
+def enforce_info_answer_contract(
+    answer: str,
+    hits: list[Hit],
+    answer_domain: AnswerDomain,
+    question: str = "",
+) -> str:
+    if answer_domain == "drug_info":
+        removed_dose_claim = False
+        kept: list[str] = []
+        for line in answer.splitlines():
+            if _line_has_generic_drug_warning(line, hits):
+                continue
+            if _has_unsupported_dose_token(line, hits):
+                removed_dose_claim = True
+                continue
+            kept.append(line)
+        answer = "\n".join(kept)
+        if removed_dose_claim:
+            answer = _clean_answer_format(
+                answer
+                + "\n\nLưu ý: Tài liệu được cung cấp không đủ thông tin để xác nhận chi tiết liều hoặc cách dùng vừa hỏi."
+            )
+        return _clean_answer_format(answer)
+
+    if answer_domain == "disease_info":
+        kept = [
+            line for line in answer.splitlines()
+            if not _line_has_generic_disease_boilerplate(line)
+        ]
+        answer = "\n".join(kept)
+        if not _question_asks_danger_or_care(question):
+            answer = _strip_triage_section(answer)
+        return _clean_answer_format(answer)
+
+    return answer
+
+
 def _normalize_payload_answer(answer: str) -> str:
     return answer.replace("\\n", "\n").strip()
 
@@ -305,6 +699,7 @@ def generate(
     kg_text: str = "",
     patient: dict | None = None,
     *,
+    answer_domain: AnswerDomain = "symptom_or_care",
     return_meta: bool = False,
 ):
     if not hits and not kg_text:
@@ -318,9 +713,19 @@ def generate(
             }
         return NO_DATA_REPLY
 
-    unique, cite_idx = _dedupe(hits)
-    context = _format_context(hits, cite_idx)
+    context_hits = _filter_hits_for_answer_domain(question, hits, answer_domain)
+    unique, cite_idx = _dedupe(context_hits)
+    context = _format_context(context_hits, cite_idx)
     patient_text = _format_patient(patient)
+    system_prompt = "\n\n".join(
+        (
+            GENERATOR_SYSTEM,
+            _ANSWER_DOMAIN_INSTRUCTIONS.get(
+                answer_domain,
+                SYMPTOM_OR_CARE_INSTRUCTIONS,
+            ),
+        )
+    )
 
     prompt_parts = [f"Câu hỏi: {question}\n"]
     if patient_text:
@@ -329,6 +734,17 @@ def generate(
         prompt_parts.append(f"Thông tin từ Knowledge Graph:\n{kg_text}\n")
     if context:
         prompt_parts.append(f"Tài liệu tham khảo:\n{context}\n")
+    if (
+        answer_domain == "drug_info"
+        and _question_asks_drug_usage_detail(question)
+        and _source_has_drug_usage_detail(context_hits)
+    ):
+        prompt_parts.append(
+            "Lưu ý riêng cho câu hỏi thuốc: tài liệu tham khảo đã có thông tin "
+            "liều/cách dùng. Hãy nêu chính xác các số liệu, tần suất, thời gian "
+            "hoặc đường dùng có trong tài liệu; không trả lời rằng tài liệu không "
+            "đủ thông tin về liều/cách dùng."
+        )
     if return_meta:
         prompt_parts.append(
             "Hãy trả lời câu hỏi trên dựa vào tài liệu và thông tin người bệnh. "
@@ -352,7 +768,7 @@ def generate(
             model=MODEL,
             max_tokens=MODEL_MAX_TOKENS,
             messages=[
-                {"role": "system", "content": GENERATOR_SYSTEM},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt_user},
             ],
             # reasoning_effort="high",
@@ -391,7 +807,29 @@ def generate(
             }
         return TECHNICAL_ERROR_REPLY
     if unique:
+        answer = enforce_info_answer_contract(
+            answer,
+            context_hits,
+            answer_domain,
+            question,
+        )
+        if not answer:
+            answer = "Tôi không có đủ thông tin trong tài liệu để trả lời chắc chắn."
+        if (
+            answer_domain == "drug_info"
+            and _question_asks_drug_usage_detail(question)
+            and _source_has_drug_usage_detail(context_hits)
+            and _answer_says_insufficient_drug_usage(answer)
+        ):
+            fallback = _drug_usage_fallback_answer(context_hits, cite_idx)
+            if fallback:
+                answer = fallback
         source_numbers = _cited_source_numbers(answer, len(unique))
+        answer, source_numbers = _ensure_health_insurance_article_citations(
+            answer,
+            unique,
+            source_numbers,
+        )
         rendered = f"{answer}\n\nNguồn:\n{_format_sources(unique, source_numbers or None)}"
     else:
         rendered = answer

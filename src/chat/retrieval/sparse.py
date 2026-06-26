@@ -73,6 +73,7 @@ class BM25Index:
                 source_slug=c.get("source_slug", ""),
                 chunk_id=c.get("chunk_id", ""),
                 metadata=c.get("metadata"),
+                id=str(c.get("id") or ""),
             ))
         return results
 

@@ -1,0 +1,68 @@
+{
+  "overall": {
+    "local-rag": {
+      "total": 6,
+      "passed": 6,
+      "pass_rate": 1.0,
+      "pass_rate_ci95": [
+        1.0,
+        1.0
+      ],
+      "avg_score": 0.9167,
+      "avg_judge_score": 0.9167,
+      "error_rate": 0.0,
+      "avg_latency_ms": 15541.04,
+      "p50_latency_ms": 12377.0,
+      "p95_latency_ms": 26265.03,
+      "avg_retrieval_ms": 9630.22,
+      "avg_generator_ms": 2732.28,
+      "total_tokens": 41130,
+      "total_cost_usd": 0.0,
+      "avg_cost_per_answer_usd": 0.0
+    }
+  },
+  "by_category": {
+    "local-rag/health_insurance_info": {
+      "total": 6,
+      "passed": 6,
+      "pass_rate": 1.0,
+      "pass_rate_ci95": [
+        1.0,
+        1.0
+      ],
+      "avg_score": 0.9167,
+      "avg_judge_score": 0.9167,
+      "error_rate": 0.0,
+      "avg_latency_ms": 15541.04,
+      "p50_latency_ms": 12377.0,
+      "p95_latency_ms": 26265.03,
+      "avg_retrieval_ms": 9630.22,
+      "avg_generator_ms": 2732.28,
+      "total_tokens": 41130,
+      "total_cost_usd": 0.0,
+      "avg_cost_per_answer_usd": 0.0
+    }
+  },
+  "by_priority": {
+    "local-rag/medium": {
+      "total": 6,
+      "passed": 6,
+      "pass_rate": 1.0,
+      "pass_rate_ci95": [
+        1.0,
+        1.0
+      ],
+      "avg_score": 0.9167,
+      "avg_judge_score": 0.9167,
+      "error_rate": 0.0,
+      "avg_latency_ms": 15541.04,
+      "p50_latency_ms": 12377.0,
+      "p95_latency_ms": 26265.03,
+      "avg_retrieval_ms": 9630.22,
+      "avg_generator_ms": 2732.28,
+      "total_tokens": 41130,
+      "total_cost_usd": 0.0,
+      "avg_cost_per_answer_usd": 0.0
+    }
+  }
+}

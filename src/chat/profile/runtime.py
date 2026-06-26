@@ -199,7 +199,7 @@ def persist_context_runtime(
     analysis: dict,
 ) -> None:
     del legacy_session
-    from src.chat.profile.domain import Turn
+    from src.chat.context.domain import Turn
     timestamp = time.time()
     _sync_active_case(runtime.state, runtime.cases, timestamp)
     runtime.state.recent_turns.extend([

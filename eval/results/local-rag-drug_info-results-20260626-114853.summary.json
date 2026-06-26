@@ -1,0 +1,68 @@
+{
+  "overall": {
+    "local-rag": {
+      "total": 249,
+      "passed": 208,
+      "pass_rate": 0.8353,
+      "pass_rate_ci95": [
+        0.7871,
+        0.8795
+      ],
+      "avg_score": 0.8539,
+      "avg_judge_score": 0.8539,
+      "error_rate": 0.0,
+      "avg_latency_ms": 16250.32,
+      "p50_latency_ms": 15291.86,
+      "p95_latency_ms": 25703.88,
+      "avg_retrieval_ms": 11107.79,
+      "avg_generator_ms": 2705.41,
+      "total_tokens": 1414903,
+      "total_cost_usd": 0.0,
+      "avg_cost_per_answer_usd": 0.0
+    }
+  },
+  "by_category": {
+    "local-rag/drug_info": {
+      "total": 249,
+      "passed": 208,
+      "pass_rate": 0.8353,
+      "pass_rate_ci95": [
+        0.7871,
+        0.8795
+      ],
+      "avg_score": 0.8539,
+      "avg_judge_score": 0.8539,
+      "error_rate": 0.0,
+      "avg_latency_ms": 16250.32,
+      "p50_latency_ms": 15291.86,
+      "p95_latency_ms": 25703.88,
+      "avg_retrieval_ms": 11107.79,
+      "avg_generator_ms": 2705.41,
+      "total_tokens": 1414903,
+      "total_cost_usd": 0.0,
+      "avg_cost_per_answer_usd": 0.0
+    }
+  },
+  "by_priority": {
+    "local-rag/medium": {
+      "total": 249,
+      "passed": 208,
+      "pass_rate": 0.8353,
+      "pass_rate_ci95": [
+        0.7871,
+        0.8795
+      ],
+      "avg_score": 0.8539,
+      "avg_judge_score": 0.8539,
+      "error_rate": 0.0,
+      "avg_latency_ms": 16250.32,
+      "p50_latency_ms": 15291.86,
+      "p95_latency_ms": 25703.88,
+      "avg_retrieval_ms": 11107.79,
+      "avg_generator_ms": 2705.41,
+      "total_tokens": 1414903,
+      "total_cost_usd": 0.0,
+      "avg_cost_per_answer_usd": 0.0
+    }
+  }
+}

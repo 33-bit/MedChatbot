@@ -5,6 +5,7 @@ import threading
 
 import pytest
 
+import src.chat.emergency as emergency_module
 from src.chat import pipeline
 from src.chat.errors import Neo4jUnavailable, QdrantUnavailable
 from src.chat.replies import TECHNICAL_ERROR_REPLY
@@ -19,6 +20,8 @@ def _analysis(
     direct_answer_requested: bool = False,
     rewritten: str = "Tôi bị ho",
     entities: dict | None = None,
+    red_flags: list[str] | None = None,
+    context: dict | None = None,
     verdict: str = "allow",
 ) -> dict:
     if intent is None:
@@ -39,7 +42,13 @@ def _analysis(
             "confident": True,
             "clarification": "",
         },
+        "triage": {
+            "urgency": "emergency" if intent == "emergency" else "routine",
+            "red_flags": red_flags or [],
+            "reason": "",
+        },
         "entities": entities or {"symptoms": [], "medications": []},
+        "context": context or {},
     }
 
 
@@ -203,6 +212,7 @@ def test_direct_answer_request_skips_more_clarification(monkeypatch):
         trace_id: str,
         use_patient_context: bool = False,
         retrieval_question: str | None = None,
+        **kwargs,
     ) -> str:
         captured["question"] = question
         captured["use_patient_context"] = use_patient_context
@@ -268,6 +278,7 @@ def test_direct_diagnostic_answer_request_keeps_diagnostic_route(monkeypatch):
         trace_id: str,
         use_patient_context: bool = False,
         retrieval_question: str | None = None,
+        **kwargs,
     ) -> str:
         captured["question"] = question
         captured["use_patient_context"] = use_patient_context
@@ -321,6 +332,7 @@ def test_medicine_question_during_pending_detail_uses_analyzer_not_clarification
         trace_id: str,
         use_patient_context: bool = False,
         retrieval_question: str | None = None,
+        **kwargs,
     ) -> str:
         captured["question"] = question
         captured["use_patient_context"] = use_patient_context
@@ -364,6 +376,7 @@ def test_medication_only_informational_turn_ignores_existing_symptom_context(mon
         trace_id: str,
         use_patient_context: bool = False,
         retrieval_question: str | None = None,
+        **kwargs,
     ) -> str:
         captured["use_patient_context"] = use_patient_context
         return "vitamin A dosage answer"
@@ -423,6 +436,7 @@ def test_contextual_drug_info_uses_informational_route_not_diagnostic(monkeypatc
         trace_id: str,
         use_patient_context: bool = False,
         retrieval_question: str | None = None,
+        **kwargs,
     ) -> str:
         captured["question"] = question
         captured["use_patient_context"] = use_patient_context
@@ -480,7 +494,7 @@ def test_non_otc_drug_question_stops_before_retrieval(monkeypatch):
     ]
 
 
-def test_non_otc_drug_policy_is_exposed_in_answer_meta(monkeypatch):
+def test_factual_non_otc_drug_policy_reaches_rag_and_is_exposed_in_meta(monkeypatch):
     _patch_preflight_ok(monkeypatch)
     _patch_persistence_noop(monkeypatch, PatientSession(session_id="s"))
     monkeypatch.setattr(
@@ -493,17 +507,21 @@ def test_non_otc_drug_policy_is_exposed_in_answer_meta(monkeypatch):
             entities={"symptoms": [], "medications": ["Amoxicillin"]},
         ),
     )
+    monkeypatch.setattr(
+        pipeline,
+        "_handle_informational",
+        lambda *args, **kwargs: "amoxicillin monograph [1]",
+    )
 
     reply, meta = pipeline.answer_with_meta("Amoxicillin là gì?", session_id="s")
 
-    assert reply == pipeline.OTC_ONLY_REPLY
+    assert reply == "amoxicillin monograph [1]"
     assert meta["drug_policy"] == {
         "is_drug_question": True,
-        "allowed": False,
-        "reason": "not_in_otc_list",
+        "allowed": True,
+        "reason": "source_grounded_drug_info",
         "matched_otc_names": [],
     }
-    assert "retrieval_debug" not in meta
 
 
 def test_condition_management_info_uses_informational_route_not_diagnostic(monkeypatch):
@@ -534,6 +552,7 @@ def test_condition_management_info_uses_informational_route_not_diagnostic(monke
         trace_id: str,
         use_patient_context: bool = False,
         retrieval_question: str | None = None,
+        **kwargs,
     ) -> str:
         captured["question"] = question
         captured["use_patient_context"] = use_patient_context
@@ -600,6 +619,7 @@ def test_emergency_intent_uses_dedicated_route_without_retrieval(monkeypatch, mo
             label="diagnostic",
             intent="emergency",
             rewritten="Tôi đang bị đau ngực dữ dội",
+            red_flags=["đau ngực dữ dội"],
             entities={
                 "symptoms": [{"name": "đau ngực", "severity": "dữ dội"}],
                 "medications": [],
@@ -628,9 +648,13 @@ def test_emergency_intent_uses_dedicated_route_without_retrieval(monkeypatch, mo
     )
 
     route_node = next(node for node in meta["graph_nodes"] if node["id"] == "route")
-    assert reply.startswith("Triệu chứng bạn đang gặp có thể là dấu hiệu")
-    assert "đưa bạn đến khoa Cấp cứu" in reply
-    assert "Nếu bạn bất tỉnh" in reply
+    assert reply.startswith("Đây có thể là tình trạng cấp cứu")
+    assert "gọi 115 ngay" in reply
+    assert "bật loa ngoài" not in reply
+    assert "điều phối viên" not in reply
+    assert "khoa Cấp cứu" not in reply
+    assert "hoặc đưa" not in reply
+    assert "ép tim" not in reply
     assert "người đang có triệu chứng" not in reply
     assert "người bệnh" not in reply
     assert meta["route_label"] == "emergency"
@@ -640,15 +664,265 @@ def test_emergency_intent_uses_dedicated_route_without_retrieval(monkeypatch, mo
     assert meta.get("retrieved", []) == []
 
 
+def test_dengue_warning_routes_to_emergency(monkeypatch):
+    _patch_preflight_ok(monkeypatch)
+    _patch_persistence_noop(monkeypatch, PatientSession(session_id="s"))
+    monkeypatch.setattr(pipeline, "CONVERSATION_CONTEXT_ENABLED", False)
+    monkeypatch.setattr(pipeline, "PIPELINE_EMERGENCY_RAG", True)
+    monkeypatch.setattr(
+        pipeline,
+        "analyze_turn",
+        lambda *args, **kwargs: _analysis(
+            label="informational",
+            intent="pure_info",
+            rewritten="Chồng tôi sốt xuất huyết ngày thứ 4, hết sốt nhưng lừ đừ, đau bụng và tay chân lạnh.",
+            red_flags=["lừ đừ", "đau bụng", "tay chân lạnh"],
+            entities={"symptoms": [], "medications": []},
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_handle_informational",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("dengue warning must not use informational route")
+        ),
+    )
+
+    reply, meta = pipeline.answer_with_meta(
+        "Chồng tôi sốt xuất huyết ngày thứ 4, hết sốt nhưng lừ đừ, đau bụng và tay chân lạnh.",
+        session_id="s",
+    )
+
+    assert meta["route_label"] == "emergency"
+    assert meta["emergency_intent_override"] == "dengue_warning"
+    assert "Hướng dẫn sơ cứu ban đầu" in reply
+    assert "sốt xuất huyết Dengue" in reply
+
+
+def test_informational_analyzer_emergency_classifier_forces_route(monkeypatch):
+    question = "Bố tôi đau thắt ngực dữ dội kéo dài, lan lên hàm và vã mồ hôi."
+    _patch_preflight_ok(monkeypatch)
+    _patch_persistence_noop(monkeypatch, PatientSession(session_id="s"))
+    monkeypatch.setattr(pipeline, "CONVERSATION_CONTEXT_ENABLED", False)
+    monkeypatch.setattr(pipeline, "PIPELINE_EMERGENCY_RAG", True)
+    monkeypatch.setattr(
+        pipeline,
+        "analyze_turn",
+        lambda *args, **kwargs: _analysis(
+            label="informational",
+            intent="pure_info",
+            rewritten=question,
+            red_flags=[],
+            entities={"symptoms": [], "medications": []},
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_handle_informational",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("deterministic emergency override must route first")
+        ),
+    )
+
+    reply, meta = pipeline.answer_with_meta(question, session_id="s")
+
+    assert meta["route_label"] == "emergency"
+    assert meta["emergency_intent_override"] == "chest_pain_acs"
+    assert "Hướng dẫn sơ cứu ban đầu" in reply
+    assert "hội chứng vành cấp" in reply
+
+
+def test_factual_emergency_topic_uses_informational_route(monkeypatch):
+    question = "Triệu chứng của thủng tạng rỗng là gì?"
+    _patch_preflight_ok(monkeypatch)
+    _patch_persistence_noop(monkeypatch, PatientSession(session_id="s"))
+    monkeypatch.setattr(pipeline, "CONVERSATION_CONTEXT_ENABLED", False)
+    monkeypatch.setattr(
+        emergency_module,
+        "classify_emergency_intent",
+        lambda actual_question, red_flags=None: "acute_abdomen",
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "analyze_turn",
+        lambda *args, **kwargs: _analysis(
+            label="informational",
+            intent="pure_info",
+            rewritten=question,
+            red_flags=["đau bụng cấp"],
+            entities={"symptoms": [], "medications": []},
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_handle_informational",
+        lambda *args, **kwargs: "triệu chứng thủng tạng rỗng [1]",
+    )
+
+    reply, meta = pipeline.answer_with_meta(question, session_id="s")
+
+    assert reply == "triệu chứng thủng tạng rỗng [1]"
+    assert meta["route_label"] == "informational"
+    assert meta["emergency_intent_topic_info"] == "acute_abdomen"
+
+
+def test_emergency_protocol_question_uses_informational_route(monkeypatch):
+    question = "Bệnh nhân bị sốc nhiễm khuẩn cần được truyền dịch như thế nào trong giai đoạn cấp cứu ban đầu?"
+    _patch_preflight_ok(monkeypatch)
+    _patch_persistence_noop(monkeypatch, PatientSession(session_id="s"))
+    monkeypatch.setattr(pipeline, "CONVERSATION_CONTEXT_ENABLED", False)
+    monkeypatch.setattr(
+        emergency_module,
+        "classify_emergency_intent",
+        lambda actual_question, red_flags=None: "septic_shock",
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "analyze_turn",
+        lambda *args, **kwargs: _analysis(
+            label="emergency",
+            intent="emergency",
+            rewritten=question,
+            red_flags=["sốc nhiễm khuẩn"],
+            entities={"symptoms": [], "medications": []},
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_handle_informational",
+        lambda *args, **kwargs: "truyền nhanh 1000 mL dịch tinh thể [1]",
+    )
+
+    reply, meta = pipeline.answer_with_meta(question, session_id="s")
+
+    assert reply == "truyền nhanh 1000 mL dịch tinh thể [1]"
+    assert meta["route_label"] == "informational"
+    assert meta["emergency_intent_topic_info"] == "septic_shock"
+
+
+def test_current_emergency_action_still_uses_emergency_route(monkeypatch):
+    question = "Tôi đau bụng dữ dội, phải làm gì?"
+    _patch_preflight_ok(monkeypatch)
+    _patch_persistence_noop(monkeypatch, PatientSession(session_id="s"))
+    monkeypatch.setattr(pipeline, "CONVERSATION_CONTEXT_ENABLED", False)
+    monkeypatch.setattr(
+        emergency_module,
+        "classify_emergency_intent",
+        lambda actual_question, red_flags=None: "acute_abdomen",
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "analyze_turn",
+        lambda *args, **kwargs: _analysis(
+            label="informational",
+            intent="pure_info",
+            rewritten=question,
+            red_flags=["đau bụng dữ dội"],
+            entities={"symptoms": [{"name": "đau bụng"}], "medications": []},
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_handle_informational",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("actionable emergency must not use informational route")
+        ),
+    )
+
+    reply, meta = pipeline.answer_with_meta(
+        question,
+        session_id="s",
+        use_emergency_rag=False,
+    )
+
+    assert meta["route_label"] == "emergency"
+    assert meta["emergency_intent_override"] == "acute_abdomen"
+    assert reply.startswith("Đây có thể là tình trạng cấp cứu")
+
+
 @pytest.mark.parametrize("subject", ("bố bạn", "mẹ bạn", "cô Lan"))
 def test_emergency_reply_treats_user_as_caregiver_for_other_subjects(subject):
-    reply = pipeline.emergency_reply(subject)
+    reply = pipeline.emergency_reply(
+        subject,
+        red_flags=["khó thở dữ dội", "môi tím tái"],
+        question=f"{subject} khó thở dữ dội, môi tím tái",
+    )
 
-    assert reply.startswith(f"Những triệu chứng {subject} đang gặp có thể là dấu hiệu")
-    assert f"hãy đưa {subject} đến khoa Cấp cứu" in reply
-    assert f"Không để {subject} tự lái xe" in reply
-    assert f"Nếu {subject} bất tỉnh" in reply
+    assert reply.startswith("Đây có thể là tình trạng cấp cứu")
+    assert "gọi 115 ngay" in reply
+    assert "bật loa ngoài" not in reply
+    assert "điều phối viên" not in reply
+    assert "khoa Cấp cứu" not in reply
+    assert f"đưa {subject}" not in reply
+    assert f"không để {subject} tự lái xe" not in reply
     assert "nhờ người khác đưa" not in reply
+
+
+@pytest.mark.parametrize(
+    ("subject", "question", "red_flags", "old_actions", "unexpected"),
+    (
+        (
+            "bố bạn",
+            "Bố tôi đột ngột méo miệng, nói ngọng và yếu liệt nửa người.",
+            ["méo miệng", "nói ngọng", "yếu liệt nửa người"],
+            ("thời điểm khởi phát", "không cho bố bạn ăn uống", "tự dùng thuốc"),
+            ("ép tim", "tự lái xe"),
+        ),
+        (
+            "mẹ bạn",
+            "Mẹ tôi co giật toàn thân hơn 5 phút chưa dứt.",
+            ["co giật toàn thân hơn 5 phút"],
+            ("nằm nghiêng an toàn", "không nhét bất cứ thứ gì vào miệng"),
+            ("AED", "tự lái xe"),
+        ),
+        (
+            "người nhà bạn",
+            "Người nhà tôi hôn mê sau khi đốt than sưởi trong phòng kín.",
+            ["ngộ độc khí CO"],
+            ("thoáng khí", "hít khí độc"),
+            ("ép tim", "tự lái xe"),
+        ),
+        (
+            "bố bạn",
+            "Bố tôi ngã xuống, không đáp lại, không thở bình thường.",
+            ["không thở bình thường", "không bắt được mạch"],
+            ("ép tim ngoài lồng ngực", "AED"),
+            ("ăn uống", "tự dùng thuốc"),
+        ),
+        (
+            "con bạn",
+            "Con tôi ăn hải sản xong nổi mề đay, sưng môi, khò khè và khó thở.",
+            ["nổi mề đay", "sưng môi", "khò khè", "khó thở"],
+            ("epinephrine",),
+            ("tự lái xe", "ép tim"),
+        ),
+        (
+            "bạn",
+            "Tôi đau bụng dữ dội liên tục, bụng cứng như gỗ và chóng mặt.",
+            ["đau bụng dữ dội", "bụng cứng"],
+            ("Không tự dùng thuốc giảm đau",),
+            ("ép tim", "tự lái xe"),
+        ),
+    ),
+)
+def test_emergency_reply_fast_path_has_no_immediate_action_block(
+    subject,
+    question,
+    red_flags,
+    old_actions,
+    unexpected,
+):
+    reply = pipeline.emergency_reply(subject, red_flags=red_flags, question=question)
+
+    assert "gọi 115 ngay" in reply
+    assert "bật loa ngoài" not in reply
+    assert "điều phối viên" not in reply
+    assert "khoa Cấp cứu" not in reply
+    assert "\n-" not in reply
+    for phrase in old_actions:
+        assert phrase not in reply
+    for phrase in unexpected:
+        assert phrase not in reply
 
 
 def test_symptom_triage_in_information_mode_answers_directly(monkeypatch):
@@ -1157,7 +1431,7 @@ def test_answer_with_choices_keeps_standard_retrieval(monkeypatch):
         ),
     )
 
-    def fake_generate(question, hits, kg_text="", patient=None, return_meta=False):
+    def fake_generate(question, hits, kg_text="", patient=None, return_meta=False, **kwargs):
         assert return_meta is True
         return "answer", {"usage": {}, "model": "test-model"}
 
@@ -1555,6 +1829,7 @@ def test_completed_clarification_plan_answers_with_patient_context_query(monkeyp
         trace_id: str,
         use_patient_context: bool = False,
         retrieval_question: str | None = None,
+        **kwargs,
     ) -> str:
         captured["question"] = question
         captured["retrieval_question"] = retrieval_question
@@ -1841,7 +2116,7 @@ def test_diagnostic_stops_asking_when_shortlist_is_small(monkeypatch):
     monkeypatch.setattr(
         pipeline,
         "_handle_informational",
-        lambda saved_session, question, trace_id, use_patient_context=False, retrieval_question=None: "shortlist answer",
+        lambda saved_session, question, trace_id, use_patient_context=False, retrieval_question=None, **kwargs: "shortlist answer",
     )
 
     assert pipeline._handle_diagnostic(session, "Tôi bị ho", trace_id="trace") == "shortlist answer"
@@ -1873,7 +2148,7 @@ def test_kg_and_hybrid_retrieval_run_in_parallel(monkeypatch, caplog):
 
     monkeypatch.setattr(pipeline, "_load_kg_context", fake_kg)
     monkeypatch.setattr(pipeline, "_load_hybrid_hits", fake_hybrid)
-    monkeypatch.setattr(pipeline, "generate", lambda question, hits, kg_text="", patient=None: "answer")
+    monkeypatch.setattr(pipeline, "generate", lambda question, hits, kg_text="", patient=None, **kwargs: "answer")
 
     reply = pipeline._handle_informational(
         PatientSession(session_id="s"),
@@ -1919,7 +2194,7 @@ def test_pipeline_logs_core_timing_stages(monkeypatch, caplog):
     monkeypatch.setattr(pipeline, "analyze_turn", lambda *args, **kwargs: _analysis())
     monkeypatch.setattr(pipeline, "_load_kg_context", lambda question, trace_id: "")
     monkeypatch.setattr(pipeline, "_load_hybrid_hits", lambda question, trace_id: [])
-    monkeypatch.setattr(pipeline, "generate", lambda question, hits, kg_text="", patient=None: "answer")
+    monkeypatch.setattr(pipeline, "generate", lambda question, hits, kg_text="", patient=None, **kwargs: "answer")
 
     assert pipeline.answer("Tôi bị ho", session_id="s") == "answer"
 
@@ -1951,7 +2226,7 @@ def test_answer_with_meta_records_timing_timeline(monkeypatch):
         ),
     )
 
-    def fake_generate(question, hits, kg_text="", patient=None, return_meta=False):
+    def fake_generate(question, hits, kg_text="", patient=None, return_meta=False, **kwargs):
         if return_meta:
             return "answer", {
                 "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
@@ -2035,7 +2310,7 @@ def test_answer_with_meta_records_structured_graph_trace(monkeypatch):
         ),
     )
 
-    def fake_generate(question, actual_hits, kg_text="", patient=None, return_meta=False):
+    def fake_generate(question, actual_hits, kg_text="", patient=None, return_meta=False, **kwargs):
         assert question == "Ho kéo dài"
         assert actual_hits is hits
         assert kg_text == "KG prompt context"
@@ -2164,7 +2439,7 @@ def test_answer_with_meta_streams_input_rewrite_route_node_events(monkeypatch):
     monkeypatch.setattr(
         pipeline,
         "generate",
-        lambda question, actual_hits, kg_text="", patient=None, return_meta=False: (
+        lambda question, actual_hits, kg_text="", patient=None, return_meta=False, **kwargs: (
             ("answer", {}) if return_meta else "answer"
         ),
     )
@@ -2801,7 +3076,7 @@ def test_answer_with_meta_records_worker_retrieval_timings(monkeypatch):
         ),
     )
 
-    def fake_generate(question, hits, kg_text="", patient=None, return_meta=False):
+    def fake_generate(question, hits, kg_text="", patient=None, return_meta=False, **kwargs):
         if return_meta:
             return "answer", {"usage": {}, "model": "test-model"}
         return "answer"
@@ -2877,7 +3152,7 @@ def test_parallel_retrieval_emits_node_events_to_sink_across_executor(monkeypatc
         ],
     )
     monkeypatch.setattr(pipeline, "generate",
-                        lambda question, hits, kg_text="", patient=None: "answer")
+                        lambda question, hits, kg_text="", patient=None, **kwargs: "answer")
 
     sink: _queue.Queue = _queue.Queue()
     pipeline._install_event_sink(sink)

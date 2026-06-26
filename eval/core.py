@@ -32,6 +32,7 @@ import sys
 import time
 import unicodedata
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -244,6 +245,7 @@ def retrieval_metrics(
     *,
     gold_chunks: list[str] | None = None,
     retrieved_chunks: list[str] | None = None,
+    retrieved_semantic_chunks: list[str] | None = None,
     ks: tuple[int, ...] = (5, 10),
 ) -> dict[str, Any]:
     """Compute doc-level recall@k / MRR; chunk-level recall@k / MRR when
@@ -260,8 +262,14 @@ def retrieval_metrics(
 
     # Chunk-level (only when both sides are available)
     if gold_chunks and retrieved_chunks is not None:
+        matched_chunks, match_type = eval_metrics.choose_retrieved_chunk_ids(
+            gold_chunks,
+            retrieved_chunks,
+            retrieved_semantic_chunks,
+        )
+        metrics["chunk_id_match_type"] = match_type
         chunk_set = set(gold_chunks)
-        chunk_hit_ranks = [i + 1 for i, cid in enumerate(retrieved_chunks) if cid in chunk_set]
+        chunk_hit_ranks = [i + 1 for i, cid in enumerate(matched_chunks) if cid in chunk_set]
         for k in ks:
             metrics[f"chunk_recall@{k}"] = 1.0 if any(r <= k for r in chunk_hit_ranks) else 0.0
         metrics["chunk_mrr"] = round(1.0 / chunk_hit_ranks[0], 4) if chunk_hit_ranks else 0.0
@@ -269,20 +277,21 @@ def retrieval_metrics(
         # Context precision @ top-k: how much of the retrieved context belongs
         # to a gold chunk. Conservative — relevant if chunk_id matches gold.
         for k in ks:
-            top = retrieved_chunks[:k] or []
+            top = matched_chunks[:k] or []
             metrics[f"context_precision@{k}"] = (
                 round(sum(1 for cid in top if cid in chunk_set) / len(top), 4)
                 if top else 0.0
             )
-            coverage = eval_metrics.gold_chunk_coverage_at_k(gold_chunks, retrieved_chunks, k)
+            coverage = eval_metrics.gold_chunk_coverage_at_k(gold_chunks, matched_chunks, k)
             if coverage is not None:
                 metrics[f"gold_chunk_coverage@{k}"] = coverage
-            for source_type, value in eval_metrics.source_type_coverage_at_k(
-                gold_chunks,
-                retrieved_chunks,
-                k,
-            ).items():
-                metrics[f"{source_type}_source_coverage@{k}"] = value
+            if match_type == "semantic":
+                for source_type, value in eval_metrics.source_type_coverage_at_k(
+                    gold_chunks,
+                    matched_chunks,
+                    k,
+                ).items():
+                    metrics[f"{source_type}_source_coverage@{k}"] = value
     return metrics
 
 
@@ -508,6 +517,14 @@ def _retrieved_slugs_from_meta(meta: dict[str, Any]) -> list[str]:
 
 
 def _retrieved_chunks_from_meta(meta: dict[str, Any]) -> list[str]:
+    return [
+        r.get("id") or r.get("chunk_id", "")
+        for r in (meta or {}).get("retrieved", [])
+        if r
+    ]
+
+
+def _retrieved_semantic_chunks_from_meta(meta: dict[str, Any]) -> list[str]:
     return [r.get("chunk_id", "") for r in (meta or {}).get("retrieved", []) if r]
 
 
@@ -697,6 +714,10 @@ def _attach_meta_metrics(row: dict[str, Any], case: dict[str, Any], meta: dict[s
     if retrieved:
         row["retrieved_slugs"] = _retrieved_slugs_from_meta(meta)
         row["retrieved_chunks"] = _retrieved_chunks_from_meta(meta)
+        row["retrieved_semantic_chunks"] = _retrieved_semantic_chunks_from_meta(meta)
+        row["retrieved_source_types"] = [
+            r.get("source_type", "") for r in retrieved if r
+        ]
         gold_s = _gold_slugs(case)
         gold_c = _gold_chunks(case)
         row["retrieval"] = retrieval_metrics(
@@ -704,8 +725,21 @@ def _attach_meta_metrics(row: dict[str, Any], case: dict[str, Any], meta: dict[s
             row["retrieved_slugs"],
             gold_chunks=gold_c,
             retrieved_chunks=row["retrieved_chunks"],
+            retrieved_semantic_chunks=row["retrieved_semantic_chunks"],
             ks=(5, 10),
         )
+        if case.get("category") == "health_insurance_info":
+            source_types = set(row["retrieved_source_types"])
+            passed = source_types == {"health_insurance"}
+            row.setdefault("checks", []).append({
+                "type": "health_insurance_retrieval_scope",
+                "target": "retrieved sources are health_insurance only",
+                "passed": passed,
+                "weight": 2.0,
+            })
+            if not passed:
+                row["passed"] = False
+                row["hard_fail"] = True
 
 
 # ---------------------------------------------------------------------------
@@ -730,8 +764,10 @@ def run_direct(args: argparse.Namespace) -> int:
         return 2
 
     run_id = timestamp()
-    rows: list[dict[str, Any]] = []
-    for index, case in enumerate(selected, start=1):
+    total = len(selected)
+    concurrency = max(1, int(getattr(args, "concurrency", 1) or 1))
+
+    def _run_case(index: int, case: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         session_id = f"{args.session_prefix}:{run_id}:{case['id']}"
         turns = case.get("turns") or [case["question"]]
         final_answer = ""
@@ -775,10 +811,30 @@ def run_direct(args: argparse.Namespace) -> int:
             "error": error, **scored,
         }
         _attach_meta_metrics(row, case, final_meta)
-        rows.append(row)
+        return index, row
+
+    def _print_progress(index: int, row: dict[str, Any]) -> None:
         marker = "PASS" if row["passed"] else "FAIL"
-        suffix = " [FORCED]" if forced_direct_answer else ""
-        print(f"[{index}/{len(selected)}] {case['id']} {marker} score={row['score']:.2f}{suffix}")
+        suffix = " [FORCED]" if row.get("forced_direct_answer") else ""
+        print(f"[{index}/{total}] {row['case_id']} {marker} score={row['score']:.2f}{suffix}")
+
+    if concurrency == 1 or total <= 1:
+        indexed_rows = [_run_case(index, case) for index, case in enumerate(selected, start=1)]
+        for index, row in indexed_rows:
+            _print_progress(index, row)
+    else:
+        indexed_rows = []
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            futures = {
+                executor.submit(_run_case, index, case): index
+                for index, case in enumerate(selected, start=1)
+            }
+            for future in as_completed(futures):
+                index, row = future.result()
+                indexed_rows.append((index, row))
+                _print_progress(index, row)
+
+    rows = [row for _, row in sorted(indexed_rows, key=lambda item: item[0])]
 
     out = args.output or _result_path_for_args(args, "results")
     write_jsonl(out, rows)
@@ -1043,16 +1099,28 @@ def run_retrieval(args: argparse.Namespace) -> int:
         error = None
         retrieved_slugs: list[str] = []
         retrieved_chunks: list[str] = []
+        retrieved_semantic_chunks: list[str] = []
         try:
-            hits = hybrid_search(query, top_k=top_k)
+            kwargs = {"scope": "health_insurance"} if case.get("category") == "health_insurance_info" else {}
+            hits = hybrid_search(query, top_k=top_k, **kwargs)
             retrieved_slugs = [getattr(h, "source_slug", "") or "" for h in hits]
-            retrieved_chunks = [getattr(h, "chunk_id", "") or "" for h in hits]
+            retrieved_chunks = [
+                getattr(h, "id", "") or getattr(h, "chunk_id", "") or ""
+                for h in hits
+            ]
+            retrieved_semantic_chunks = [
+                getattr(h, "chunk_id", "") or getattr(h, "id", "") or ""
+                for h in hits
+            ]
         except Exception as exc:
             error = repr(exc)
         latency_ms = round((time.perf_counter() - start) * 1000, 2)
         metrics = retrieval_metrics(
             gold_s, retrieved_slugs,
-            gold_chunks=gold_c, retrieved_chunks=retrieved_chunks, ks=ks,
+            gold_chunks=gold_c,
+            retrieved_chunks=retrieved_chunks,
+            retrieved_semantic_chunks=retrieved_semantic_chunks,
+            ks=ks,
         )
 
         row = {
@@ -1061,6 +1129,7 @@ def run_retrieval(args: argparse.Namespace) -> int:
             "query": query,
             "gold_slugs": gold_s, "retrieved_slugs": retrieved_slugs,
             "gold_chunks": gold_c, "retrieved_chunks": retrieved_chunks,
+            "retrieved_semantic_chunks": retrieved_semantic_chunks,
             "latency_ms": latency_ms, "error": error,
             **metrics,
         }
@@ -1136,6 +1205,12 @@ def build_parser(category: str) -> argparse.ArgumentParser:
     add_common_run_args(direct)
     add_judge_args(direct)
     direct.add_argument("--session-prefix", default="eval")
+    direct.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="Number of benchmark cases to evaluate at the same time.",
+    )
     direct.set_defaults(func=run_direct)
 
     api = sub.add_parser("run-api", help="Call a running /chat server.")

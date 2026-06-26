@@ -39,10 +39,10 @@ def test_telegram_static_commands_are_distinct(monkeypatch):
     assert "Cách sử dụng" in texts[1]
     for text in texts[:2]:
         assert "/mode" in text
-        assert "Auto" in text
+        assert "Tự động" in text
         assert "Thông tin" in text
-        assert "Chẩn đoán" in text
-    assert "Menu các lệnh hỗ trợ" in texts[2]
+        assert "Tư vấn triệu chứng" in text
+    assert "Bạn muốn làm gì?" in texts[2]
     assert "/start" not in texts[2]
     assert "/menu" not in texts[2]
 
@@ -76,7 +76,7 @@ def test_telegram_menu_interaction(app_client, monkeypatch):
     # Test /menu rendering
     assert asyncio.run(telegram._handle_command(123, "/menu"))
     assert len(sent_texts) == 1
-    assert "Menu các lệnh hỗ trợ" in sent_texts[0][1]
+    assert "Bạn muốn làm gì?" in sent_texts[0][1]
     assert sent_texts[0][2] == telegram._menu_keyboard()
 
     # Reset sent_texts
@@ -113,7 +113,7 @@ def test_telegram_menu_interaction(app_client, monkeypatch):
     )
     assert response.status_code == 200
     assert response.json() == {"ok": True}
-    assert ("cb-help", "Đang thực hiện /help") in callback_answers
+    assert ("cb-help", "Đang mở cách đặt câu hỏi.") in callback_answers
     # Verify it triggered the /help command (which sends help text via fake_send_text)
     assert len(sent_texts) == 1
     assert "Cách sử dụng" in sent_texts[0][1]
@@ -132,7 +132,7 @@ def test_telegram_menu_interaction(app_client, monkeypatch):
     )
     assert response.status_code == 200
     assert response.json() == {"ok": True}
-    assert ("cb-profile", "Đang thực hiện /profile") in callback_answers
+    assert ("cb-profile", "Đang mở hồ sơ y tế.") in callback_answers
 
     # 4. Test menu:main callback
     response = client.post(
@@ -149,24 +149,78 @@ def test_telegram_menu_interaction(app_client, monkeypatch):
     assert response.status_code == 200
     assert response.json() == {"ok": True}
     assert ("cb-main", "") in callback_answers
-    assert (123, 456, "📋 **Menu các lệnh hỗ trợ:**", telegram._menu_keyboard()) in edited_messages
+    assert (123, 456, telegram.MENU_TEXT, telegram._menu_keyboard()) in edited_messages
 
 
 def test_telegram_bot_command_menu_hides_start_and_menu_with_icons():
     assert telegram.BOT_COMMANDS == [
-        {"command": "menu", "description": "📋 Menu các lệnh hỗ trợ"},
+        {"command": "menu", "description": "📋 Mở danh sách việc cần làm"},
         {"command": "help", "description": "📝 Cách đặt câu hỏi"},
-        {"command": "mode", "description": "⚙️ Chọn chế độ trả lời"},
-        {"command": "tts", "description": "🔊 Bật/tắt đọc câu trả lời"},
-        {"command": "remind", "description": "🔔 Đặt nhắc nhở y tế"},
+        {"command": "mode", "description": "⚙️ Chọn cách bot trả lời"},
+        {"command": "tts", "description": "🔊 Nghe câu trả lời"},
+        {"command": "remind", "description": "🔔 Nhắc uống thuốc hoặc tái khám"},
         {"command": "doctor", "description": "👨‍⚕️ Kết nối bác sĩ"},
         {"command": "end", "description": "⛔ Kết thúc tư vấn bác sĩ"},
-        {"command": "topup", "description": "💰 Nạp tiền vào tài khoản"},
+        {"command": "topup", "description": "💰 Nạp tiền"},
         {"command": "balance", "description": "💳 Xem số dư"},
-        {"command": "paydebt", "description": "🧾 Thanh toán công nợ"},
-        {"command": "new", "description": "🔄 Xóa ngữ cảnh và bắt đầu lượt mới"},
-        {"command": "profile", "description": "🩺 Hồ sơ y tế cá nhân"},
+        {"command": "paydebt", "description": "🧾 Trả khoản nợ"},
+        {"command": "new", "description": "🔄 Bắt đầu câu hỏi mới"},
+        {"command": "profile", "description": "🩺 Hồ sơ y tế của tôi"},
     ]
+
+
+def test_telegram_admin_bot_command_menu_adds_admin_doctors():
+    assert telegram.ADMIN_BOT_COMMANDS == [
+        *telegram.BOT_COMMANDS,
+        {"command": "admin_doctors", "description": "🛠 Quản lý bác sĩ"},
+        {"command": "admin_paid", "description": "💵 Xác nhận đơn nạp tiền"},
+    ]
+
+
+def test_telegram_menu_keyboard_uses_plain_single_action_rows():
+    keyboard = telegram._menu_keyboard()["inline_keyboard"]
+    labels = [row[0]["text"] for row in keyboard]
+    callbacks = [row[0]["callback_data"] for row in keyboard]
+
+    assert all(len(row) == 1 for row in keyboard)
+    assert labels == [
+        "📝 Cách đặt câu hỏi",
+        "⚙️ Chọn cách bot trả lời",
+        "🩺 Hồ sơ y tế của tôi",
+        "🔔 Nhắc uống thuốc / tái khám",
+        "👨‍⚕️ Kết nối bác sĩ",
+        "⛔ Kết thúc tư vấn bác sĩ",
+        "🔊 Nghe câu trả lời",
+        "🔄 Bắt đầu câu hỏi mới",
+        "💳 Xem số dư",
+        "💰 Nạp tiền",
+        "🧾 Trả khoản nợ",
+        "❌ Đóng menu",
+    ]
+    assert callbacks == [
+        "cmd:/help",
+        "cmd:/mode",
+        "cmd:/profile",
+        "cmd:/remind",
+        "cmd:/doctor",
+        "cmd:/end",
+        "cmd:/tts",
+        "cmd:/new",
+        "cmd:/balance",
+        "cmd:/topup",
+        "cmd:/paydebt",
+        "cmd:close",
+    ]
+
+
+def test_telegram_admin_menu_keyboard_adds_doctor_management():
+    keyboard = telegram._menu_keyboard(is_admin_user=True)["inline_keyboard"]
+    labels = [row[0]["text"] for row in keyboard]
+    callbacks = [row[0]["callback_data"] for row in keyboard]
+
+    assert "🛠 Quản lý bác sĩ" in labels
+    assert "💵 Xác nhận đơn nạp tiền" in labels
+    assert callbacks[-3:] == ["cmd:/admin_doctors", "cmd:/admin_paid", "cmd:close"]
 
 
 def test_telegram_tts_command_turns_voice_on_and_off(monkeypatch):
@@ -246,18 +300,18 @@ def test_telegram_mode_command_sends_selector(monkeypatch):
         {
             "chat_id": 123,
             "text": (
-                "Lựa chọn chế độ trả lời\n\n"
-                "**Auto**: bot tự chọn cách trả lời phù hợp với câu hỏi.\n"
-                "**Thông tin**: trả lời thông tin về bệnh, thuốc, phòng ngừa, điều trị và chăm sóc.\n"
-                "**Chẩn đoán**: tư vấn triệu chứng, sàng lọc an toàn và hướng dẫn khi cần đi khám.\n\n"
-                "Chế độ hiện tại: **Auto**"
+                "Chọn cách bot trả lời\n\n"
+                "**Tự động**: bot tự chọn cách phù hợp với câu hỏi.\n"
+                "**Thông tin**: hỏi về bệnh, thuốc, phòng ngừa, điều trị và chăm sóc.\n"
+                "**Tư vấn triệu chứng**: kể triệu chứng để bot hỏi thêm và nhắc khi cần đi khám.\n\n"
+                "Đang chọn: **Tự động**"
             ),
             "inline_keyboard": {
-                "inline_keyboard": [[
-                    {"text": "✓ Auto", "callback_data": "mode:set:auto"},
-                    {"text": "Thông tin", "callback_data": "mode:set:information"},
-                    {"text": "Chẩn đoán", "callback_data": "mode:set:diagnostic"},
-                ]]
+                "inline_keyboard": [
+                    [{"text": "✓ Tự động", "callback_data": "mode:set:auto"}],
+                    [{"text": "Thông tin", "callback_data": "mode:set:information"}],
+                    [{"text": "Tư vấn triệu chứng", "callback_data": "mode:set:diagnostic"}],
+                ]
             },
         }
     ]
@@ -287,7 +341,7 @@ def test_telegram_mode_callback_updates_chat_default(monkeypatch):
 
     assert handled is True
     assert telegram._CHAT_MODE_DEFAULTS["123"] == "diagnostic"
-    assert answers == [("cb-1", "Đã chọn chế độ Chẩn đoán.")]
+    assert answers == [("cb-1", "Đã chọn: Tư vấn triệu chứng.")]
     assert edits[-1] == (123, 456, telegram._mode_keyboard("diagnostic"))
 
 
@@ -432,8 +486,8 @@ def test_telegram_mode_retry_callback_replays_question_with_target_mode(monkeypa
     )
 
     assert handled is True
-    assert answers == [("cb-2", "Đang trả lời ở chế độ Chẩn đoán.")]
-    assert sent == [(123, "Trả lời ở chế độ Chẩn đoán: Tôi đau lưng lan xuống chân là bệnh gì?")]
+    assert answers == [("cb-2", "Đang trả lời theo cách: Tư vấn triệu chứng.")]
+    assert sent == [(123, "Trả lời theo cách Tư vấn triệu chứng: Tôi đau lưng lan xuống chân là bệnh gì?")]
     assert background_calls == [
         (telegram._answer_and_send, (123, "Tôi đau lưng lan xuống chân là bệnh gì?", "diagnostic"))
     ]
@@ -786,6 +840,35 @@ def test_telegram_send_text_removes_keyboard_when_no_choices(monkeypatch):
     asyncio.run(telegram.send_text(123, "Tôi đã xóa ngữ cảnh hội thoại hiện tại."))
 
     assert calls[-1]["reply_markup"] == {"remove_keyboard": True}
+
+
+def test_telegram_edit_message_text_converts_markdown_to_html(monkeypatch):
+    calls: list[dict] = []
+
+    class Response:
+        status_code = 200
+
+    class Client:
+        def __init__(self, timeout: float):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url: str, json: dict):
+            calls.append(json)
+            return Response()
+
+    monkeypatch.setattr(telegram, "TELEGRAM_BOT_TOKEN", "token")
+    monkeypatch.setattr(telegram.httpx, "AsyncClient", Client)
+
+    asyncio.run(telegram._edit_message_text(123, 456, "📋 **Bạn muốn làm gì?**"))
+
+    assert calls[-1]["text"] == "📋 <b>Bạn muốn làm gì?</b>"
+    assert calls[-1]["parse_mode"] == "HTML"
 
 
 def test_telegram_answer_now_ack_removes_keyboard_and_returns_message_id(monkeypatch):
@@ -1406,6 +1489,70 @@ def test_admin_paid_refused_for_non_admin(monkeypatch):
     # Non-admin: no credit, refusal message.
     assert credited == []
     assert sent and ("quyền" in sent[0].lower() or "admin" in sent[0].lower() or "không" in sent[0].lower())
+
+
+def test_admin_paid_menu_prompt_accepts_pasted_order_code(monkeypatch):
+    sent: list[tuple] = []
+
+    async def fake_send_text(chat_id, text, *args, inline_keyboard=None, **kwargs) -> None:
+        sent.append((chat_id, text, inline_keyboard))
+
+    monkeypatch.setattr(telegram, "send_text", fake_send_text)
+    monkeypatch.setattr(telegram, "TELEGRAM_ADMIN_IDS", {6866285714})
+    telegram._ADMIN_PAID_PENDING.clear()
+
+    from src.chat.storage import wallet
+    wallet.create_order(55888, "tg:42", 30_000, "plink-menu")
+
+    assert asyncio.run(
+        telegram._handle_command(6866285714, "/admin_paid", chat_type="private", user_id=6866285714)
+    )
+    assert "Dán mã đơn" in sent[-1][1]
+    assert sent[-1][2]["inline_keyboard"][0][0]["callback_data"] == telegram.ADMIN_PAID_CANCEL_CALLBACK
+    assert telegram._ADMIN_PAID_PENDING["6866285714:6866285714"] == 6866285714
+
+    assert asyncio.run(
+        telegram._handle_pending_admin_paid(6866285714, "ád", 6866285714)
+    ) is True
+    assert "Không đọc được mã đơn" in sent[-1][1]
+    assert sent[-1][2]["inline_keyboard"][0][0]["callback_data"] == telegram.ADMIN_PAID_CANCEL_CALLBACK
+    assert telegram._ADMIN_PAID_PENDING["6866285714:6866285714"] == 6866285714
+
+    assert asyncio.run(
+        telegram._handle_pending_admin_paid(6866285714, "NAPTIEN55888", 6866285714)
+    ) is True
+
+    assert wallet.get_balance("tg:42") == 30_000
+    assert wallet.get_order(55888)["status"] == "paid"
+    assert "6866285714:6866285714" not in telegram._ADMIN_PAID_PENDING
+
+
+def test_admin_paid_cancel_callback_clears_pending(monkeypatch):
+    edits: list[tuple] = []
+    answers: list[tuple] = []
+
+    async def fake_edit_message_text(chat_id, message_id, text, inline_keyboard=None, **kwargs) -> None:
+        edits.append((chat_id, message_id, text, inline_keyboard))
+
+    async def fake_answer_callback_query(callback_query_id, text) -> None:
+        answers.append((callback_query_id, text))
+
+    monkeypatch.setattr(telegram, "_edit_message_text", fake_edit_message_text)
+    monkeypatch.setattr(telegram, "_answer_callback_query", fake_answer_callback_query)
+    monkeypatch.setattr(telegram, "TELEGRAM_ADMIN_IDS", {6866285714})
+    telegram._ADMIN_PAID_PENDING["6866285714:6866285714"] = 6866285714
+
+    handled = asyncio.run(telegram._handle_admin_paid_callback({
+        "id": "cb-cancel",
+        "data": telegram.ADMIN_PAID_CANCEL_CALLBACK,
+        "from": {"id": 6866285714},
+        "message": {"message_id": 9, "chat": {"id": 6866285714}},
+    }))
+
+    assert handled is True
+    assert "6866285714:6866285714" not in telegram._ADMIN_PAID_PENDING
+    assert edits == [(6866285714, 9, "Đã hủy xác nhận đơn nạp tiền.", {"inline_keyboard": []})]
+    assert answers == [("cb-cancel", "Đã hủy.")]
 
 
 def test_admin_paid_reconciles_order_credits_and_notifies(monkeypatch):

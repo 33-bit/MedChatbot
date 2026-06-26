@@ -110,6 +110,55 @@ def create_doctor(
         return int(cur.lastrowid)
 
 
+def update_doctor(
+    doctor_id: int,
+    *,
+    name: str | None = None,
+    specialty: str | None = None,
+    tier: str | None = None,
+    price: int | None = None,
+    telegram_user_id: int | None = None,
+    active: bool | None = None,
+    degree: str | None = None,
+    experience_years: int | None = None,
+    hospital: str | None = None,
+    bio: str | None = None,
+) -> bool:
+    fields = {
+        "name": name,
+        "specialty": specialty,
+        "tier": tier,
+        "price": price,
+        "telegram_user_id": telegram_user_id,
+        "active": 1 if active else 0 if active is not None else None,
+        "degree": degree,
+        "experience_years": experience_years,
+        "hospital": hospital,
+        "bio": bio,
+    }
+    updates = {key: value for key, value in fields.items() if value is not None}
+    if not updates:
+        return False
+    assignments = ", ".join(f"{key} = ?" for key in updates)
+    params = [*updates.values(), int(doctor_id)]
+    with _SQLITE_LOCK:
+        conn = get_sqlite()
+        cur = conn.execute(
+            f"UPDATE doctor SET {assignments} WHERE id = ?",
+            params,
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def delete_doctor(doctor_id: int) -> bool:
+    with _SQLITE_LOCK:
+        conn = get_sqlite()
+        cur = conn.execute("UPDATE doctor SET active = 0 WHERE id = ?", (int(doctor_id),))
+        conn.commit()
+        return cur.rowcount > 0
+
+
 def set_doctor_active(doctor_id: int, active: bool) -> None:
     with _SQLITE_LOCK:
         conn = get_sqlite()
@@ -134,6 +183,27 @@ def get_doctor(doctor_id: int) -> dict | None:
             (doctor_id,),
         ).fetchone()
     return _doctor_row(row)
+
+
+def list_all_doctors(include_inactive: bool = True) -> list[dict]:
+    where = "" if include_inactive else "WHERE d.active = 1"
+    with _SQLITE_LOCK:
+        conn = get_sqlite()
+        rows = conn.execute(
+            f"""
+            SELECT d.id, d.name, d.specialty, d.tier, d.price, d.telegram_user_id, d.active,
+                   CASE WHEN d.active = 0 THEN 0
+                        WHEN EXISTS (
+                            SELECT 1 FROM doctor_consultation c
+                            WHERE c.doctor_id = d.id AND c.status = 'active'
+                        ) THEN 0 ELSE 1 END AS available,
+                   d.degree, d.experience_years, d.hospital, d.bio
+            FROM doctor d
+            {where}
+            ORDER BY d.active DESC, d.tier, d.id
+            """
+        ).fetchall()
+    return [_doctor_row(row) for row in rows]
 
 
 def list_doctors(tier: str) -> list[dict]:

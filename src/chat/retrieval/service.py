@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import logging
+import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any
 
 from src.chat.errors import QdrantUnavailable
+from src.chat.health_insurance import expand_health_insurance_query
 from src.chat.retrieval.fusion import rrf_merge
+from src.chat.retrieval.health_insurance import expand_health_insurance_hits
 from src.chat.retrieval.sparse import bm25_search
 from src.chat.retrieval.types import Hit, RetrievalScope
 from src.chat.timing import elapsed_ms
@@ -13,6 +17,26 @@ from src.config import HYBRID_CANDIDATE_K, RERANK_TOP_K
 
 log = logging.getLogger(__name__)
 _TEXT_PREVIEW_MAX_CHARS = 160
+_DRUG_USAGE_QUERY_TERMS = (
+    "lieu",
+    "lieu dung",
+    "cach dung",
+    "duong dung",
+    "dung the nao",
+    "uong",
+    "boi",
+    "tiem",
+    "ngay may lan",
+    "bao nhieu",
+    "chi dinh",
+    "chong chi dinh",
+)
+_DRUG_USAGE_HEADING_TERMS = (
+    "lieu dung",
+    "cach dung",
+    "chi dinh",
+    "chong chi dinh",
+)
 
 
 @dataclass
@@ -49,6 +73,92 @@ class _HybridSearchUnavailable(QdrantUnavailable):
         super().__init__(message)
         self.debug = debug.as_dict()
         self.error_stage = debug.error_stage
+
+
+def _normalize(text: str) -> str:
+    text = (text or "").casefold().replace("đ", "d")
+    text = unicodedata.normalize("NFD", text)
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _is_drug_usage_query(query: str) -> bool:
+    normalized = _normalize(query)
+    return any(term in normalized for term in _DRUG_USAGE_QUERY_TERMS)
+
+
+def _hit_key(hit: Hit) -> tuple[str, str]:
+    return (hit.id or "", hit.chunk_id or "")
+
+
+def _has_drug_usage_heading(hit: Hit) -> bool:
+    heading = _normalize(hit.heading_path)
+    return any(term in heading for term in _DRUG_USAGE_HEADING_TERMS)
+
+
+def _ensure_drug_usage_context(
+    query: str,
+    hits: list[Hit],
+    candidates: list[Hit],
+    top_k: int,
+) -> list[Hit]:
+    if not _is_drug_usage_query(query):
+        return hits
+    drug_slugs = [
+        hit.source_slug
+        for hit in hits
+        if hit.source_type == "drug" and hit.source_slug
+    ]
+    if not drug_slugs:
+        return hits
+    slug_set = set(drug_slugs)
+    if any(
+        hit.source_type == "drug"
+        and hit.source_slug in slug_set
+        and _has_drug_usage_heading(hit)
+        for hit in hits
+    ):
+        return hits
+
+    seen = {_hit_key(hit) for hit in hits}
+    for slug in drug_slugs:
+        replacement = next(
+            (
+                hit for hit in candidates
+                if hit.source_type == "drug"
+                and hit.source_slug == slug
+                and _has_drug_usage_heading(hit)
+                and _hit_key(hit) not in seen
+            ),
+            None,
+        )
+        if replacement is None:
+            continue
+        insert_at = next(
+            (
+                index + 1 for index, hit in enumerate(hits)
+                if hit.source_type == "drug" and hit.source_slug == slug
+            ),
+            len(hits),
+        )
+        updated = list(hits)
+        updated.insert(insert_at, replacement)
+        while len(updated) > top_k:
+            drop_at = next(
+                (
+                    index for index in range(len(updated) - 1, -1, -1)
+                    if index != insert_at and updated[index].source_type != "drug"
+                ),
+                None,
+            )
+            if drop_at is None:
+                drop_at = len(updated) - 1
+                if drop_at == insert_at:
+                    break
+            updated.pop(drop_at)
+        return updated
+    return hits
 
 
 def _record_debug_timing(
@@ -92,14 +202,19 @@ def _run_hybrid_search(
     from src.chat.retrieval.rerank import rerank
 
     debug = _HybridSearchDebug(query=query)
+    retrieval_query = (
+        expand_health_insurance_query(query)
+        if scope == "health_insurance"
+        else query
+    )
     total_start = time.perf_counter()
     stage_start = time.perf_counter()
     try:
         if scope == "medical":
-            dense_hits = dense_search(query, top_k=HYBRID_CANDIDATE_K)
+            dense_hits = dense_search(retrieval_query, top_k=HYBRID_CANDIDATE_K)
         else:
             dense_hits = dense_search(
-                query,
+                retrieval_query,
                 top_k=HYBRID_CANDIDATE_K,
                 scope=scope,
             )
@@ -128,10 +243,10 @@ def _run_hybrid_search(
     stage_start = time.perf_counter()
     try:
         if scope == "medical":
-            sparse_hits = bm25_search(query, top_k=HYBRID_CANDIDATE_K)
+            sparse_hits = bm25_search(retrieval_query, top_k=HYBRID_CANDIDATE_K)
         else:
             sparse_hits = bm25_search(
-                query,
+                retrieval_query,
                 top_k=HYBRID_CANDIDATE_K,
                 scope=scope,
             )
@@ -177,6 +292,17 @@ def _run_hybrid_search(
             on_stage("rerank", "error", debug.timings_ms["rerank"])
         raise _HybridSearchUnavailable("Rerank failed", debug) from e
     debug.reranked_hits = reranked
+    if scope == "medical":
+        reranked = _ensure_drug_usage_context(
+            query,
+            reranked,
+            fused + dense_hits + sparse_hits,
+            top_k,
+        )
+        debug.reranked_hits = reranked
+    if scope == "health_insurance":
+        reranked = expand_health_insurance_hits(reranked, query=query)
+        debug.reranked_hits = reranked
     rerank_ms = _record_debug_timing(debug, "rerank", stage_start)
     if on_stage is not None:
         on_stage("rerank", "ok", rerank_ms)
@@ -201,6 +327,7 @@ def _serialize_hits(hits: list[Hit], stage: str) -> list[dict]:
         {
             "rank": rank,
             "stage": stage,
+            "id": hit.id,
             "chunk_id": hit.chunk_id,
             "source_type": hit.source_type,
             "source_slug": hit.source_slug,

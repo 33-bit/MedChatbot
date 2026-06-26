@@ -4,12 +4,20 @@ from __future__ import annotations
 
 from typing import Any
 
-from eval.categories import base, disease_info, drug_info
+from eval.categories import (
+    base,
+    disease_info,
+    drug_info,
+    emergency,
+    health_insurance_info,
+)
 
 
 _EVALUATORS = {
     disease_info.CATEGORY: disease_info,
     drug_info.CATEGORY: drug_info,
+    emergency.CATEGORY: emergency,
+    health_insurance_info.CATEGORY: health_insurance_info,
 }
 
 
