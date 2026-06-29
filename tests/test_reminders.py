@@ -223,6 +223,31 @@ async def test_dispatcher_success_flow(mock_send):
     mock_send.assert_called_once()
 
 
+@pytest.mark.anyio
+@patch("src.server.channels.telegram.send_checked_reminder_message", new_callable=AsyncMock)
+async def test_dispatcher_sends_plain_reminder_title(mock_send):
+    init_reminders_db()
+    mock_send.return_value = None
+
+    draft_id = create_reminder_draft(
+        chat_id=333,
+        user_id=444,
+        medical_type="medication",
+        reminder_text="vitamin A",
+        schedule={"type": "one_time", "datetime": "2026-06-21 08:00"},
+        next_fire_at=int(time.time()) - 10,
+        end_date=None,
+        source="direct"
+    )
+    confirm_reminder_draft(333, 444, draft_id)
+
+    await run_reminder_tick()
+
+    sent_text = mock_send.await_args.args[1]
+    assert sent_text == "⏰ Nhắc nhở y tế (Uống thuốc):\n\nvitamin A"
+    assert "*" not in sent_text
+
+
 from src.chat.storage.reminders import (
     get_pending_conversation, upsert_pending_conversation, delete_pending_conversation
 )

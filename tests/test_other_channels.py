@@ -341,6 +341,33 @@ def test_common_answer_and_send_forwards_choices(monkeypatch):
     assert sent == [("u1", "Bạn chọn một ý nhé.", ["Đau nhẹ/vừa", "Đau dữ dội"])]
 
 
+def test_common_answer_and_send_sends_preliminary_before_final(monkeypatch):
+    sent: list[tuple[str, str, list[str]]] = []
+
+    def fake_answer_with_choices(
+        text: str,
+        session_id: str = "default",
+        on_preliminary_reply=None,
+    ):
+        assert text == "Tôi đau ngực dữ dội"
+        assert session_id == "zalo:u1"
+        assert on_preliminary_reply is not None
+        on_preliminary_reply("Đây có thể là tình trạng cấp cứu. Hãy gọi 115 ngay.")
+        return common.ChatReply("Hướng dẫn sơ cứu ban đầu:\n- Nằm nghỉ tại chỗ.", ())
+
+    async def fake_send_text(recipient_id: str, text: str, choices=None) -> None:
+        sent.append((recipient_id, text, list(choices or [])))
+
+    monkeypatch.setattr(common, "answer_with_choices", fake_answer_with_choices)
+
+    asyncio.run(common.answer_and_send("Tôi đau ngực dữ dội", "u1", "zalo:u1", fake_send_text))
+
+    assert sent == [
+        ("u1", "Đây có thể là tình trạng cấp cứu. Hãy gọi 115 ngay.", []),
+        ("u1", "Hướng dẫn sơ cứu ban đầu:\n- Nằm nghỉ tại chỗ.", []),
+    ]
+
+
 def test_common_answer_and_send_sends_technical_reply_on_answer_error(monkeypatch):
     sent: list[tuple[str, str]] = []
 

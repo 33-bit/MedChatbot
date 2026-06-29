@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import html as _html
+import inspect
 import logging
 import re
 import secrets
@@ -68,7 +69,7 @@ TG_MAX_LEN = 4000  # safe under Telegram's 4096-byte limit
 TG_HARD_MAX_BYTES = 4096
 TYPING_REFRESH_SECONDS = 4.0
 BOT_COMMANDS = [
-    {"command": "menu", "description": "📋 Mở danh sách việc cần làm"},
+    {"command": "menu", "description": "📋 Mở menu chính"},
     {"command": "help", "description": "📝 Cách đặt câu hỏi"},
     {"command": "mode", "description": "⚙️ Chọn cách bot trả lời"},
     {"command": "tts", "description": "🔊 Nghe câu trả lời"},
@@ -532,6 +533,17 @@ async def send_text(
                     await client.post(_send_url(), json={"chat_id": chat_id, "text": fallback_chunk})
     logger.info("Telegram timing stage=send_total ms=%.1f chunks=%d chars=%d",
                 _elapsed_ms(total_start), len(chunks), len(text))
+
+
+def _supports_preliminary_reply(fn) -> bool:
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return False
+    return (
+        "on_preliminary_reply" in sig.parameters
+        or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+    )
 
 
 async def _send_answer_now_ack(chat_id: int | str) -> int | None:
@@ -1031,6 +1043,15 @@ async def _answer_and_send(
     stop_typing = asyncio.Event()
     typing_task = asyncio.create_task(_keep_typing(chat_id, stop_typing))
     answer_now_ack_message_id: int | None = None
+    loop = asyncio.get_running_loop()
+
+    def send_preliminary_reply(message: str) -> None:
+        future = asyncio.run_coroutine_threadsafe(send_text(chat_id, message), loop)
+        try:
+            future.result()
+        except Exception:
+            logger.exception("Telegram preliminary send failed")
+
     try:
         if text == ANSWER_NOW_CHOICE:
             try:
@@ -1040,6 +1061,8 @@ async def _answer_and_send(
         answer_kwargs = {"session_id": session_id}
         if identity.owner_key:
             answer_kwargs["owner_id"] = identity.owner_key
+        if _supports_preliminary_reply(answer_with_choices):
+            answer_kwargs["on_preliminary_reply"] = send_preliminary_reply
         if answer_mode == "auto":
             reply = await asyncio.to_thread(
                 answer_with_choices,
@@ -2335,7 +2358,6 @@ async def send_checked_reminder_message(chat_id: int, text: str) -> None:
     payload = {
         "chat_id": chat_id,
         "text": text,
-        "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
     async with httpx.AsyncClient(timeout=20.0) as client:
@@ -2358,7 +2380,7 @@ async def run_reminder_tick() -> None:
         chat_id = r["chat_id"]
         reminder_id = r["id"]
         mtype = "Uống thuốc" if r["medical_type"] == "medication" else "Khám bệnh"
-        msg = f"⏰ *Nhắc nhở y tế ({mtype}):*\n\n{r['reminder_text']}"
+        msg = f"⏰ Nhắc nhở y tế ({mtype}):\n\n{r['reminder_text']}"
         
         try:
             await send_checked_reminder_message(chat_id, msg)

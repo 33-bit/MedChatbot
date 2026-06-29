@@ -538,6 +538,81 @@ def test_generator_includes_evidence_plan_in_prompt(monkeypatch):
     assert "Loại thông tin cần trả lời: dose" in user_prompt
     assert "Liều dùng và cách dùng" in user_prompt
     assert "liều dùng; tần suất" in user_prompt
+    assert "giữ nguyên các từ hạn định có ý nghĩa y khoa" in user_prompt
+    assert "Không thêm tên gọi khác" in user_prompt
+
+
+def test_generator_ignores_conflicting_drug_plan_for_disease_answer(monkeypatch):
+    captured: dict = {}
+    hits = [
+        Hit(
+            text="Chống chỉ định Diclofenac ở phụ nữ có thai.",
+            score=1.0,
+            source_type="drug",
+            source_name="Diclofenac",
+            heading_path="5 Chống chỉ định",
+            source_slug="diclofenac",
+            chunk_id="drug:diclofenac:contraindications",
+        ),
+        Hit(
+            text=(
+                "Điều trị suy giáp phụ nữ có thai: thường tăng liều "
+                "levothyroxine 25-50%, nhất là trong quý đầu thai kỳ; sau sinh "
+                "quay về liều trước khi mang thai."
+            ),
+            score=0.9,
+            source_type="disease",
+            source_name="Suy giáp",
+            heading_path="III. Điều trị > Điều trị suy giáp phụ nữ có thai",
+            source_slug="suy_giap",
+            chunk_id="disease:suy_giap:pregnancy-treatment",
+        ),
+    ]
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        return {
+            "choices": [{
+                "message": {
+                    "content": (
+                        "Phụ nữ mang thai bị suy giáp thường cần tăng liều "
+                        "levothyroxine 25-50%, nhất là trong quý đầu thai kỳ [1]."
+                    )
+                }
+            }]
+        }
+
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))
+    )
+    monkeypatch.setattr(generator, "get_openai", lambda: fake_client)
+    monkeypatch.setattr(generator, "build_evidence_brief", lambda **kwargs: None)
+    monkeypatch.setattr(
+        generator,
+        "repair_answer_with_evidence",
+        lambda **kwargs: kwargs["answer"],
+    )
+
+    answer = generator.generate(
+        "Tôi bị suy giáp và đang mang thai. Tôi cần phải điều chỉnh liều thuốc như thế nào?",
+        hits,
+        answer_domain="disease_info",
+        evidence_plan={
+            "domain": "disease_info",
+            "source_type": "drug",
+            "entity": "Diclofenac",
+            "answer_slot": "dose",
+            "target_heading_paths": ["Chống chỉ định"],
+            "required_facts": ["liều"],
+            "confidence": 0.9,
+        },
+    )
+
+    user_prompt = captured["messages"][1]["content"]
+    assert "Diclofenac" not in user_prompt
+    assert "Điều trị suy giáp phụ nữ có thai" in user_prompt
+    assert "Suy giáp" in answer
+    assert "Diclofenac" not in answer
 
 
 def test_generator_prioritizes_planned_disease_sections_without_dropping_context(monkeypatch):
@@ -734,6 +809,25 @@ def test_disease_overview_contract_removes_scope_drift_without_specific_fact_inj
     assert "phụ nữ (3%)" not in cleaned
     assert "Điều trị" not in cleaned
     assert "Biến chứng" not in cleaned
+
+
+def test_disease_overview_contract_preserves_multiline_list_formatting():
+    answer = (
+        "Triệu chứng hen phế quản ở người lớn:\n"
+        "- Khò khè, ran rít khi thở ra [1].\n"
+        "- Ho thường tăng về đêm [1].\n"
+        "- Khó thở, chủ yếu khó thở ra [1].\n"
+        "- Nặng ngực [1]."
+    )
+
+    cleaned = generator.enforce_info_answer_contract(
+        answer,
+        [],
+        "disease_info",
+        "Triệu chứng hen phế quản ở người lớn là gì?",
+    )
+
+    assert cleaned == answer
 
 
 def test_generator_keeps_drug_usage_chunk_when_brief_omits_it(monkeypatch):
@@ -1181,6 +1275,37 @@ def test_drug_usage_fallback_keeps_matching_local_regimen_only():
     assert "ấu trùng di chuyển" not in answer
 
 
+def test_drug_usage_fallback_keeps_condition_line_after_demographic_heading():
+    hits = [
+        Hit(
+            text=(
+                "Người lớn và trẻ em trên 2 tuổi:\n"
+                "Nấm da toàn thân và nấm bẹn: Bôi hai lần mỗi ngày trong 4 tuần "
+                "đối với nấm toàn thân hoặc 2 tuần đối với nấm bẹn.\n"
+                "Nấm da chân: Bôi vào vùng da bị nhiễm nấm 2 lần mỗi ngày "
+                "(sáng và tối) trong 4 tuần.\n"
+                "Lang ben và hắc lào: Bôi 2 lần mỗi ngày trong 4 tuần."
+            ),
+            score=1.0,
+            source_type="drug",
+            source_name="Tolnaftate",
+            heading_path="4 Liều dùng - Cách dùng > 4.1 Liều dùng",
+            source_slug="tolnaftate",
+            chunk_id="drug:tolnaftate:lieu-dung",
+        )
+    ]
+
+    answer = generator._drug_usage_fallback_answer(
+        hits,
+        [1],
+        question="Tôi bị nấm da chân, bác sĩ kê Tolnaftate. Tôi cần bôi trong bao lâu?",
+    )
+
+    assert "Nấm da chân" in answer
+    assert "2 lần mỗi ngày" in answer
+    assert "4 tuần" in answer
+
+
 def test_drug_usage_fallback_filters_age_specific_lines():
     hits = [
         Hit(
@@ -1218,6 +1343,91 @@ def test_drug_usage_fallback_filters_age_specific_lines():
     assert "2 mg/kg" not in answer
 
 
+def test_drug_usage_fallback_tracks_demographic_subsections_for_child_age():
+    hits = [
+        Hit(
+            text=(
+                "Người lớn:\n"
+                "Liều ban đầu: 2250mg chia làm nhiều lần hoặc 1500mg/ngày.\n"
+                "Trẻ 2-5 tuổi:\n"
+                "Liều thông thường: 62,5-125mg x 4 lần/ngày hoặc 100mg x 2 lần/ngày.\n"
+                "Trẻ 6-12 tuổi:\n"
+                "Liều thông thường: 100-250mg/ngày."
+            ),
+            score=1.0,
+            source_type="drug",
+            source_name="Carbocisteine",
+            heading_path="9 Liều dùng - Cách dùng > 9.1 Liều dùng",
+            source_slug="carbocisteine",
+            chunk_id="drug:carbocisteine:lieu-dung",
+        )
+    ]
+
+    answer = generator._drug_usage_fallback_answer(
+        hits,
+        [1],
+        question="Con tôi 3 tuổi bị ho có đờm, dùng Carbocisteine liều thế nào?",
+    )
+
+    assert "62,5-125mg" in answer
+    assert "100mg x 2 lần/ngày" in answer
+    assert "2250mg" not in answer
+    assert "100-250mg/ngày" not in answer
+
+
+def test_drug_usage_fallback_skips_overdose_and_other_condition_sections():
+    hits = [
+        Hit(
+            text=(
+                "Người lớn: Uống 10-20mg/lần.\n"
+                "Trẻ em từ 6 tháng - dưới 2 tuổi: 5-10mg/lần x 3-4 lần/ngày.\n"
+                "Trẻ từ 2-12 tuổi: 10mg/lần/ngày.\n"
+                "Trẻ em trên 12 tuổi: Sử dụng theo liều của người lớn.\n"
+                "Cách dùng: Có thể uống cùng hoặc không cùng với thức ăn."
+            ),
+            score=1.0,
+            source_type="drug",
+            source_name="Dicyclomine",
+            heading_path="5 Liều dùng - Cách dùng > 5.2 Co thắt đường tiêu hóa",
+            source_slug="dicyclomine",
+            chunk_id="drug:dicyclomine:co-that-duong-tieu-hoa",
+        ),
+        Hit(
+            text="Triệu chứng: Khô miệng, nhức đầu, buồn nôn, khó nuốt.",
+            score=0.9,
+            source_type="drug",
+            source_name="Dicyclomine",
+            heading_path="9 Quá liều và xử trí",
+            source_slug="dicyclomine",
+            chunk_id="drug:dicyclomine:qua-lieu",
+        ),
+        Hit(
+            text="Tiêm bắp: Người lướn 10-20mg/lần x 4 lần/ngày trong 1-2 ngày.",
+            score=0.8,
+            source_type="drug",
+            source_name="Dicyclomine",
+            heading_path="5 Liều dùng - Cách dùng > 5.1 Hội chứng ruột kích thích",
+            source_slug="dicyclomine",
+            chunk_id="drug:dicyclomine:hoi-chung-ruot-kich-thich",
+        ),
+    ]
+
+    answer = generator._drug_usage_fallback_answer(
+        hits,
+        [1, 1, 1],
+        question=(
+            "Con tôi 8 tuổi bị co thắt đường tiêu hóa, uống Dicyclomine "
+            "liều bao nhiêu là an toàn?"
+        ),
+    )
+
+    assert "10mg/lần/ngày" in answer
+    assert "Cách dùng" in answer
+    assert "Tiêm bắp" not in answer
+    assert "Quá liều" not in answer
+    assert "Khô miệng" not in answer
+
+
 def test_drug_contract_removes_unsupported_allergy_minimization():
     hits = [
         Hit(
@@ -1248,6 +1458,52 @@ def test_drug_contract_removes_unsupported_allergy_minimization():
     assert "hiếm khi" not in cleaned
     assert "Không ghi nhận" not in cleaned
     assert "Không sử dụng nếu bạn quá mẫn cảm với thành phần của thuốc" in cleaned
+
+
+def test_generator_does_not_render_source_only_after_repair_cleanup(monkeypatch):
+    hits = [
+        Hit(
+            text="Thông tin thuốc được cung cấp chỉ nêu công dụng chung.",
+            score=1.0,
+            source_type="drug",
+            source_name="Thuốc A",
+            heading_path="Công dụng",
+            source_slug="thuoc-a",
+            chunk_id="drug:thuoc-a:cong-dung",
+        )
+    ]
+    fake_response = {
+        "choices": [{"message": {"content": "Có thể dùng theo tài liệu [1]."}}]
+    }
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=lambda **kwargs: fake_response)
+        )
+    )
+    monkeypatch.setattr(generator, "get_openai", lambda: fake_client)
+    monkeypatch.setattr(generator, "build_evidence_brief", lambda **kwargs: None)
+    monkeypatch.setattr(
+        generator,
+        "repair_answer_with_evidence",
+        lambda **kwargs: "Không ghi nhận dị ứng chéo với thành phần khác [1].",
+    )
+
+    answer = generator.generate(
+        "Tôi bị dị ứng mỹ phẩm, có dùng Thuốc A được không?",
+        hits,
+        answer_domain="drug_info",
+        evidence_plan={
+            "domain": "drug_info",
+            "source_type": "drug",
+            "entity": "Thuốc A",
+            "answer_slot": "indication",
+            "confidence": 0.9,
+        },
+    )
+
+    assert not answer.startswith("\n\nNguồn:")
+    assert "Tôi không có đủ thông tin trong tài liệu" in answer
+    assert "Nguồn:" in answer
 
 
 def test_generator_repair_is_limited_to_disease_and_drug(monkeypatch):

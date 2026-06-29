@@ -154,7 +154,7 @@ def test_telegram_menu_interaction(app_client, monkeypatch):
 
 def test_telegram_bot_command_menu_hides_start_and_menu_with_icons():
     assert telegram.BOT_COMMANDS == [
-        {"command": "menu", "description": "📋 Mở danh sách việc cần làm"},
+        {"command": "menu", "description": "📋 Mở menu chính"},
         {"command": "help", "description": "📝 Cách đặt câu hỏi"},
         {"command": "mode", "description": "⚙️ Chọn cách bot trả lời"},
         {"command": "tts", "description": "🔊 Nghe câu trả lời"},
@@ -448,6 +448,41 @@ def test_telegram_answer_sends_doctor_offer_after_rating(monkeypatch):
     assert telegram.telegram_doctor.HANDOFF_DECLINE in callbacks
     telegram.telegram_doctor._HANDOFF_CONTEXTS.pop("123", None)
 
+
+def test_telegram_answer_sends_preliminary_before_final(monkeypatch):
+    sent: list[tuple[int | str, str, list[str], str]] = []
+
+    def fake_answer_with_choices(
+        question: str,
+        session_id: str = "default",
+        mode: str = "auto",
+        on_preliminary_reply=None,
+    ):
+        assert question == "Tôi đau ngực dữ dội"
+        assert session_id == telegram._request_identity(123, None, "private").session_key
+        assert mode == "auto"
+        assert on_preliminary_reply is not None
+        on_preliminary_reply("Đây có thể là tình trạng cấp cứu. Hãy gọi 115 ngay.")
+        return telegram.ChatReply("Hướng dẫn sơ cứu ban đầu:\n- Nằm nghỉ tại chỗ.", ())
+
+    async def fake_send_text(chat_id, text, choices=(), selection_mode="single", inline_keyboard=None):
+        sent.append((chat_id, text, list(choices or []), selection_mode))
+
+    async def fake_send_rating_prompt(chat_id: int | str, token: str) -> None:
+        return None
+
+    monkeypatch.setattr(telegram, "answer_with_choices", fake_answer_with_choices, raising=False)
+    monkeypatch.setattr(telegram, "send_text", fake_send_text)
+    monkeypatch.setattr(telegram, "create_feedback_request", lambda *args: "rating-token")
+    monkeypatch.setattr(telegram, "_send_rating_prompt", fake_send_rating_prompt)
+    telegram._CHAT_MODE_DEFAULTS.pop("123", None)
+
+    asyncio.run(telegram._answer_and_send(123, "Tôi đau ngực dữ dội"))
+
+    assert sent == [
+        (123, "Đây có thể là tình trạng cấp cứu. Hãy gọi 115 ngay.", [], "single"),
+        (123, "Hướng dẫn sơ cứu ban đầu:\n- Nằm nghỉ tại chỗ.", [], "single"),
+    ]
 
 
 def test_telegram_mode_retry_callback_replays_question_with_target_mode(monkeypatch):

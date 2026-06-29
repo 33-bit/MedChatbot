@@ -106,6 +106,18 @@ _CANDIDATE_FILLERS = {
     "luong",
     "phoi",
     "hop",
+    "co",
+    "nen",
+    "khong",
+    "bo",
+    "sung",
+    "supplement",
+    "supplements",
+}
+_ALIAS_EQUIVALENTS = {
+    "calci": ("canxi", "calcium"),
+    "canxi": ("calci", "calcium"),
+    "calcium": ("calci", "canxi"),
 }
 _ROUTES = (
     ("tiem tinh mach", ("tiem tinh mach", "truyen tinh mach")),
@@ -176,6 +188,7 @@ def _useful_aliases(row: dict) -> tuple[str, ...]:
         for candidate in candidates:
             if len(candidate) >= 4 and candidate not in {"thuoc", "vitamin"}:
                 aliases.add(candidate)
+                aliases.update(_ALIAS_EQUIVALENTS.get(candidate, ()))
     return tuple(sorted(aliases, key=lambda item: (-len(item), item)))
 
 

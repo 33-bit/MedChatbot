@@ -13,6 +13,7 @@ Phases (short-circuit on the first failure):
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 import unicodedata
@@ -410,6 +411,27 @@ def _choice_key(text: str) -> str:
     return " ".join(no_marks.split())
 
 
+def _entity_key(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", _choice_key(text).replace("-", " ")).strip()
+
+
+def _hit_source_mentioned_in_question(hit: Hit, question: str) -> bool:
+    question_key = _entity_key(question)
+    if not question_key:
+        return False
+    candidates = [
+        hit.source_name,
+        (hit.source_name or "").split("(", 1)[0],
+        (hit.source_name or "").split(",", 1)[0],
+        (hit.source_slug or "").replace("-", " "),
+    ]
+    for candidate in candidates:
+        candidate_key = _entity_key(candidate)
+        if len(candidate_key) >= 3 and candidate_key in question_key:
+            return True
+    return False
+
+
 def _is_yes_no_choice(text: str) -> bool:
     return _choice_present(text) is not None
 
@@ -486,13 +508,25 @@ def _infer_answer_domain(
 ) -> AnswerDomain:
     if turn_intent == "health_insurance_info":
         return "health_insurance_info"
-    if turn_intent == "contextual_drug_info":
-        return "drug_info"
 
     top_hits = hits[:5]
     drug_count = sum(1 for hit in top_hits if hit.source_type == "drug")
     disease_count = sum(1 for hit in top_hits if hit.source_type == "disease")
+    named_drug_hit = any(
+        hit.source_type == "drug" and _hit_source_mentioned_in_question(hit, question)
+        for hit in top_hits
+    )
+    named_disease_hit = any(
+        hit.source_type == "disease" and _hit_source_mentioned_in_question(hit, question)
+        for hit in top_hits
+    )
 
+    if drug_count and named_drug_hit:
+        return "drug_info"
+    if disease_count and named_disease_hit and not named_drug_hit:
+        return "disease_info"
+    if turn_intent == "contextual_drug_info":
+        return "drug_info"
     if drug_count and drug_count >= disease_count:
         return "drug_info"
     if (
@@ -1226,11 +1260,20 @@ def _handle_informational(
     _record_hits(hits)
     _record_latency("retrieval", elapsed_ms(stage_start))
     planned_domain = plan_answer_domain(evidence_plan, "") if evidence_plan else ""
-    answer_domain = answer_domain or planned_domain or _infer_answer_domain(
+    inferred_domain = _infer_answer_domain(
         search_question,
         hits,
         turn_intent,
     )
+    if not answer_domain:
+        if planned_domain and planned_domain == inferred_domain:
+            answer_domain = planned_domain
+        elif planned_domain == "health_insurance_info":
+            answer_domain = planned_domain
+        elif inferred_domain != "symptom_or_care":
+            answer_domain = inferred_domain
+        else:
+            answer_domain = planned_domain or inferred_domain
     active_meta = _meta()
     if active_meta is not None:
         active_meta["answer_domain"] = answer_domain
@@ -1422,6 +1465,7 @@ def _route(
                     emergency_question,
                     red_flags=emergency_red_flags,
                     subject_address=emergency_subject,
+                    timing_callback=_record_latency,
                 )
             from src.chat.replies import emergency_reply as _emergency_reply
             return _emergency_reply(
@@ -1430,6 +1474,7 @@ def _route(
                 question=emergency_question,
                 context=emergency_context,
                 use_rag=True,
+                timing_callback=_record_latency,
             )
         except Exception:
             log.exception("Emergency RAG failed trace=%s", trace_id)
@@ -2106,6 +2151,8 @@ def answer_with_choices(
     session_id: str = "default",
     owner_id: str | None = None,
     mode: str = "auto",
+    on_preliminary_reply: Callable[[str], None] | None = None,
+    use_emergency_rag: bool | None = None,
 ) -> ChatReply:
     meta: dict[str, Any] = {}
     previous_meta = _meta()
@@ -2114,6 +2161,10 @@ def answer_with_choices(
         answer_kwargs = {"session_id": session_id}
         if owner_id:
             answer_kwargs["owner_id"] = owner_id
+        if on_preliminary_reply is not None:
+            answer_kwargs["on_preliminary_reply"] = on_preliminary_reply
+        if use_emergency_rag is not None:
+            answer_kwargs["use_emergency_rag"] = use_emergency_rag
         if normalize_mode(mode) == "auto":
             reply = answer(question, **answer_kwargs)
         else:

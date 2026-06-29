@@ -897,6 +897,47 @@ def test_current_emergency_action_still_uses_emergency_route(monkeypatch):
     assert reply.startswith("Đây có thể là tình trạng cấp cứu")
 
 
+def test_emergency_rag_records_retrieval_and_generation_latency(monkeypatch):
+    import src.chat.replies as replies
+
+    question = "Tôi đau bụng dữ dội, phải làm gì?"
+    _patch_preflight_ok(monkeypatch)
+    _patch_persistence_noop(monkeypatch, PatientSession(session_id="s"))
+    monkeypatch.setattr(pipeline, "CONVERSATION_CONTEXT_ENABLED", False)
+    monkeypatch.setattr(
+        emergency_module,
+        "classify_emergency_intent",
+        lambda actual_question, red_flags=None: "acute_abdomen",
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "analyze_turn",
+        lambda *args, **kwargs: _analysis(
+            label="emergency",
+            intent="emergency",
+            rewritten=question,
+            red_flags=["đau bụng dữ dội"],
+        ),
+    )
+
+    def fake_emergency_reply(*args, timing_callback=None, **kwargs):
+        assert timing_callback is not None
+        timing_callback("retrieval", 12.5)
+        timing_callback("generator", 3.25)
+        return "Đây có thể là tình trạng cấp cứu. Hãy gọi 115 ngay."
+
+    monkeypatch.setattr(replies, "emergency_reply", fake_emergency_reply)
+
+    _, meta = pipeline.answer_with_meta(
+        question,
+        session_id="s",
+        use_emergency_rag=True,
+    )
+
+    assert meta["latency_ms"]["retrieval"] == 12.5
+    assert meta["latency_ms"]["generator"] == 3.25
+
+
 @pytest.mark.parametrize("subject", ("bố bạn", "mẹ bạn", "cô Lan"))
 def test_emergency_reply_treats_user_as_caregiver_for_other_subjects(subject):
     reply = pipeline.emergency_reply(
@@ -2216,6 +2257,85 @@ def test_kg_and_hybrid_retrieval_run_in_parallel(monkeypatch, caplog):
     assert reply == "answer"
     assert sorted(calls) == ["hybrid", "kg"]
     assert "stage=parallel_retrieval" in caplog.text
+
+
+def test_infer_answer_domain_prefers_named_disease_over_unrelated_drug_hits():
+    hits = [
+        Hit(
+            text="Chống chỉ định Diclofenac ở phụ nữ có thai.",
+            score=1.0,
+            source_type="drug",
+            source_name="Diclofenac",
+            heading_path="5 Chống chỉ định",
+            source_slug="diclofenac",
+        ),
+        Hit(
+            text="Điều trị suy giáp phụ nữ có thai cần điều chỉnh levothyroxine.",
+            score=0.9,
+            source_type="disease",
+            source_name="Suy giáp",
+            heading_path="III. Điều trị",
+            source_slug="suy_giap",
+        ),
+    ]
+
+    assert (
+        pipeline._infer_answer_domain(
+            "Tôi bị suy giáp và đang mang thai. Tôi cần điều chỉnh liều thuốc thế nào?",
+            hits,
+            "contextual_drug_info",
+        )
+        == "disease_info"
+    )
+
+
+def test_handle_informational_uses_inferred_domain_when_plan_conflicts(monkeypatch):
+    hits = [
+        Hit(
+            text="Chống chỉ định Diclofenac ở phụ nữ có thai.",
+            score=1.0,
+            source_type="drug",
+            source_name="Diclofenac",
+            heading_path="5 Chống chỉ định",
+            source_slug="diclofenac",
+        ),
+        Hit(
+            text="Điều trị suy giáp phụ nữ có thai cần điều chỉnh levothyroxine.",
+            score=0.9,
+            source_type="disease",
+            source_name="Suy giáp",
+            heading_path="III. Điều trị",
+            source_slug="suy_giap",
+        ),
+    ]
+    captured: dict = {}
+
+    monkeypatch.setattr(pipeline, "_load_kg_context", lambda question, trace_id: "")
+    monkeypatch.setattr(pipeline, "_load_hybrid_hits", lambda *args: hits)
+    monkeypatch.setattr(
+        pipeline,
+        "generate",
+        lambda question, hits, kg_text="", patient=None, **kwargs: (
+            captured.update(kwargs) or "answer"
+        ),
+    )
+
+    reply = pipeline._handle_informational(
+        PatientSession(session_id="s"),
+        "Tôi bị suy giáp và đang mang thai. Tôi cần điều chỉnh liều thuốc thế nào?",
+        trace_id="trace",
+        turn_intent="contextual_drug_info",
+        evidence_plan={
+            "domain": "drug_info",
+            "source_type": "drug",
+            "entity": "Diclofenac",
+            "answer_slot": "dose",
+            "confidence": 0.9,
+        },
+    )
+
+    assert reply == "answer"
+    assert captured["answer_domain"] == "disease_info"
 
 
 def test_informational_raises_when_kg_retrieval_fails(monkeypatch):

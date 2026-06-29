@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import unicodedata
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 
 
@@ -241,6 +241,8 @@ def emergency_first_aid_reply(
     question: str,
     red_flags: Iterable[str] | str | None = None,
     subject_address: str = "bạn",
+    *,
+    timing_callback: Callable[[str, float], None] | None = None,
 ) -> str:
     """Emergency-corpus checked first-aid block.
 
@@ -250,7 +252,12 @@ def emergency_first_aid_reply(
     """
     try:
         from src.chat.emergency.handler import emergency_first_aid_reply as _impl
-        return _impl(question, red_flags=red_flags, subject_address=subject_address)
+        return _impl(
+            question,
+            red_flags=red_flags,
+            subject_address=subject_address,
+            timing_callback=timing_callback,
+        )
     except Exception:
         return (
             "Hướng dẫn sơ cứu ban đầu (theo tài liệu Bạch Mai):\n"
@@ -265,6 +272,7 @@ def emergency_reply(
     context: Mapping[str, object] | None = None,
     *,
     use_rag: bool = False,
+    timing_callback: Callable[[str, float], None] | None = None,
 ) -> str:
     """Backward-compatible emergency reply.
 
@@ -282,6 +290,7 @@ def emergency_reply(
             red_flags=red_flags,
             question=question,
             context=context,
+            timing_callback=timing_callback,
         )
     except Exception:
         return emergency_fast_reply(subject_address, red_flags, question, context)

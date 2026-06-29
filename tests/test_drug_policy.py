@@ -63,6 +63,27 @@ def test_allows_drug_in_otc_list():
 
 
 @pytest.mark.parametrize(
+    "medication",
+    (
+        "canxi",
+        "Calcium",
+        "Calci (Canxi)",
+        "bổ sung canxi",
+        "có nên bổ sung calcium không",
+    ),
+)
+def test_allows_calcium_spelling_variants_in_otc_list(medication):
+    decision = evaluate_drug_policy(
+        "Tôi bị loãng xương, có nên bổ sung canxi không?",
+        _analysis(medication),
+    )
+
+    assert decision.is_drug_question is True
+    assert decision.allowed is True
+    assert "Calci" in decision.matched_otc_names
+
+
+@pytest.mark.parametrize(
     ("question", "medication"),
     (
         ("Almagate dùng thế nào?", "Almagate"),

@@ -9,13 +9,27 @@ Public API:
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Mapping
+import time
+from collections.abc import Callable, Iterable, Mapping
 
 from src.chat.emergency.generation import generate_emergency_aid
 from src.chat.emergency.retrieval import retrieve_emergency_aid
 from src.chat.emergency.safety import apply_safety_post_check
 
 log = logging.getLogger(__name__)
+
+
+def _emit_timing(
+    callback: Callable[[str, float], None] | None,
+    stage: str,
+    started_at: float,
+) -> None:
+    if callback is None:
+        return
+    try:
+        callback(stage, (time.perf_counter() - started_at) * 1000)
+    except Exception:
+        log.warning("Emergency timing callback failed for stage %s", stage)
 
 
 def emergency_fast_reply(
@@ -36,6 +50,8 @@ def emergency_first_aid_reply(
     question: str,
     red_flags: Iterable[str] | str | None = None,
     subject_address: str = "bạn",
+    *,
+    timing_callback: Callable[[str, float], None] | None = None,
 ) -> str:
     """Emergency-corpus checked first-aid block.
 
@@ -43,11 +59,14 @@ def emergency_first_aid_reply(
     aid details. Deterministic templates are fallback-only, and every result
     passes through the safety post-check.
     """
+    retrieval_started = time.perf_counter()
     try:
         hits = retrieve_emergency_aid(question, red_flags=red_flags)
     except Exception as exc:  # pragma: no cover - defensive
         log.warning("Emergency retrieval failed: %s", exc)
         hits = []
+    _emit_timing(timing_callback, "retrieval", retrieval_started)
+    generation_started = time.perf_counter()
     try:
         bullets = generate_emergency_aid(
             question,
@@ -62,6 +81,7 @@ def emergency_first_aid_reply(
             "hướng dẫn trực tiếp của điều phối viên.",
             "Để bệnh nhân ở tư thế an toàn, dễ thở và có người theo dõi liên tục.",
         ]
+    _emit_timing(timing_callback, "generator", generation_started)
     bullets = apply_safety_post_check(
         bullets, question=question, red_flags=red_flags
     )
@@ -80,6 +100,8 @@ def build_emergency_reply(
     red_flags: Iterable[str] | str | None = None,
     question: str = "",
     context: Mapping[str, object] | None = None,
+    *,
+    timing_callback: Callable[[str, float], None] | None = None,
 ) -> str:
     """Combine the fast reply with the corpus-checked first-aid block.
 
@@ -91,6 +113,9 @@ def build_emergency_reply(
         subject_address, red_flags=red_flags, question=question, context=context
     )
     aid = emergency_first_aid_reply(
-        question, red_flags=red_flags, subject_address=subject_address
+        question,
+        red_flags=red_flags,
+        subject_address=subject_address,
+        timing_callback=timing_callback,
     )
     return f"{fast}\n\n{aid}"

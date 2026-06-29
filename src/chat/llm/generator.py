@@ -240,6 +240,14 @@ _DRUG_ADULT_QUERY_TERMS = (
     "nguoi lon",
     "nguoi truong thanh",
 )
+_DRUG_OVERDOSE_QUERY_TERMS = (
+    "qua lieu",
+    "uong qua",
+    "dung qua",
+    "nham lieu",
+    "uong nham",
+    "xu tri qua lieu",
+)
 _DRUG_PEDIATRIC_TERMS = (
     "tre",
     "tre em",
@@ -417,6 +425,63 @@ def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
     return any(term in normalized for term in terms)
 
 
+def _normalize_entity_text(text: str) -> str:
+    normalized = _normalize_text(text).replace("-", " ")
+    return re.sub(r"[^a-z0-9]+", " ", normalized).strip()
+
+
+def _primary_source_type_for_answer_domain(answer_domain: AnswerDomain) -> str:
+    if answer_domain == "drug_info":
+        return "drug"
+    if answer_domain == "disease_info":
+        return "disease"
+    if answer_domain == "health_insurance_info":
+        return "health_insurance"
+    return ""
+
+
+def _plan_source_conflicts_with_answer_domain(
+    evidence_plan: dict | None,
+    answer_domain: AnswerDomain,
+    hits: list[Hit],
+) -> bool:
+    plan_source = plan_source_type(evidence_plan)
+    expected_source = _primary_source_type_for_answer_domain(answer_domain)
+    return bool(
+        plan_source
+        and plan_source != "medical"
+        and expected_source
+        and plan_source != expected_source
+        and any(hit.source_type == expected_source for hit in hits)
+    )
+
+
+def _evidence_plan_for_answer_domain(
+    evidence_plan: dict | None,
+    answer_domain: AnswerDomain,
+    hits: list[Hit],
+) -> dict | None:
+    if _plan_source_conflicts_with_answer_domain(evidence_plan, answer_domain, hits):
+        return None
+    return evidence_plan
+
+
+def _hit_source_mentioned_in_question(hit: Hit, question: str) -> bool:
+    question_key = _normalize_entity_text(question)
+    if not question_key:
+        return False
+    candidates = [
+        hit.source_name,
+        re.split(r"[(,]", hit.source_name or "", maxsplit=1)[0],
+        (hit.source_slug or "").replace("-", " "),
+    ]
+    for candidate in candidates:
+        candidate_key = _normalize_entity_text(candidate)
+        if len(candidate_key) >= 3 and candidate_key in question_key:
+            return True
+    return False
+
+
 def _normalized_has_term(normalized: str, term: str) -> bool:
     if " " in term:
         return term in normalized
@@ -452,6 +517,10 @@ def _question_asks_drug_indication(question: str) -> bool:
 
 def _question_asks_adult_drug_use(question: str) -> bool:
     return _contains_any(question, _DRUG_ADULT_QUERY_TERMS)
+
+
+def _question_asks_drug_overdose(question: str) -> bool:
+    return _contains_any(question, _DRUG_OVERDOSE_QUERY_TERMS)
 
 
 def _source_has_drug_usage_detail(hits: list[Hit]) -> bool:
@@ -491,6 +560,11 @@ def _filter_hits_for_answer_domain(
     answer_domain: AnswerDomain,
     evidence_plan: dict | None = None,
 ) -> list[Hit]:
+    evidence_plan = _evidence_plan_for_answer_domain(
+        evidence_plan,
+        answer_domain,
+        hits,
+    )
     plan_source = plan_source_type(evidence_plan)
     if plan_source and plan_source != "medical":
         scoped = [hit for hit in hits if hit.source_type == plan_source]
@@ -536,7 +610,11 @@ def _filter_hits_for_answer_domain(
         if entity_hits:
             disease_hits = entity_hits
         if _question_asks_treatment_or_medicine(question):
-            drug_hits = [hit for hit in hits if hit.source_type == "drug"]
+            drug_hits = [
+                hit for hit in hits
+                if hit.source_type == "drug"
+                and _hit_source_mentioned_in_question(hit, question)
+            ]
             other_hits = [
                 hit for hit in hits
                 if hit.source_type not in {"drug", "disease"}
@@ -768,8 +846,15 @@ def _hit_has_drug_dose_heading(hit: Hit) -> bool:
 def _hit_has_drug_admin_heading(hit: Hit) -> bool:
     if hit.source_type != "drug":
         return False
-    heading = _normalize_text(hit.heading_path)
-    return any(term in heading for term in ("cach dung", "duong dung"))
+    segments = [
+        _normalize_text(segment)
+        for segment in (hit.heading_path or "").split(">")
+        if segment.strip()
+    ]
+    if not segments:
+        return False
+    leaf = segments[-1]
+    return any(term in leaf for term in ("cach dung", "duong dung"))
 
 
 def _hit_has_drug_indication_heading(hit: Hit) -> bool:
@@ -856,12 +941,17 @@ def _age_line_applies(line: str, age_years: int | None) -> bool:
     if age_years is None:
         return True
     normalized = _normalize_text(line)
+    has_adult = _normalized_has_term(normalized, "nguoi lon")
+    has_pediatric = any(
+        _normalized_has_term(normalized, term)
+        for term in _DRUG_PEDIATRIC_TERMS
+    )
     if _normalized_has_term(normalized, "nguoi cao tuoi") or _normalized_has_term(
         normalized,
         "cao tuoi",
     ):
         return age_years >= 60
-    if _normalized_has_term(normalized, "nguoi lon"):
+    if has_adult and not has_pediatric:
         return age_years >= 18
     if _normalized_has_term(normalized, "tre em") and "tuoi" not in normalized:
         return age_years < 18
@@ -890,6 +980,43 @@ def _age_line_applies(line: str, age_years: int | None) -> bool:
         return age_years == int(exact_match.group(1))
 
     return True
+
+
+def _looks_like_demographic_heading_line(line: str) -> bool:
+    if not line.endswith(":") or _DOSE_TOKEN_RE.search(line):
+        return False
+    normalized = _normalize_text(line)
+    demographic_terms = (
+        "nguoi lon",
+        "nguoi cao tuoi",
+        "tre",
+        "tre em",
+        "tre so sinh",
+        "phu nu mang thai",
+        "mang thai",
+        "cho con bu",
+    )
+    return any(
+        normalized.startswith(term)
+        for term in demographic_terms
+    )
+
+
+def _hit_is_drug_overdose_section(hit: Hit) -> bool:
+    if hit.source_type != "drug":
+        return False
+    heading = _normalize_text(hit.heading_path)
+    return "qua lieu" in heading or "ngo doc" in heading
+
+
+def _looks_like_structural_heading_line(line: str) -> bool:
+    if _DOSE_TOKEN_RE.search(line):
+        return False
+    normalized = _normalize_text(line.strip(" -*•\t"))
+    return bool(
+        len(normalized) <= 120
+        and re.search(r"^\d+(?:\.\d+)*\s+[a-z]", normalized)
+    )
 
 
 def _fallback_hit_pairs(
@@ -1349,6 +1476,7 @@ def _drug_usage_fallback_answer(
     focus_terms = _drug_usage_focus_terms(question, hits)
     focus_threshold = _drug_usage_focus_threshold(focus_terms)
     question_age_years = _question_age_years(question)
+    asks_overdose = _question_asks_drug_overdose(question)
     has_focus_match = any(
         _drug_usage_focus_score(hit.heading_path + "\n" + hit.text, focus_terms)
         >= focus_threshold
@@ -1360,6 +1488,8 @@ def _drug_usage_fallback_answer(
     usage_keys: set[tuple[str, str, str, str]] = set()
     for hit, _source_number in hit_pairs:
         if primary_slug and hit.source_type == "drug" and hit.source_slug != primary_slug:
+            continue
+        if _hit_is_drug_overdose_section(hit) and not asks_overdose:
             continue
         if adult_only and _is_pediatric_text_without_adult(hit.heading_path):
             continue
@@ -1381,6 +1511,8 @@ def _drug_usage_fallback_answer(
         order = 0
         for hit, source_number in hit_pairs:
             if primary_slug and hit.source_type == "drug" and hit.source_slug != primary_slug:
+                continue
+            if _hit_is_drug_overdose_section(hit) and not asks_overdose:
                 continue
             if adult_only and _is_pediatric_text_without_adult(hit.heading_path):
                 continue
@@ -1440,6 +1572,17 @@ def _drug_usage_fallback_answer(
             continue
         if primary_slug and hit.source_slug != primary_slug:
             continue
+        if _hit_is_drug_overdose_section(hit) and not asks_overdose:
+            continue
+        if (
+            has_focus_match
+            and _drug_usage_focus_score(hit.heading_path + "\n" + hit.text, focus_terms)
+            < focus_threshold
+            and _hit_has_drug_usage_detail(hit)
+            and not _hit_has_drug_dose_heading(hit)
+            and not _hit_has_drug_admin_heading(hit)
+        ):
+            continue
         if adult_only and _is_pediatric_text_without_adult(hit.heading_path):
             continue
         hit_key = (
@@ -1455,6 +1598,7 @@ def _drug_usage_fallback_answer(
         added_from_hit = 0
         local_section_seen = False
         local_section_matches_focus = True
+        demographic_section_applies = True
         for raw_line in hit.text.splitlines():
             line = raw_line.strip(" -*•\t")
             if len(line) < 8:
@@ -1462,9 +1606,7 @@ def _drug_usage_fallback_answer(
             normalized = _normalize_text(line)
             if normalized.startswith(("bang:", "bang ", "hinh:", "hinh ")):
                 continue
-            if not _age_line_applies(line, question_age_years):
-                continue
-            if adult_only and _is_pediatric_text_without_adult(line):
+            if _looks_like_structural_heading_line(line):
                 continue
             has_dose_term = any(
                 _normalized_has_term(normalized, term)
@@ -1481,11 +1623,25 @@ def _drug_usage_fallback_answer(
                 and len(line) <= 160
             )
             if looks_like_local_heading:
+                if _looks_like_demographic_heading_line(line):
+                    demographic_section_applies = _age_line_applies(
+                        line,
+                        question_age_years,
+                    )
+                    local_section_seen = False
+                    local_section_matches_focus = True
+                    continue
                 local_section_seen = True
                 local_section_matches_focus = (
                     not has_focus_match
                     or _drug_usage_focus_score(line, focus_terms) >= focus_threshold
                 )
+                continue
+            if not _age_line_applies(line, question_age_years):
+                continue
+            if adult_only and _is_pediatric_text_without_adult(line):
+                continue
+            if not demographic_section_applies:
                 continue
             if (
                 local_section_seen
@@ -1506,7 +1662,7 @@ def _drug_usage_fallback_answer(
                         continue
                 elif not (has_dose_term or has_admin_term or has_dose_token):
                     continue
-            elif not has_dose_token:
+            elif not (has_dose_token or has_admin_term):
                 continue
             compact = _compact_for_match(line)
             if compact in seen:
@@ -1617,15 +1773,26 @@ def _split_answer_units(answer: str) -> list[str]:
 
 
 def _filter_disease_overview_answer(answer: str, _hits: list[Hit]) -> str:
-    kept: list[str] = []
-    for unit in _split_answer_units(answer):
-        normalized = _normalize_text(unit.strip(" -*•\t"))
-        if any(term in normalized for term in _DISEASE_OVERVIEW_OFF_SCOPE_TERMS):
+    kept_lines: list[str] = []
+    for line in answer.splitlines():
+        if not line.strip():
+            kept_lines.append("")
             continue
-        if normalized.startswith(("chan doan", "dieu tri", "bien chung", "tien luong")):
-            continue
-        kept.append(unit)
-    filtered = " ".join(kept)
+        units = _split_answer_units(line)
+        kept_units: list[str] = []
+        for unit in units:
+            normalized = _normalize_text(unit.strip(" -*•\t"))
+            if any(term in normalized for term in _DISEASE_OVERVIEW_OFF_SCOPE_TERMS):
+                continue
+            if normalized.startswith(("chan doan", "dieu tri", "bien chung", "tien luong")):
+                continue
+            kept_units.append(unit)
+        if len(kept_units) == len(units):
+            kept_lines.append(line)
+        elif kept_units:
+            indentation = line[:len(line) - len(line.lstrip())]
+            kept_lines.append(indentation + " ".join(kept_units))
+    filtered = "\n".join(kept_lines).strip()
     return filtered or answer
 
 
@@ -1747,6 +1914,11 @@ def generate(
         if evidence_plan
         else None
     )
+    normalized_plan = _evidence_plan_for_answer_domain(
+        normalized_plan,
+        answer_domain,
+        hits,
+    )
     if not hits and not kg_text:
         if return_meta:
             return NO_DATA_REPLY, {
@@ -1840,6 +2012,13 @@ def generate(
             "phạm vi tài liệu đã chọn. Nếu đoạn này trả lời trực tiếp câu hỏi, "
             "hãy bao phủ các ý định nghĩa, số liệu hoặc điều kiện chính của đoạn [1] "
             "trước khi thêm chi tiết từ đoạn khác."
+        )
+        prompt_parts.append(
+            "Khi tóm tắt thông tin bệnh/thuốc, giữ nguyên các từ hạn định có ý "
+            "nghĩa y khoa trong tài liệu như loại tổn thương, độ tuổi, liều, thời "
+            "gian, chống chỉ định hoặc điều kiện áp dụng. Không thêm tên gọi khác, "
+            "dấu hiệu, tác dụng, liều hoặc lời khuyên nếu tài liệu đã chọn không "
+            "nêu rõ hoặc câu hỏi không cần."
         )
     if (
         answer_domain == "drug_info"
@@ -1961,6 +2140,8 @@ def generate(
                 context_hits=domain_context_hits,
                 cite_idx=domain_cite_idx,
             )
+        if not _clean_answer_format(answer):
+            answer = "Tôi không có đủ thông tin trong tài liệu để trả lời chắc chắn."
         source_numbers = _cited_source_numbers(answer, len(unique))
         answer, source_numbers = _ensure_health_insurance_article_citations(
             answer,

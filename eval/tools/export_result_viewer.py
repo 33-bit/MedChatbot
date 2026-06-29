@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_RESULT = Path("eval/results/local-rag-health_insurance_info-results-20260623-rerun.jsonl")
-DEFAULT_OUTPUT = Path("eval/artifacts/health_insurance_info.html")
+DEFAULT_RESULT = Path("eval/results/local-rag-disease_info-results-20260627-052950.jsonl")
+DEFAULT_OUTPUT = Path("eval/artifacts/disease_info.html")
 DEFAULT_DATASET = Path("eval/datasets/medical_qa_benchmark_v2.jsonl")
 
 
